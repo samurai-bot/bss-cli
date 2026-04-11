@@ -27,8 +27,8 @@ services:
   payment:
     <<: *bss-service
     build:
-      <<: *bss-build
-      args: { SERVICE: payment }
+      context: .
+      dockerfile: services/payment/Dockerfile
     ports: ["8003:8000"]
     environment: { BSS_SERVICE_NAME: payment }
 

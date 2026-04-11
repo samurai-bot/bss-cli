@@ -30,7 +30,13 @@ build:
 	docker compose build
 
 test:
-	uv run pytest || test $$? -eq 5
+	@failed=0; \
+	for dir in packages/bss-clients services/catalog services/crm services/payment; do \
+		printf "\n══ $$dir ══\n"; \
+		PYTHONPATH=$$dir:$$PYTHONPATH uv run pytest $$dir/tests/ -v || failed=1; \
+	done; \
+	if [ $$failed -eq 1 ]; then printf "\n✗ Some suites failed\n"; exit 1; \
+	else printf "\n✓ All suites passed\n"; fi
 
 fmt:
 	uv run ruff format .

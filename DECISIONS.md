@@ -290,3 +290,33 @@ RUN sed -i 's|workspace = true|path = "../../packages/bss-models"|' pyproject.to
 3. **ID generation must survive restart.** Use database sequences or UUIDs — never module-level counters. Any test fixture that reuses the FastAPI app factory (without full container restart) is sufficient to catch counter-based bugs.
 
 **Consequences:** Slightly larger test suites per service, test-time round-trips through the full HTTP stack (~2ms overhead per test), and real protection against TMF serialization, routing, and persistence bugs. These are the kinds of bugs that otherwise only surface during Phase 10 hero scenarios when the cost of finding them is highest.
+
+### 2026-04-11 — Phase 5 — bss-clients: typed errors, no auto-retry, AuthProvider protocol
+**Context:** Phase 5 introduces the first cross-service HTTP call (Payment → CRM). Need a shared HTTP client package that enforces consistent error handling, header propagation, and auth readiness across all services.
+**Decision:** `packages/bss-clients` provides `BSSClient` base class with: (1) typed error mapping (404→NotFound, 422+POLICY_VIOLATION→PolicyViolationFromServer, 5xx→ServerError, timeout→Timeout), (2) NO auto-retry (caller decides), (3) `AuthProvider` protocol with `NoAuthProvider` default for Phase 12 readiness, (4) context header propagation via `contextvars` (`X-BSS-Actor`, `X-BSS-Channel`, `X-Request-ID`).
+**Alternatives:** (a) Raw httpx per service — duplicates error mapping, header injection, timeout config. (b) Auto-retry with backoff — violates CLAUDE.md doctrine ("no retries inside tool functions; LangGraph supervisor handles retries"). (c) Shared middleware-only approach — doesn't cover outgoing headers or auth.
+**Consequences:** Every downstream client (CRM, Catalog, Payment) extends `BSSClient`. Actor chain is proven end-to-end via respx test. Phase 12 auth is a one-line change per client constructor.
+
+### 2026-04-11 — Phase 5 — Payment API is pre-tokenized (no PAN/CVV on the wire)
+**Context:** PCI DSS compliance requires that cardholder data never transit the BSS API surface.
+**Decision:** `PaymentMethodCreateRequest` accepts `providerToken`, `tokenizationProvider`, and `cardSummary` (brand, last4, expMonth, expYear). No `cardNumber` or `cvv` field exists. The mock tokenizer (`mock_tokenizer.py`) is internal-only with a prominent PCI SANDBOX warning. Real deployments use a channel-layer tokenizer (Stripe, Adyen).
+**Alternatives:** Accept PAN and tokenize server-side — creates PCI scope on every BSS service, unacceptable.
+**Consequences:** BSS-CLI is out of PCI DSS scope for cardholder data. Mock tokenizer exists only for dev/test. Production token lifecycle is a channel-layer concern.
+
+### 2026-04-11 — Phase 5 — Middleware catches upstream ServerError for clean 500 responses
+**Context:** When CRM returns 503, `bss-clients` raises `ServerError`. Starlette's `BaseHTTPMiddleware` re-raises exceptions before FastAPI's default handler can catch them, causing raw exception propagation through the ASGI transport.
+**Decision:** Payment middleware catches `ServerError` explicitly and returns `JSONResponse(500, {"detail": "Upstream service error"})`.
+**Alternatives:** (a) Register a FastAPI `exception_handler` — doesn't fire for exceptions raised inside `BaseHTTPMiddleware.dispatch`. (b) Don't use BaseHTTPMiddleware — requires refactoring to pure ASGI middleware, larger change for same effect.
+**Consequences:** Upstream failures produce clean JSON 500s. Pattern extends to future services. Error detail is intentionally opaque to avoid leaking upstream internals.
+
+### 2026-04-11 — Phase 5 — ASGI test fixtures must mirror lifespan setup exactly
+**Context:** httpx `ASGITransport` does not trigger FastAPI lifespan events. Phase 5 hit `KeyError: 'crm_client'` three separate times across three different test fixtures (conftest, CRM failures, CRM integration) because `app.state.crm_client` was only created in the lifespan, not in the fixture.
+**Decision:** Every ASGI test fixture must manually create ALL `app.state` attributes that the lifespan creates: `engine`, `session_factory`, and every cross-service client (`crm_client`, future `catalog_client`, `payment_client`). A test fixture that omits any attribute the lifespan sets will fail at request time, not at fixture setup — making the error non-obvious.
+**Alternatives:** (a) Run lifespan in tests — `ASGITransport` doesn't support it. (b) Extract lifespan setup into a shared function called by both lifespan and fixtures — viable but adds indirection for a pattern that's fixture-local.
+**Consequences:** Every service's conftest.py and any standalone test fixtures (integration, failure simulation) are responsible for complete `app.state` setup. When a service adds a new cross-service client, every fixture must be updated. This is a known maintenance cost accepted in exchange for the simplicity of the ASGI test transport approach.
+
+### 2026-04-11 — Phase 5 — Integration tests must use unique identifiers per run
+**Context:** `test_payment_crm_integration.py` hardcoded `integ-payment@test.com` as the test customer email. On second run, CRM returned 422 (`email_unique` policy), test silently skipped with "Could not create test customer: 422". This made it look like CRM was down when it was actually working.
+**Decision:** Integration tests that create real data in external services must use `uuid.uuid4().hex[:8]` or similar in any unique field (email, MSISDN, external refs). The test should still clean up after itself where possible, but uniqueness prevents silent failures on re-run.
+**Alternatives:** Clean up test data in teardown — fragile if test crashes mid-run; doesn't help if previous run's teardown failed.
+**Consequences:** Integration tests are idempotent across runs. Silent skips from unique-constraint violations are eliminated.
