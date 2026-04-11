@@ -14,7 +14,9 @@ This file records non-obvious decisions. Every Claude Code session appends here 
 
 ---
 
-## Seed decisions (Phase 0, approved by Ck)
+## Foundational decisions (established Phase 0, permanent)
+
+These are the core architectural choices that shape the entire project. They are not historical — they remain in force across every phase and every future version unless explicitly retired in a subsequent DECISIONS entry.
 
 ### 2026-04-11 — Phase 0 — Case/Ticket model is ServiceNow-shaped
 **Context:** CRM cases and tickets can be flat (Zendesk-style) or hierarchical (ServiceNow-style).
@@ -44,7 +46,7 @@ This file records non-obvious decisions. Every Claude Code session appends here 
 **Context:** Initial diagram conflated MQ with DB writes.
 **Decision:** RabbitMQ = pub/sub between services for reactions. HTTP = direct calls for immediate answers. Postgres = per-service writes, not via MQ. Audit table + post-commit publish = simplified outbox.
 **Alternatives:** Everything-via-events (loses sync call ergonomics); everything-via-HTTP (loses fanout and decoupling).
-**Consequences:** Clear mental model. Services declare which plane each call uses. Replay via audit table.
+**Consequences:** Clear mental model. Services declare which plane each call uses. Replay via audit table. Event ordering is not strict across routing keys — policy checks enforce causality.
 
 ### 2026-04-11 — Phase 0 — eSIM-only inventory
 **Context:** Physical SIM involves warehousing, courier integration, activation-on-first-use semantics.
@@ -62,25 +64,25 @@ This file records non-obvious decisions. Every Claude Code session appends here 
 **Context:** Inventory could be a separate service or embedded.
 **Decision:** MSISDN + eSIM pools live inside CRM service as a separate domain (own schema, repositories, policies). Not a separate container in v0.1.
 **Alternatives:** 11th service — adds network hop in critical path, adds ~150MB RAM, saves almost nothing operationally.
-**Consequences:** 10 containers total. Inventory is extractable in v0.2 if needed — schema boundary is already enforced.
+**Consequences:** 10 containers total. Inventory is extractable in v0.2 if needed — schema boundary is already enforced. SOM and Subscription call inventory via `bss-clients` as if it were a distinct service, so extraction requires zero caller-side code changes.
 
 ### 2026-04-11 — Phase 0 — Single Postgres instance, schema-per-domain
 **Context:** 11 schemas could be one instance or many.
 **Decision:** ONE PostgreSQL 16 instance with 11 schemas. Each service has its own `BSS_DB_URL` and uses only its own schema.
 **Alternatives:** One instance per service — blows RAM budget (~4.4GB), operational complexity too high for v0.1.
-**Consequences:** Simpler ops, simpler outbox pattern, fits in 4GB. Future split by schema is mechanical — no service code changes.
+**Consequences:** Simpler ops, simpler outbox pattern, fits in 4GB. Future split by schema is mechanical — no service code changes. Co-tenanting with non-BSS schemas (e.g., `campaignos` in dev) works because each service's migration is schema-scoped, not database-scoped.
 
-### 2026-04-11 — Phase 0 — Container structure: 10 services, infra optional
+### 2026-04-11 — Phase 0 — Container structure: 10 services, infra optional (BYOI default)
 **Context:** How to package for deployment.
-**Decision:** Default `docker-compose.yml` contains ONLY 10 BSS services. Separate `docker-compose.infra.yml` brings up Postgres, RabbitMQ, Metabase for all-in-one dev/demo. Most operators bring their own managed infra.
+**Decision:** Default `docker-compose.yml` contains ONLY 10 BSS services. Separate `docker-compose.infra.yml` brings up Postgres, RabbitMQ, Metabase for all-in-one dev/demo. Most operators bring their own managed infra, and BSS-CLI development has run BYOI from Phase 1 onwards against an external Postgres on tech-vm.
 **Alternatives:** Single compose with everything — forces Postgres/MQ even when deployer has managed services.
-**Consequences:** BYOI is the default shape. All-in-one is opt-in via `-f docker-compose.infra.yml`. Maps cleanly to ECS/EKS where each service is a task/pod.
+**Consequences:** BYOI is the default shape and the primary development mode. All-in-one is opt-in via `-f docker-compose.infra.yml`. Maps cleanly to ECS/EKS where each service is a task/pod with env-driven connection strings.
 
 ### 2026-04-11 — Phase 0 — auth_context abstraction in every service for Phase 12 readiness
 **Context:** v0.1 ships without auth; retrofitting auth later risks touching every service.
 **Decision:** Every service has `app/auth_context.py` that returns a hardcoded `AuthContext(actor='system', tenant='DEFAULT', roles=['admin'], permissions=['*'])`. All policies and tool dispatches read from `auth_context.current()`. Phase 12 changes only this one module per service plus middleware.
 **Alternatives:** Retrofit when needed — would touch every policy function and every router.
-**Consequences:** ~30 minutes added to Phase 3 reference slice. Phase 12 becomes a decorator-layer concern.
+**Consequences:** ~30 minutes added to Phase 3 reference slice. Phase 12 becomes a decorator-layer concern. Same pattern extended to `bss-clients` in Phase 5 via `AuthProvider` protocol + `NoAuthProvider` default.
 
 ### 2026-04-11 — Phase 0 — Runbook RAG deferred to Phase 11
 **Context:** LLM procedural knowledge (runbooks) needs a knowledge base.
@@ -96,7 +98,9 @@ This file records non-obvious decisions. Every Claude Code session appends here 
 
 ---
 
-## Initial policy catalog (seed — expand per phase)
+## Initial policy catalog
+
+> **Note:** this catalog was drafted during Phase 0 as the planned v0.1 policy surface. For the authoritative current state of each policy (implemented, stubbed, or retired), see the per-phase running log entries below. When the catalog drifts significantly from reality, this section should be extracted to a dedicated `POLICIES.md` file — tracked as a Phase 11 backlog item.
 
 ### CRM — customer + KYC
 - `customer.create.email_unique` — globally unique email across active customers
@@ -185,6 +189,12 @@ This file records non-obvious decisions. Every Claude Code session appends here 
 
 _Claude Code appends below this line as phases progress._
 
+### 2026-04-11 — Phase 3 — Config.py reads .env via pydantic-settings env_file with _REPO_ROOT
+**Context:** Phase 3 verification revealed that `uv run pytest` does not inherit shell-exported `.env` variables. A shell-level `set -a; source .env; set +a` workaround unblocks local tests but is fragile and breaks in CI, IDE test runners, and any invocation where cwd is not the service directory.
+**Decision:** Every service's `config.py` computes `_REPO_ROOT = Path(__file__).resolve().parents[3]` and passes `env_file=_REPO_ROOT / ".env"` to `SettingsConfigDict`. pydantic-settings reads `.env` directly from the repo root regardless of cwd or shell environment.
+**Alternatives:** (a) Relative path `env_file="../../.env"` — works from the service directory but fails from the repo root; breaks `make test`. (b) Export in Makefile and rely on recipe inheritance — works for `make test` but not for direct `uv run pytest`, IDE, CI. (c) Require `source .env` before every command — dev friction, silently breaks in CI.
+**Consequences:** Services read `.env` uniformly from any invocation context. Pattern is part of the service template cloned in Phases 4-10. Shipped as chore commit `chore: config.py reads .env via pydantic-settings env_file` on main after Phase 3 merge. Applied to both `services/_template/app/config.py` and `services/catalog/bss_catalog/config.py`. Phases 4+ inherit the fix via template clone.
+
 ### 2026-04-11 — Phase 4 — Case state machine (narrowed cancel)
 **Context:** Original spec allowed cancel from "any except closed", including resolved. Resolved cases should only proceed to closed, not be cancelled.
 **Decision:** Cancel valid only from `{open, in_progress, pending_customer}`. Resolved → closed via explicit close trigger only.
@@ -234,7 +244,7 @@ Terminal states: closed, cancelled.
 ### 2026-04-11 — Phase 4 — Test isolation: per-test transactional rollback
 **Context:** CRM is the first write-heavy service. Tests must not pollute the shared tech-vm DB.
 **Decision:** Each test gets a DB connection with an outer transaction. All writes within the test (including nested `session.begin()` calls, which become savepoints) are rolled back in teardown. The client fixture injects this session into the app.
-**Alternatives:** (a) Per-test savepoint — mechanically identical, naming difference. (c) Dedicated test schema with migrations — overkill, slow setup, no benefit over rollback.
+**Alternatives:** (a) Per-test savepoint — mechanically identical, naming difference. (b) Dedicated test schema with migrations — overkill, slow setup, no benefit over rollback.
 **Consequences:** Zero DB pollution. Tests can run in parallel per-session. No extra infrastructure.
 
 ### 2026-04-11 — Phase 4 — Dropped case.add_note.case_not_closed policy
@@ -242,10 +252,27 @@ Terminal states: closed, cancelled.
 **Decision:** Drop. The state machine prevents mutations on closed cases. Adding a redundant policy check on an append-only operation adds noise.
 **Consequences:** One fewer policy to test. If needed later, enforce at state machine level.
 
-### 2026-04-11 — Phase 4 — ticket.open.requires_customer renamed to ticket.open.requires_customer
+### 2026-04-11 — Phase 4 — ticket.open policy renamed for clarity
 **Context:** Original policy `ticket.open.requires_customer_or_case` was ambiguous — did it mean "either/or"?
 **Decision:** Rename to `ticket.open.requires_customer`. Meaning: `customer_id` is required (NOT NULL), `case_id` is optional. Standalone tickets are allowed.
 **Consequences:** Clearer semantics. Matches DATA_MODEL.md where customer_id is NOT NULL on ticket.
+
+### 2026-04-11 — Phase 4 — Per-service Dockerfile with workspace sed workaround
+**Context:** uv workspace dependency `bss-models = { workspace = true }` does not resolve inside a Docker build context because the build context only contains the service subtree, not the workspace root `pyproject.toml`. The shared template Dockerfile described in ARCHITECTURE.md (`uv sync --package ${SERVICE}`) fails with "bss-models references a workspace but is not a workspace member".
+**Decision:** Each service has its own Dockerfile that rewrites the workspace reference to a relative path before running `uv pip install`:
+```dockerfile
+RUN sed -i 's|workspace = true|path = "../../packages/bss-models"|' pyproject.toml \
+    && uv venv /app/.venv \
+    && uv pip install --python /app/.venv/bin/python .
+```
+**Alternatives:** (a) Shared template Dockerfile copying workspace root pyproject.toml and uv.lock: works but rebuilds every service whenever workspace root changes, harder cache invalidation. (b) Publish bss-models to a local PyPI mirror: too much infrastructure for v0.1. (c) Monorepo build orchestration tool (Bazel, Pants, Nx): massive scope creep, kills motto #6.
+**Consequences:** Each new service clones catalog's Dockerfile pattern. Migration to workspace-aware builds is tracked as a Phase 11 backlog item — worth revisiting when `uv` matures workspace-aware `sync` inside build contexts, or when the service count makes duplication painful. ARCHITECTURE.md documents both the current expedient and the intended long-term shape.
+
+### 2026-04-11 — Phase 4 — Hybrid cross-service test strategy
+**Context:** Phase 5 will introduce cross-service HTTP calls (Payment → CRM for `customer_exists` policy check). Unit-test strategy must cover both real-wire happy paths and simulated failure modes. Neither approach alone is sufficient.
+**Decision:** Hybrid approach. **Happy path:** real downstream container started via `docker compose up -d`, test exercises the real HTTP wire end-to-end. Catches docker networking, service discovery, env variable, and container health issues. **Error paths:** `respx` library registers canned responses for specific URLs, letting tests simulate 404 / 422 / 503 / malformed-body / timeout responses that real CRM will never produce on demand.
+**Alternatives:** (a) respx-only — can't prove docker networking or service discovery works; container-level integration bugs only surface at scenario runtime. (b) Real-only — can't simulate failures without contriving fault injection in the downstream service, which bloats its test surface. (c) In-process ASGI test client mounted on a fake CRM app — middle ground, but adds another moving part and still doesn't exercise real HTTP.
+**Consequences:** Every service from Phase 5 onward uses this pattern. Each cross-service dependency gets two test files per consumer: `test_<service>_<downstream>_integration.py` (real container) and `test_<service>_<downstream>_failures.py` (respx). Slightly more setup per service, but real protection against both integration and error-handling bugs. Documented in Phase 5 reworked spec as mandatory.
 
 ### 2026-04-11 — Phase 4 — API tests must exercise the HTTP layer, not service methods
 

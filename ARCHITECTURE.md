@@ -12,21 +12,21 @@ Two distinct planes connect the 10 services: **synchronous HTTP (TMF APIs)** for
                                     │ HTTP (TMF APIs)
         ┌──────┬────────┬───────────┼────────┬────────┬───────┐
         ▼      ▼        ▼           ▼        ▼        ▼       ▼
-     ┌─────┐┌─────┐ ┌─────┐     ┌─────┐┌─────┐ ┌─────┐┌─────┐ (reads from any)
-     │CRM  ││Pay  │ │Cat  │     │COM  ││Subs │ │Bill ││Inv  │
-     │8002 ││8003 │ │8001 │     │8004 ││8006 │ │8009 ││8011 │
-     └──┬──┘└──┬──┘ └──┬──┘     └──┬──┘└──┬──┘ └──┬──┘└──┬──┘
-        │      │       │           │      │       │      │
-        │      └───HTTP (e.g. Pay→CRM "customer exists?")  │
-        │                          │                      │
-        │      ┌───────────────────┼──────────────────────┘
+     ┌─────┐┌─────┐ ┌─────┐     ┌─────┐┌─────┐ ┌─────┐
+     │CRM* ││Pay  │ │Cat  │     │COM  ││Subs │ │Bill │
+     │8002 ││8003 │ │8001 │     │8004 ││8006 │ │8009 │
+     └──┬──┘└──┬──┘ └──┬──┘     └──┬──┘└──┬──┘ └──┬──┘
+        │      │       │           │      │       │
+        │      └───HTTP (e.g. Pay→CRM "customer exists?")
+        │                          │
+        │      ┌───────────────────┼──────────────────────┐
         │      │         ┌─────┐┌─────┐ ┌─────┐ ┌─────┐
         │      │         │SOM  ││Med  │ │Rate ││Prov │
         │      │         │8005 ││8007 │ │8008 ││Sim  │
-        │      │         └──┬──┘└──┬──┘ └──┬──┘│8010 │
-        │      │            │      │       │  └──┬──┘
-        │      │            │      │       │     │
-        ▼      ▼            ▼      ▼       ▼     ▼
+        │      │         └──┬──┘└──┬──┘ └──┬──┘ │8010 │
+        │      │            │      │       │    └──┬──┘
+        │      │            │      │       │       │
+        ▼      ▼            ▼      ▼       ▼       ▼
      ═══════════════════════════════════════════════════════════
      ║         RabbitMQ — topic exchange: bss.events            ║
      ║  order.* · service_order.* · service.* · provisioning.*  ║
@@ -52,6 +52,8 @@ Two distinct planes connect the 10 services: **synchronous HTTP (TMF APIs)** for
                        └────────────────┘
 ```
 
+**\* CRM hosts the Inventory sub-domain** (MSISDN pool + eSIM profile pool) on port 8002 under `/inventory-api/v1/...`. Not a separate container in v0.1. See "Services" table below.
+
 ## Call patterns
 
 ### Synchronous HTTP (via bss-clients)
@@ -65,7 +67,7 @@ Used when the caller needs an immediate answer.
 | COM → Catalog (get_offering) | Pre-write validation |
 | COM → Subscription (create on order complete) | COM waits for subscription ID |
 | Subscription → Payment (charge) | Need approved/declined before activate |
-| SOM → Inventory (reserve_msisdn + reserve_esim) | Atomic reservation |
+| SOM → CRM Inventory (reserve_msisdn + reserve_esim) | Atomic reservation on shared CRM instance |
 | CRM (close policy) → Subscription (list_for_customer) | Policy needs live answer |
 | Mediation → Subscription (get_by_msisdn) | Enrichment |
 
@@ -88,12 +90,26 @@ Used when the producer doesn't need an answer and N consumers may care.
 
 **Outbox pattern (simplified):** every service writes to `audit.domain_event` inside the same DB transaction as the domain write. After the transaction commits, a post-commit hook publishes to RabbitMQ best-effort. If RabbitMQ is down, the audit row is still present and a replay job (post-v0.1) can republish.
 
+### Event ordering guarantees
+
+RabbitMQ topic exchange preserves **order within a single routing key for a single consumer**. It does NOT preserve order between different routing keys, and parallel consumers on the same queue can observe events in different orders than published.
+
+Consequences for BSS-CLI:
+
+- **SOM receives `provisioning.task.completed` in arrival order**, not necessarily publish order. When 5 tasks complete roughly simultaneously, SOM sees them in some unspecified order. The `service.activate.requires_all_rfs_activated_and_esim_prepared` policy is the thing that enforces causality — activation only proceeds when all prerequisites are met, regardless of which arrived first.
+
+- **Scenario `expect_event_sequence` assertions must describe causal order, not strict publish order.** When two events are concurrent (e.g., two parallel `task.started` events for different RFS), accept either ordering. The test framework polls for the sequence relation, not the exact interleaving.
+
+- **`audit.domain_event` is ordered by `occurred_at` (post-commit timestamp).** For events published within seconds of each other from different services, the timestamps may reflect commit order, not causal order. Close reads usually agree with the mental model; races may not. When debugging a chain, trust the causal relationships (parent→child, request→response) over the absolute timestamps.
+
+If strict ordering becomes essential for a future use case, the path forward is RabbitMQ routing by `subscription_id` (or another partition key), so all events for one subscription land on the same consumer queue. That's Phase 11+ territory; v0.1 does not need it.
+
 ## Services (10 total)
 
 | # | Service | Port | TMF | State | Notes |
 |---|---|---|---|---|---|
 | 1 | catalog | 8001 | TMF620 | stateless | Read-only in v0.1 |
-| 2 | crm | 8002 | TMF629 + TMF621 + TMF683 | stateful | Customer + Case + Ticket + Interaction + KYC |
+| 2 | crm | 8002 | TMF629 + TMF621 + TMF683 | stateful | Customer + Case + Ticket + Interaction + KYC + **Inventory sub-domain** |
 | 3 | payment | 8003 | TMF676 | stateful | Mock gateway |
 | 4 | com | 8004 | TMF622 | stateful FSM | Commercial Order Management |
 | 5 | som | 8005 | TMF641 + TMF638 + TMF640 | stateful FSM | Service Order + decomposition |
@@ -103,16 +119,15 @@ Used when the producer doesn't need an answer and N consumers may care.
 | 9 | billing | 8009 | TMF678 | stateful | Bill issuance |
 | 10 | provisioning-sim | 8010 | custom | stateful | Fake HLR/PCRF/OCS/SM-DP+, configurable failures |
 
-Plus one helper component inside the `crm` service (not a separate container):
-- **Inventory domain** (MSISDN pool + eSIM profile pool) lives inside the CRM service for v0.1 because it's small and mostly read by SOM. If it outgrows this, it gets extracted in v0.2. Endpoints mounted under `/inventory-api/v1/...` on port 8002.
+The **Inventory sub-domain** (MSISDN pool + eSIM profile pool) lives inside the CRM service on port 8002, mounted under `/inventory-api/v1/...`. It has its own schema (`inventory`), repositories, policies, and HTTP endpoints — just no separate container. SOM and Subscription call it via `bss-clients` as if it were a distinct service. If it outgrows CRM, extraction to an 11th container is mechanical because the boundary is already enforced.
 
-**Why 10 containers, not 11:** keeping inventory inside CRM for v0.1 reduces one network hop in the critical activation path and saves ~150MB of RAM. The domain boundary is still clean because inventory has its own schema, repositories, policies, and tools — extraction when needed is mechanical.
+**Why 10 containers, not 11:** keeping inventory inside CRM for v0.1 reduces one network hop in the critical activation path and saves ~150MB of RAM. Domain boundary is still clean — inventory has its own schema, repositories, policies, and tool surface. See DECISIONS.md "Inventory domain hosted inside CRM service (v0.1)" for the rationale.
 
 ## Container structure
 
-### Default compose: 10 service containers only (BYOI — bring your own infra)
+### Default deployment: BYOI (bring your own infrastructure)
 
-`docker-compose.yml` contains only the 10 BSS services. Assumes PostgreSQL 16 and RabbitMQ 3.13 are reachable via env-configured connection strings. This is the **default deployment shape** — most operators already have managed Postgres (RDS, Cloud SQL) and managed MQ (Amazon MQ, CloudAMQP).
+**BSS-CLI has been developed in BYOI mode from Phase 1 onwards.** The default `docker-compose.yml` contains only the 10 BSS services and assumes PostgreSQL 16 and RabbitMQ 3.13 are reachable via env-configured connection strings. Most operators already have managed Postgres (RDS, Cloud SQL) and managed MQ (Amazon MQ, CloudAMQP), so bundling an unused Postgres container would be wasteful.
 
 ```yaml
 # docker-compose.yml
@@ -133,7 +148,7 @@ Each service reads `BSS_DB_URL` and `BSS_MQ_URL` from env. No assumptions about 
 
 ### Optional infra compose: all-in-one
 
-`docker-compose.infra.yml` is a separate file that brings up Postgres, RabbitMQ, and Metabase for development and demo use.
+`docker-compose.infra.yml` brings up Postgres, RabbitMQ, and Metabase in containers for operators who prefer a single-command bring-up. This is **not the primary development mode** — it exists as a bring-up convenience for new contributors and for the README quickstart.
 
 ```yaml
 # docker-compose.infra.yml
@@ -166,11 +181,12 @@ volumes:
 ```
 
 Usage:
+
 ```bash
-# BYOI (default)
+# BYOI (default, development mode)
 docker compose up -d
 
-# All-in-one (dev / demo)
+# All-in-one (dev/demo, new contributor quickstart)
 docker compose -f docker-compose.yml -f docker-compose.infra.yml up -d
 ```
 
@@ -190,29 +206,55 @@ docker compose --profile core up       # Phase 3-7 development
 docker compose --profile full up       # Phase 8+ and scenarios
 ```
 
-### Per-service Dockerfile (shared template)
+### Per-service Dockerfile pattern
+
+**Current implementation (Phase 3/4 expedient):** each service has its own `Dockerfile` that rewrites the workspace reference to a direct path before running `uv pip install`. This is a workaround for uv workspace resolution inside Docker build contexts.
 
 ```dockerfile
-# services/_template/Dockerfile (copied into each service with SERVICE substitution)
+# services/catalog/Dockerfile (similar pattern for each service)
 FROM python:3.12-slim AS builder
 WORKDIR /build
 RUN pip install --no-cache-dir uv
+
 COPY packages/ packages/
-COPY services/${SERVICE}/ service/
-RUN uv sync --package ${SERVICE}
+COPY services/catalog/ services/catalog/
+
+WORKDIR /build/services/catalog
+# In Docker there is no workspace root — switch source from workspace to path
+RUN sed -i 's|workspace = true|path = "../../packages/bss-models"|' pyproject.toml \
+    && uv venv /app/.venv \
+    && uv pip install --python /app/.venv/bin/python .
 
 FROM python:3.12-slim AS runtime
 RUN useradd -m -u 1000 bss && \
     apt-get update && apt-get install -y --no-install-recommends curl && \
     rm -rf /var/lib/apt/lists/*
-COPY --from=builder --chown=bss:bss /build /app
-WORKDIR /app/service
+COPY --from=builder --chown=bss:bss /app/.venv /app/.venv
+WORKDIR /app
 USER bss
+ENV PATH="/app/.venv/bin:$PATH"
 EXPOSE 8000
 HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
   CMD curl -f http://localhost:8000/health || exit 1
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "bss_catalog"]
 ```
+
+**Intended long-term shape (Phase 11+ backlog):** a single shared template Dockerfile that copies the workspace root `pyproject.toml` and `uv.lock`, then uses `uv sync --package ${SERVICE}` from the workspace root. This would eliminate per-service Dockerfile duplication and let uv's workspace resolution work natively.
+
+```dockerfile
+# services/_template/Dockerfile — aspirational, not yet implemented
+FROM python:3.12-slim AS builder
+WORKDIR /build
+RUN pip install --no-cache-dir uv
+COPY pyproject.toml uv.lock ./
+COPY packages/ packages/
+COPY services/${SERVICE}/ services/${SERVICE}/
+RUN uv sync --package ${SERVICE}
+
+# ... (rest same as per-service pattern)
+```
+
+Migration tracked as a Phase 11 backlog item. See DECISIONS.md "Per-service Dockerfile with workspace sed workaround" for the full rationale.
 
 ### Footprint budget (motto #6)
 
@@ -298,7 +340,9 @@ PostgreSQL 16 (one instance)
 └── schema knowledge        ← post-v0.1 (pgvector for runbook RAG)
 ```
 
-**Services NEVER read each other's schemas directly.** Cross-service queries go through bss-clients HTTP. The shared Postgres instance is a deployment convenience, not a coupling — you can verify this by running `grep -r "schema=" services/` and confirming each service only references its own schema.
+**Services NEVER read each other's schemas directly.** Cross-service queries go through `bss-clients` HTTP. The shared Postgres instance is a deployment convenience, not a coupling — you can verify this by running `grep -r "schema=" services/` and confirming each service only references its own schema.
+
+In BSS-CLI's actual development, the database is an external Postgres on `tech-vm` (reachable via Tailscale). The shared instance also hosts the `campaignos` schema from a separate production workload — Phase 2's migration and `reset-db` target are scoped to only touch the 11 BSS schemas, never `campaignos` or `public`. This is the real test of schema boundary discipline: co-tenanting a dev BSS with a production schema in the same database, without either one touching the other.
 
 ### Why one instance for v0.1
 
@@ -391,17 +435,19 @@ Cost estimate: **~$4,000-8,000/month**.
 
 | Capability | v0.1 ready? | Notes |
 |---|---|---|
-| Docker Compose bring-up | ✅ | Default shape |
+| Docker Compose bring-up | ✅ | BYOI is the default shape; all-in-one compose exists for quickstart |
 | ECS Fargate | ✅ | Each service is a task definition |
 | EKS | ✅ | Same containers, need K8s manifests (not in v0.1) |
 | Horizontal scale stateless services | ✅ | Catalog, rating, provisioning-sim scale trivially |
 | Horizontal scale stateful services | ⚠️ | Requires consistent-hash routing by customer_id (Phase 13) |
 | Multi-AZ database | ✅ | Postgres connection URL is env-driven |
-| Zero-downtime deploys | ⚠️ | Needs graceful SIGTERM handler (planned in Phase 3 reference slice) |
+| Zero-downtime deploys | ⚠️ | Needs graceful SIGTERM handler (wired in Phase 3 reference slice) |
 | TLS termination | ➖ | Expected at ALB / ingress layer, not per-service |
-| Auth between services | ❌ | Phase 12 |
+| Auth between services | ❌ | Phase 12. `auth_context.py` seam is already in place. |
 | Rate limiting per principal | ❌ | Phase 12 |
 | Distributed tracing | ❌ | Phase 11 (OpenTelemetry) |
+| uv workspace builds in CI | ⚠️ | Per-service Dockerfile with `sed` rewrite workaround (Phase 4 expedient). Native workspace-aware build tracked in Phase 11 backlog. See DECISIONS.md. |
+| Schema boundary enforcement | ✅ | Each service only references its own schema; verified by grep. Co-tenant with Campaign OS in dev proves this. |
 
 ## Observability (Phase 11+)
 
@@ -417,7 +463,8 @@ Cost estimate: **~$4,000-8,000/month**.
 - **No service mesh.** Docker network / VPC routing is sufficient below 100k RPS.
 - **No Kafka.** RabbitMQ is lighter, simpler, and topic exchanges cover v0.1 needs. Migration path to MSK is documented for Tier 3.
 - **No Redis.** Postgres is fast enough for v0.1 workload.
-- **No authentication.** Phase 12. The architecture is shaped for clean addition.
+- **No authentication.** Phase 12. The architecture is shaped for clean addition via `auth_context.py` per service.
 - **No multi-tenancy at runtime.** `tenant_id` columns exist but default to `'DEFAULT'`. Activating true tenancy is a v0.3 concern.
 - **No eKYC implementation.** Channel-layer concern. BSS-CLI receives signed attestations via `customer.attest_kyc` and enforces policies.
 - **No physical SIM logistics.** eSIM-only in v0.1.
+- **No strict event ordering.** Consumers must handle concurrent events causally via policy checks, not assume arrival order. See "Event ordering guarantees" section above.
