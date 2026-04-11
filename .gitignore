@@ -37,3 +37,9 @@ build/
 # Database dumps
 *.sql.gz
 *.dump
+
+# macOS AppleDouble metadata
+._*
+.DS_Store
+.AppleDouble
+.LSOverride
