@@ -1,0 +1,423 @@
+# ARCHITECTURE.md — BSS-CLI (v3)
+
+## Topology
+
+Two distinct planes connect the 10 services: **synchronous HTTP (TMF APIs)** for calls that need an immediate answer, and **asynchronous events (RabbitMQ topic exchange)** for reactions. Postgres is accessed directly by each service's own writes — the message broker is not a database pipe.
+
+```
+                    ┌────────────────────────────────┐
+                    │        bss (CLI + REPL)         │
+                    │   + LangGraph Orchestrator      │
+                    └───────────────┬─────────────────┘
+                                    │ HTTP (TMF APIs)
+        ┌──────┬────────┬───────────┼────────┬────────┬───────┐
+        ▼      ▼        ▼           ▼        ▼        ▼       ▼
+     ┌─────┐┌─────┐ ┌─────┐     ┌─────┐┌─────┐ ┌─────┐┌─────┐ (reads from any)
+     │CRM  ││Pay  │ │Cat  │     │COM  ││Subs │ │Bill ││Inv  │
+     │8002 ││8003 │ │8001 │     │8004 ││8006 │ │8009 ││8011 │
+     └──┬──┘└──┬──┘ └──┬──┘     └──┬──┘└──┬──┘ └──┬──┘└──┬──┘
+        │      │       │           │      │       │      │
+        │      └───HTTP (e.g. Pay→CRM "customer exists?")  │
+        │                          │                      │
+        │      ┌───────────────────┼──────────────────────┘
+        │      │         ┌─────┐┌─────┐ ┌─────┐ ┌─────┐
+        │      │         │SOM  ││Med  │ │Rate ││Prov │
+        │      │         │8005 ││8007 │ │8008 ││Sim  │
+        │      │         └──┬──┘└──┬──┘ └──┬──┘│8010 │
+        │      │            │      │       │  └──┬──┘
+        │      │            │      │       │     │
+        ▼      ▼            ▼      ▼       ▼     ▼
+     ═══════════════════════════════════════════════════════════
+     ║         RabbitMQ — topic exchange: bss.events            ║
+     ║  order.* · service_order.* · service.* · provisioning.*  ║
+     ║  subscription.* · usage.* · crm.* · payment.* · billing.*║
+     ═══════════════════════════════════════════════════════════
+
+     Each service writes directly to its own schema in ONE shared
+     Postgres instance. audit.domain_event is written in the same
+     transaction as the domain write; RabbitMQ publish happens
+     after commit (simplified outbox).
+
+     ┌──────────────────────────────────────────────────┐
+     │             PostgreSQL 16 (single instance)       │
+     │                                                    │
+     │  crm · catalog · inventory · payment · order_mgmt │
+     │  service_inventory · provisioning · subscription  │
+     │  mediation · billing · audit · (knowledge post-v0.1) │
+     └─────────────────────────┬────────────────────────┘
+                               │ read-only
+                               ▼
+                       ┌────────────────┐
+                       │    Metabase    │
+                       └────────────────┘
+```
+
+## Call patterns
+
+### Synchronous HTTP (via bss-clients)
+
+Used when the caller needs an immediate answer.
+
+| Caller → Callee | Purpose |
+|---|---|
+| CLI/orchestrator → any service | User-facing request |
+| Payment → CRM (customer_exists) | Pre-write validation |
+| COM → Catalog (get_offering) | Pre-write validation |
+| COM → Subscription (create on order complete) | COM waits for subscription ID |
+| Subscription → Payment (charge) | Need approved/declined before activate |
+| SOM → Inventory (reserve_msisdn + reserve_esim) | Atomic reservation |
+| CRM (close policy) → Subscription (list_for_customer) | Policy needs live answer |
+| Mediation → Subscription (get_by_msisdn) | Enrichment |
+
+### Asynchronous events (RabbitMQ)
+
+Used when the producer doesn't need an answer and N consumers may care.
+
+| Publisher → Routing Key | Consumers |
+|---|---|
+| COM → `order.in_progress` | SOM |
+| SOM → `provisioning.task.created` | Provisioning-sim |
+| Provisioning-sim → `provisioning.task.completed` | SOM |
+| SOM → `service_order.completed` / `service_order.failed` | COM |
+| COM → `order.completed` | Subscription (activation trigger) |
+| Subscription → `subscription.activated` / `exhausted` / `blocked` | (future: notification, analytics) |
+| Mediation → `usage.recorded` | Rating |
+| Rating → `usage.rated` | Subscription |
+
+**Event exchange:** single topic exchange `bss.events`. Consumers bind queues with routing patterns (e.g., SOM binds `order.in_progress`, `provisioning.task.completed`).
+
+**Outbox pattern (simplified):** every service writes to `audit.domain_event` inside the same DB transaction as the domain write. After the transaction commits, a post-commit hook publishes to RabbitMQ best-effort. If RabbitMQ is down, the audit row is still present and a replay job (post-v0.1) can republish.
+
+## Services (10 total)
+
+| # | Service | Port | TMF | State | Notes |
+|---|---|---|---|---|---|
+| 1 | catalog | 8001 | TMF620 | stateless | Read-only in v0.1 |
+| 2 | crm | 8002 | TMF629 + TMF621 + TMF683 | stateful | Customer + Case + Ticket + Interaction + KYC |
+| 3 | payment | 8003 | TMF676 | stateful | Mock gateway |
+| 4 | com | 8004 | TMF622 | stateful FSM | Commercial Order Management |
+| 5 | som | 8005 | TMF641 + TMF638 + TMF640 | stateful FSM | Service Order + decomposition |
+| 6 | subscription | 8006 | custom | stateful FSM | Bundle balance, VAS, renewal |
+| 7 | mediation | 8007 | TMF635 | stateful | CDR ingestion |
+| 8 | rating | 8008 | — | stateless | Pure rating function + consumer |
+| 9 | billing | 8009 | TMF678 | stateful | Bill issuance |
+| 10 | provisioning-sim | 8010 | custom | stateful | Fake HLR/PCRF/OCS/SM-DP+, configurable failures |
+
+Plus one helper component inside the `crm` service (not a separate container):
+- **Inventory domain** (MSISDN pool + eSIM profile pool) lives inside the CRM service for v0.1 because it's small and mostly read by SOM. If it outgrows this, it gets extracted in v0.2. Endpoints mounted under `/inventory-api/v1/...` on port 8002.
+
+**Why 10 containers, not 11:** keeping inventory inside CRM for v0.1 reduces one network hop in the critical activation path and saves ~150MB of RAM. The domain boundary is still clean because inventory has its own schema, repositories, policies, and tools — extraction when needed is mechanical.
+
+## Container structure
+
+### Default compose: 10 service containers only (BYOI — bring your own infra)
+
+`docker-compose.yml` contains only the 10 BSS services. Assumes PostgreSQL 16 and RabbitMQ 3.13 are reachable via env-configured connection strings. This is the **default deployment shape** — most operators already have managed Postgres (RDS, Cloud SQL) and managed MQ (Amazon MQ, CloudAMQP).
+
+```yaml
+# docker-compose.yml
+services:
+  catalog:          { build: ./services/catalog,         env_file: .env, ports: ["8001:8000"] }
+  crm:              { build: ./services/crm,             env_file: .env, ports: ["8002:8000"] }
+  payment:          { build: ./services/payment,         env_file: .env, ports: ["8003:8000"] }
+  com:              { build: ./services/com,             env_file: .env, ports: ["8004:8000"] }
+  som:              { build: ./services/som,             env_file: .env, ports: ["8005:8000"] }
+  subscription:     { build: ./services/subscription,    env_file: .env, ports: ["8006:8000"] }
+  mediation:        { build: ./services/mediation,       env_file: .env, ports: ["8007:8000"] }
+  rating:           { build: ./services/rating,          env_file: .env, ports: ["8008:8000"] }
+  billing:          { build: ./services/billing,         env_file: .env, ports: ["8009:8000"] }
+  provisioning-sim: { build: ./services/provisioning-sim, env_file: .env, ports: ["8010:8000"] }
+```
+
+Each service reads `BSS_DB_URL` and `BSS_MQ_URL` from env. No assumptions about where Postgres or RabbitMQ live.
+
+### Optional infra compose: all-in-one
+
+`docker-compose.infra.yml` is a separate file that brings up Postgres, RabbitMQ, and Metabase for development and demo use.
+
+```yaml
+# docker-compose.infra.yml
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: bss
+      POSTGRES_PASSWORD: bss
+      POSTGRES_DB: bss
+    ports: ["5432:5432"]
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "bss"]
+      interval: 10s
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    ports: ["5672:5672", "15672:15672"]
+    volumes: [rabbitmq_data:/var/lib/rabbitmq]
+
+  metabase:
+    image: metabase/metabase:latest
+    ports: ["3000:3000"]
+    depends_on: [postgres]
+
+volumes:
+  postgres_data:
+  rabbitmq_data:
+```
+
+Usage:
+```bash
+# BYOI (default)
+docker compose up -d
+
+# All-in-one (dev / demo)
+docker compose -f docker-compose.yml -f docker-compose.infra.yml up -d
+```
+
+### Compose profiles for incremental bringup
+
+For development on slow machines, profiles allow partial stacks:
+
+```yaml
+profiles:
+  minimal:  [catalog, crm, payment]
+  core:     [catalog, crm, payment, com, som, subscription, provisioning-sim]
+  full:     [catalog, crm, payment, com, som, subscription, mediation, rating, billing, provisioning-sim]
+```
+
+```bash
+docker compose --profile core up       # Phase 3-7 development
+docker compose --profile full up       # Phase 8+ and scenarios
+```
+
+### Per-service Dockerfile (shared template)
+
+```dockerfile
+# services/_template/Dockerfile (copied into each service with SERVICE substitution)
+FROM python:3.12-slim AS builder
+WORKDIR /build
+RUN pip install --no-cache-dir uv
+COPY packages/ packages/
+COPY services/${SERVICE}/ service/
+RUN uv sync --package ${SERVICE}
+
+FROM python:3.12-slim AS runtime
+RUN useradd -m -u 1000 bss && \
+    apt-get update && apt-get install -y --no-install-recommends curl && \
+    rm -rf /var/lib/apt/lists/*
+COPY --from=builder --chown=bss:bss /build /app
+WORKDIR /app/service
+USER bss
+EXPOSE 8000
+HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
+  CMD curl -f http://localhost:8000/health || exit 1
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+### Footprint budget (motto #6)
+
+| Component | RAM |
+|---|---|
+| 10 × BSS service (~150MB each) | ~1.5 GB |
+| Postgres (dev config) | ~400 MB |
+| RabbitMQ | ~350 MB |
+| Metabase | ~600 MB |
+| **Total (all-in-one)** | **~2.85 GB** |
+| **Total (BYOI, services only)** | **~1.5 GB** |
+
+Both modes comfortably under the 4 GB motto limit. BYOI mode fits on a t3.small; all-in-one fits on a t3.medium.
+
+## Domain boundaries
+
+```
+┌─ CRM domain ─────────────────────────────┐
+│  Party, Customer, Contact Medium, KYC    │
+│  Interaction (audit of touchpoints)      │
+│  Case → 1..N Tickets                     │
+│  Agent, SLA Policy                       │
+│  (hosts Inventory in v0.1)               │
+└──────────────────────────────────────────┘
+
+┌─ Inventory domain (inside CRM service) ──┐
+│  MSISDN Pool                             │
+│  eSIM Profile Pool                       │
+└──────────────────────────────────────────┘
+
+┌─ Catalog domain ─────────────────────────┐
+│  ProductSpecification                    │
+│  ProductOffering (S, M, L)               │
+│  ProductOfferingPrice                    │
+│  BundleAllowance                         │
+│  VAS Offering                            │
+│  ServiceSpecification (CFS, RFS)         │
+│  ProductToServiceMapping                 │
+└──────────────────────────────────────────┘
+
+┌─ Order domain ───────────────────────────┐
+│  ProductOrder (COM) ─────decomposes─────┐│
+│     │                                    ││
+│     └──> ServiceOrder (SOM) ────────────┘│
+│              │                            │
+│              └──> Service (CFS, RFS)      │
+│                      │                    │
+│                      └──> ProvisioningTask→ sim
+└──────────────────────────────────────────┘
+
+┌─ Subscription domain ────────────────────┐
+│  Subscription (FSM)                      │
+│  BundleBalance                           │
+│  VASPurchase                             │
+└──────────────────────────────────────────┘
+
+┌─ Usage → Rating → Billing ───────────────┐
+│  UsageEvent → RatedDecrement → Bill      │
+└──────────────────────────────────────────┘
+
+┌─ Audit domain ───────────────────────────┐
+│  DomainEvent (outbox + replay substrate) │
+└──────────────────────────────────────────┘
+```
+
+## Database strategy
+
+### v0.1: single instance, schema-per-domain
+
+```
+PostgreSQL 16 (one instance)
+├── schema crm
+├── schema catalog
+├── schema inventory        ← MSISDN + eSIM pools
+├── schema payment
+├── schema order_mgmt       ← COM
+├── schema service_inventory ← SOM output
+├── schema provisioning     ← simulator
+├── schema subscription
+├── schema mediation
+├── schema billing
+├── schema audit            ← domain event log
+└── schema knowledge        ← post-v0.1 (pgvector for runbook RAG)
+```
+
+**Services NEVER read each other's schemas directly.** Cross-service queries go through bss-clients HTTP. The shared Postgres instance is a deployment convenience, not a coupling — you can verify this by running `grep -r "schema=" services/` and confirming each service only references its own schema.
+
+### Why one instance for v0.1
+
+- **Simplicity.** One connection pool per service, one backup target, one monitoring target.
+- **Transaction guarantees.** The outbox pattern (audit event + domain write in one TX) is trivial.
+- **Resource budget.** Motto #6 — one Postgres is ~400 MB, eleven would be ~4.4 GB and blow the budget.
+- **MVNO scale reality.** A single well-tuned Postgres handles millions of subscribers. Splitting before measurement is cargo culting.
+
+### The future split path (post-v0.1)
+
+When a single instance becomes the bottleneck, split by schema:
+
+1. Identify the hot schema (likely `subscription` + `mediation` at first)
+2. Stand up a new Postgres instance for that schema
+3. Update `BSS_DB_URL` env var for the owning service to point to the new instance
+4. Migration is a `pg_dump --schema=foo && pg_restore` plus DNS cutover
+5. **Zero service code changes** because each service only knows its own `BSS_DB_URL`
+
+This is the test of whether the v0.1 architecture is honest: can you split without rewriting? Yes, because the schema boundaries enforce the isolation in code today.
+
+## AWS deployment path
+
+### Tier 1 — "Ship on AWS today" (~1 day of work)
+
+Target: development, UAT, proof-of-concept for an MVNO stakeholder.
+
+```
+┌──────────────────────────────────────────────────┐
+│                  AWS Account                      │
+│                                                    │
+│   Application Load Balancer                       │
+│     ├── /catalog/*          → ECS: catalog         │
+│     ├── /customer*/*        → ECS: crm             │
+│     ├── /payment*/*         → ECS: payment         │
+│     ├── /productOrder*/*    → ECS: com             │
+│     ├── /serviceOrder*/*    → ECS: som             │
+│     ├── /subscription-api/* → ECS: subscription    │
+│     ├── /usage*/*           → ECS: mediation       │
+│     ├── /rating-api/*       → ECS: rating          │
+│     ├── /customerBill*/*    → ECS: billing         │
+│     └── /provisioning-api/* → ECS: provisioning-sim│
+│                                                    │
+│   ECS Fargate cluster — 10 services, 1 task each   │
+│                                                    │
+│   RDS PostgreSQL (db.t4g.medium)                   │
+│   Amazon MQ for RabbitMQ (mq.m5.large)             │
+│   ECR for container images                          │
+│   CloudWatch Logs (structured JSON)                │
+│   Secrets Manager (DB credentials, future auth)    │
+│                                                    │
+│   Cost estimate: ~$400/month                       │
+└──────────────────────────────────────────────────┘
+```
+
+**Why this maps cleanly from v0.1:** every service is already a container with the right healthcheck, non-root user, structured logging, and env-driven config. Your Campaign OS ECS Fargate experience transfers directly — it's the same deployment model with different container images.
+
+### Tier 2 — "Small MVNO production" (~1 week on top of v0.1)
+
+Target: launching for a real customer base of 10,000-50,000 subscribers.
+
+Additions on top of Tier 1:
+- RDS PostgreSQL **Multi-AZ** for HA
+- Amazon MQ **active/standby**
+- ECS Fargate **min 2 tasks per service** for rolling deploys and HA
+- TLS termination at ALB via ACM certificate
+- Route53 for DNS and health checks
+- CloudWatch Alarms on key metrics (p99 latency, error rate, queue depth, bundle exhaustion rate)
+- Secrets Manager rotation enabled
+- WAF basic ruleset on ALB
+- **Authentication (Phase 12)** is required before this tier — no TLS-terminated internet exposure without auth
+
+Cost estimate: **~$800-1,200/month** at 10k subscribers.
+
+### Tier 3 — "Scaled MVNO" (post-v0.2, ~1 month of work)
+
+Target: 100k+ subscribers, multi-region, strict SLA.
+
+- **EKS** instead of ECS (better for mixed stateful/stateless workloads at scale)
+- **RDS Aurora PostgreSQL** with read replicas, or Aurora per service
+- **MSK (Managed Kafka)** replacing RabbitMQ for >20k events/sec
+- **ElastiCache Redis** for hot-path caching and rate limiting
+- **CloudFront** for eSIM activation asset delivery
+- **Shield Advanced**, stricter WAF rules
+- **CloudHSM** for real Ki storage (compliance requirement at scale)
+- **Multi-region** with cross-region replication for DR
+
+Cost estimate: **~$4,000-8,000/month**.
+
+### Deployability matrix
+
+| Capability | v0.1 ready? | Notes |
+|---|---|---|
+| Docker Compose bring-up | ✅ | Default shape |
+| ECS Fargate | ✅ | Each service is a task definition |
+| EKS | ✅ | Same containers, need K8s manifests (not in v0.1) |
+| Horizontal scale stateless services | ✅ | Catalog, rating, provisioning-sim scale trivially |
+| Horizontal scale stateful services | ⚠️ | Requires consistent-hash routing by customer_id (Phase 13) |
+| Multi-AZ database | ✅ | Postgres connection URL is env-driven |
+| Zero-downtime deploys | ⚠️ | Needs graceful SIGTERM handler (planned in Phase 3 reference slice) |
+| TLS termination | ➖ | Expected at ALB / ingress layer, not per-service |
+| Auth between services | ❌ | Phase 12 |
+| Rate limiting per principal | ❌ | Phase 12 |
+| Distributed tracing | ❌ | Phase 11 (OpenTelemetry) |
+
+## Observability (Phase 11+)
+
+- **OpenTelemetry** traces propagated via W3C trace context across all services
+- **Jaeger or Tempo** for trace storage (single container)
+- **`bss trace <id>`** queries OTel backend and renders ASCII swimlanes
+- **structlog** includes `trace_id` in every log line (v0.1 includes this even though OTel isn't wired — forward compatibility)
+- **Metabase** reads from `audit.domain_event` for business dashboards (not OTel)
+
+## What's NOT in the architecture
+
+- **No API gateway.** CLI talks directly to services. Simpler, lower latency, easier to debug. ALB is the gateway in AWS deployments.
+- **No service mesh.** Docker network / VPC routing is sufficient below 100k RPS.
+- **No Kafka.** RabbitMQ is lighter, simpler, and topic exchanges cover v0.1 needs. Migration path to MSK is documented for Tier 3.
+- **No Redis.** Postgres is fast enough for v0.1 workload.
+- **No authentication.** Phase 12. The architecture is shaped for clean addition.
+- **No multi-tenancy at runtime.** `tenant_id` columns exist but default to `'DEFAULT'`. Activating true tenancy is a v0.3 concern.
+- **No eKYC implementation.** Channel-layer concern. BSS-CLI receives signed attestations via `customer.attest_kyc` and enforces policies.
+- **No physical SIM logistics.** eSIM-only in v0.1.

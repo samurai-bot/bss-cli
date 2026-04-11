@@ -1,0 +1,615 @@
+# DATA_MODEL.md — BSS-CLI (v3)
+
+**Single PostgreSQL 16 instance. Schema-per-domain. ~38 tables across 12 schemas.**
+
+Services NEVER read each other's schemas directly. The schema boundary is enforced socially in v0.1 and will be enforced mechanically (separate Postgres instances) in any later split. Each service configures its own `BSS_DB_URL` pointing at the shared instance.
+
+All tables include:
+- `tenant_id TEXT NOT NULL DEFAULT 'DEFAULT'` — future multi-tenancy
+- `created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`
+- `updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()` (where mutable)
+
+IDs are TEXT with domain prefixes (`CUST-001`, `ORD-014`, `ICCID-...`, etc.).
+
+## Schemas
+
+```sql
+CREATE SCHEMA crm;
+CREATE SCHEMA catalog;
+CREATE SCHEMA inventory;         -- MSISDN + eSIM pools
+CREATE SCHEMA payment;
+CREATE SCHEMA order_mgmt;        -- COM
+CREATE SCHEMA service_inventory; -- SOM output (TMF638)
+CREATE SCHEMA provisioning;      -- simulator
+CREATE SCHEMA subscription;
+CREATE SCHEMA mediation;
+CREATE SCHEMA billing;
+CREATE SCHEMA audit;
+-- Post-v0.1: CREATE SCHEMA knowledge (pgvector for runbook RAG)
+```
+
+---
+
+## Schema: `crm`
+
+### `crm.party`
+| column | type | notes |
+|---|---|---|
+| id | TEXT PK | `PTY-xxx` |
+| party_type | TEXT | `individual` \| `organization` (v0.1: individual only) |
+
+### `crm.individual`
+| column | type | notes |
+|---|---|---|
+| party_id | TEXT PK FK→party.id | |
+| given_name | TEXT NOT NULL | |
+| family_name | TEXT NOT NULL | |
+| date_of_birth | DATE | |
+
+### `crm.contact_medium`
+| column | type | notes |
+|---|---|---|
+| id | TEXT PK | `CM-xxx` |
+| party_id | TEXT FK→party.id | |
+| medium_type | TEXT | `email`, `phone`, `postal` |
+| value | TEXT | |
+| is_primary | BOOL | |
+| valid_from | TIMESTAMPTZ | |
+| valid_to | TIMESTAMPTZ | nullable |
+
+Unique index `(medium_type, value) WHERE valid_to IS NULL AND medium_type='email'` — global email uniqueness for active records.
+
+### `crm.customer`
+| column | type | notes |
+|---|---|---|
+| id | TEXT PK | `CUST-xxx` |
+| party_id | TEXT FK→party.id | |
+| status | TEXT | `pending`, `active`, `suspended`, `closed` |
+| status_reason | TEXT | |
+| customer_since | TIMESTAMPTZ | |
+| kyc_status | TEXT NOT NULL DEFAULT 'not_verified' | `not_verified`, `pending`, `verified`, `rejected`, `expired` |
+| kyc_verified_at | TIMESTAMPTZ | |
+| kyc_verification_method | TEXT | `myinfo`, `jumio`, `onfido`, `manual`, `waived_test` |
+| kyc_reference | TEXT | external verification ID from channel |
+| kyc_expires_at | TIMESTAMPTZ | for jurisdictions requiring re-verification |
+
+### `crm.customer_identity`
+
+Minimum necessary identity data for regulatory compliance. **Document numbers are hashed, never stored plaintext.** Full plaintext lives in the attesting system (Myinfo, Jumio) or not at all.
+
+| column | type | notes |
+|---|---|---|
+| customer_id | TEXT PK FK→customer.id | one identity per customer |
+| document_type | TEXT NOT NULL | `nric`, `passport`, `fin`, `driving_license` |
+| document_number_hash | TEXT NOT NULL | SHA-256 hex |
+| document_country | CHAR(2) NOT NULL | ISO 3166-1 alpha-2 |
+| date_of_birth | DATE NOT NULL | for age verification |
+| nationality | CHAR(2) | |
+| verified_by | TEXT | provider name |
+| attestation_payload | JSONB | full signed attestation from channel |
+| verified_at | TIMESTAMPTZ NOT NULL | |
+
+Unique index on `(document_type, document_number_hash, tenant_id)` — one customer per document per tenant.
+
+### `crm.interaction`
+| column | type | notes |
+|---|---|---|
+| id | TEXT PK | `INT-xxx` |
+| customer_id | TEXT FK→customer.id | |
+| channel | TEXT | `cli`, `llm`, `email`, `phone`, `scenario`, `system` |
+| direction | TEXT | `inbound`, `outbound` |
+| summary | TEXT NOT NULL | |
+| body | TEXT | optional |
+| agent_id | TEXT FK→agent.id | nullable |
+| related_case_id | TEXT FK→case.id | nullable |
+| related_ticket_id | TEXT FK→ticket.id | nullable |
+| occurred_at | TIMESTAMPTZ NOT NULL | |
+
+### `crm.agent`
+| column | type | notes |
+|---|---|---|
+| id | TEXT PK | `AGT-xxx` |
+| name | TEXT NOT NULL | |
+| email | TEXT UNIQUE | |
+| role | TEXT | `csr`, `supervisor`, `engineer`, `system` |
+| status | TEXT | `active`, `terminated` |
+
+Seed: 5 agents (Alice, Bob, Carol, Dave, System).
+
+### `crm.case`
+| column | type | notes |
+|---|---|---|
+| id | TEXT PK | `CASE-xxx` |
+| customer_id | TEXT FK→customer.id | |
+| subject | TEXT NOT NULL | |
+| description | TEXT | |
+| state | TEXT | `open`, `in_progress`, `pending_customer`, `resolved`, `closed` |
+| priority | TEXT | `low`, `normal`, `high`, `urgent` |
+| category | TEXT | `billing`, `technical`, `general`, `complaint` |
+| resolution_code | TEXT | required to close |
+| opened_by_agent_id | TEXT FK→agent.id | |
+| opened_at | TIMESTAMPTZ NOT NULL | |
+| closed_at | TIMESTAMPTZ | |
+
+### `crm.case_note`
+| column | type | notes |
+|---|---|---|
+| id | TEXT PK | |
+| case_id | TEXT FK→case.id | |
+| author_agent_id | TEXT FK→agent.id | |
+| body | TEXT NOT NULL | |
+| created_at | TIMESTAMPTZ | |
+
+### `crm.ticket`
+| column | type | notes |
+|---|---|---|
+| id | TEXT PK | `TKT-xxx` |
+| case_id | TEXT FK→case.id | nullable |
+| customer_id | TEXT FK→customer.id | denormalized |
+| ticket_type | TEXT | `service_outage`, `billing_dispute`, `configuration`, `information_request`, `provisioning_exception` |
+| subject | TEXT NOT NULL | |
+| description | TEXT | |
+| state | TEXT | `open`, `acknowledged`, `in_progress`, `pending`, `resolved`, `closed`, `cancelled` |
+| priority | TEXT | |
+| assigned_to_agent_id | TEXT FK→agent.id | |
+| related_order_id | TEXT | nullable |
+| related_subscription_id | TEXT | nullable |
+| related_service_id | TEXT | nullable |
+| sla_due_at | TIMESTAMPTZ | |
+| resolution_notes | TEXT | required to resolve |
+| opened_at | TIMESTAMPTZ NOT NULL | |
+| resolved_at | TIMESTAMPTZ | |
+| closed_at | TIMESTAMPTZ | |
+
+### `crm.ticket_state_history`
+| column | type | notes |
+|---|---|---|
+| id | BIGSERIAL PK | |
+| ticket_id | TEXT FK→ticket.id | |
+| from_state | TEXT | |
+| to_state | TEXT | |
+| changed_by_agent_id | TEXT FK→agent.id | |
+| reason | TEXT | |
+| event_time | TIMESTAMPTZ | |
+
+### `crm.sla_policy`
+| column | type | notes |
+|---|---|---|
+| id | TEXT PK | |
+| ticket_type | TEXT | |
+| priority | TEXT | |
+| target_resolution_minutes | INTEGER | |
+
+Seed: 12 rows (3 ticket types × 4 priorities for core types).
+
+---
+
+## Schema: `inventory`
+
+### `inventory.msisdn_pool`
+| column | type | notes |
+|---|---|---|
+| msisdn | TEXT PK | `90000000` |
+| status | TEXT | `available`, `reserved`, `assigned`, `quarantine` |
+| reserved_at | TIMESTAMPTZ | |
+| assigned_to_subscription_id | TEXT | nullable |
+| quarantine_until | TIMESTAMPTZ | 90 days after termination |
+
+Seed: 1000 numbers `90000000`-`90000999`, all `available`.
+
+### `inventory.esim_profile`
+
+**eSIM-only inventory.** No physical SIM in v0.1.
+
+| column | type | notes |
+|---|---|---|
+| iccid | TEXT PK | `8910...` 19-20 digit |
+| imsi | TEXT UNIQUE NOT NULL | real identifier on network |
+| ki_ref | TEXT NOT NULL | **reference to HSM, NEVER the actual key** |
+| profile_state | TEXT | `available`, `reserved`, `downloaded`, `activated`, `suspended`, `recycled` |
+| smdp_server | TEXT | `smdp.bss-cli.local` (simulated) |
+| matching_id | TEXT UNIQUE | one-time code for eSIM download |
+| activation_code | TEXT | full LPA string: `LPA:1$smdp.bss-cli.local$MATCHING_ID` |
+| assigned_msisdn | TEXT FK→msisdn_pool.msisdn | nullable |
+| assigned_to_subscription_id | TEXT | nullable |
+| reserved_at | TIMESTAMPTZ | |
+| downloaded_at | TIMESTAMPTZ | |
+| activated_at | TIMESTAMPTZ | |
+
+Seed: 1000 profiles with generated ICCIDs, IMSIs, stubbed ki_refs (`hsm://ref/<uuid>`), all `available`.
+
+**Critical:** `ki_ref` is a string reference to a hypothetical HSM slot. The actual Ki value is NEVER in this database — documenting the boundary is more important than simulating the contents. Real Ki storage is HSM territory and is explicitly out of scope.
+
+---
+
+## Schema: `catalog`
+
+### `catalog.product_specification`
+| column | type | notes |
+|---|---|---|
+| id | TEXT PK | |
+| name | TEXT | |
+| description | TEXT | |
+| brand | TEXT | |
+| lifecycle_status | TEXT | |
+
+Seed: `SPEC_MOBILE_PREPAID`.
+
+### `catalog.product_offering`
+| column | type | notes |
+|---|---|---|
+| id | TEXT PK | `PLAN_S`, `PLAN_M`, `PLAN_L` |
+| name | TEXT | |
+| spec_id | TEXT FK | |
+| is_bundle | BOOL DEFAULT TRUE | |
+| is_sellable | BOOL | |
+| lifecycle_status | TEXT | |
+| valid_from | TIMESTAMPTZ | |
+| valid_to | TIMESTAMPTZ | |
+
+### `catalog.product_offering_price`
+| column | type | notes |
+|---|---|---|
+| id | TEXT PK | |
+| offering_id | TEXT FK | |
+| price_type | TEXT | `recurring`, `one_time` |
+| recurring_period_length | INTEGER | |
+| recurring_period_type | TEXT | `month` |
+| amount | NUMERIC(12,2) | |
+| currency | CHAR(3) | `SGD` |
+
+### `catalog.bundle_allowance`
+| column | type | notes |
+|---|---|---|
+| id | TEXT PK | |
+| offering_id | TEXT FK | |
+| allowance_type | TEXT | `data`, `voice`, `sms` |
+| quantity | BIGINT | -1 = unlimited |
+| unit | TEXT | `mb`, `minutes`, `count` |
+
+### `catalog.vas_offering`
+| column | type | notes |
+|---|---|---|
+| id | TEXT PK | |
+| name | TEXT | |
+| price_amount | NUMERIC(12,2) | |
+| currency | CHAR(3) | |
+| allowance_type | TEXT | |
+| allowance_quantity | BIGINT | |
+| allowance_unit | TEXT | |
+| expiry_hours | INTEGER | nullable |
+
+### `catalog.service_specification`
+| column | type | notes |
+|---|---|---|
+| id | TEXT PK | |
+| name | TEXT | |
+| type | TEXT | `CFS` or `RFS` |
+| parameters | JSONB | |
+
+Seed: `SSPEC_CFS_MOBILE_BROADBAND`, `SSPEC_RFS_DATA_BEARER`, `SSPEC_RFS_VOICE_BEARER`.
+
+### `catalog.product_to_service_mapping`
+| column | type | notes |
+|---|---|---|
+| id | BIGSERIAL PK | |
+| offering_id | TEXT FK | |
+| cfs_spec_id | TEXT FK | |
+| rfs_spec_ids | TEXT[] | array |
+
+Seed: all three plans → same CFS + two RFS.
+
+---
+
+## Schema: `payment`
+
+### `payment.payment_method`
+| column | type | notes |
+|---|---|---|
+| id | TEXT PK | `PM-xxx` |
+| customer_id | TEXT | cross-service ref, no FK |
+| type | TEXT | `card` |
+| token | TEXT UNIQUE | `tok_<uuid>` |
+| last4 | CHAR(4) | |
+| brand | TEXT | |
+| exp_month | SMALLINT | |
+| exp_year | SMALLINT | |
+| is_default | BOOL | |
+| status | TEXT | `active`, `removed` |
+
+### `payment.payment_attempt`
+| column | type | notes |
+|---|---|---|
+| id | TEXT PK | `PAY-xxx` |
+| customer_id | TEXT | |
+| payment_method_id | TEXT FK→payment_method.id | |
+| amount | NUMERIC(12,2) | |
+| currency | CHAR(3) | |
+| purpose | TEXT | `activation`, `renewal`, `vas` |
+| status | TEXT | `pending`, `approved`, `declined`, `error` |
+| gateway_ref | TEXT | `mock_<uuid>` |
+| decline_reason | TEXT | |
+| attempted_at | TIMESTAMPTZ | |
+
+---
+
+## Schema: `order_mgmt` (COM)
+
+### `order_mgmt.product_order`
+| column | type | notes |
+|---|---|---|
+| id | TEXT PK | `ORD-xxx` |
+| customer_id | TEXT | |
+| state | TEXT | `acknowledged`, `in_progress`, `completed`, `failed`, `cancelled` |
+| order_date | TIMESTAMPTZ | |
+| requested_completion_date | TIMESTAMPTZ | |
+| completed_date | TIMESTAMPTZ | |
+| msisdn_preference | TEXT | nullable — "golden number" request |
+| notes | TEXT | |
+
+### `order_mgmt.order_item`
+| column | type | notes |
+|---|---|---|
+| id | TEXT PK | |
+| order_id | TEXT FK | |
+| action | TEXT | `add`, `modify`, `delete` |
+| offering_id | TEXT | |
+| state | TEXT | |
+| target_subscription_id | TEXT | nullable |
+
+### `order_mgmt.order_state_history`
+Standard state history shape.
+
+---
+
+## Schema: `service_inventory` (SOM output, TMF638)
+
+### `service_inventory.service_order`
+| column | type | notes |
+|---|---|---|
+| id | TEXT PK | `SO-xxx` |
+| commercial_order_id | TEXT | |
+| state | TEXT | `acknowledged`, `in_progress`, `completed`, `failed`, `cancelled` |
+| started_at | TIMESTAMPTZ | |
+| completed_at | TIMESTAMPTZ | |
+
+### `service_inventory.service_order_item`
+| column | type | notes |
+|---|---|---|
+| id | TEXT PK | |
+| service_order_id | TEXT FK | |
+| action | TEXT | |
+| service_spec_id | TEXT | |
+| target_service_id | TEXT | |
+
+### `service_inventory.service`
+| column | type | notes |
+|---|---|---|
+| id | TEXT PK | `SVC-xxx` |
+| subscription_id | TEXT | |
+| spec_id | TEXT | |
+| type | TEXT | `CFS` or `RFS` |
+| parent_service_id | TEXT FK→service.id | nullable |
+| state | TEXT | `feasibility_checked`, `designed`, `reserved`, `activated`, `terminated` |
+| characteristics | JSONB | e.g. `{"msisdn": "90000005", "iccid": "8910...", "apn": "internet"}` |
+| activated_at | TIMESTAMPTZ | |
+| terminated_at | TIMESTAMPTZ | |
+
+### `service_inventory.service_state_history`
+Standard state history shape.
+
+---
+
+## Schema: `provisioning` (simulator)
+
+### `provisioning.provisioning_task`
+| column | type | notes |
+|---|---|---|
+| id | TEXT PK | `PTK-xxx` |
+| service_id | TEXT | |
+| task_type | TEXT | `HLR_PROVISION`, `PCRF_POLICY_PUSH`, `OCS_BALANCE_INIT`, `ESIM_PROFILE_PREPARE`, `HLR_DEPROVISION` |
+| state | TEXT | `pending`, `running`, `completed`, `failed`, `stuck` |
+| attempts | SMALLINT DEFAULT 0 | |
+| max_attempts | SMALLINT DEFAULT 3 | |
+| payload | JSONB | |
+| last_error | TEXT | |
+| started_at | TIMESTAMPTZ | |
+| completed_at | TIMESTAMPTZ | |
+
+### `provisioning.fault_injection`
+| column | type | notes |
+|---|---|---|
+| id | TEXT PK | |
+| task_type | TEXT | |
+| fault_type | TEXT | `fail_first_attempt`, `fail_always`, `stuck`, `slow` |
+| probability | NUMERIC(3,2) | |
+| enabled | BOOL | |
+
+Seed: 6 rules covering HLR_PROVISION, PCRF_POLICY_PUSH, OCS_BALANCE_INIT, ESIM_PROFILE_PREPARE, HLR_DEPROVISION — all disabled by default.
+
+---
+
+## Schema: `subscription`
+
+### `subscription.subscription`
+| column | type | notes |
+|---|---|---|
+| id | TEXT PK | `SUB-xxx` |
+| customer_id | TEXT | |
+| offering_id | TEXT | |
+| msisdn | TEXT UNIQUE | |
+| iccid | TEXT UNIQUE | the eSIM binding |
+| cfs_service_id | TEXT | |
+| state | TEXT | `pending`, `active`, `blocked`, `terminated` |
+| state_reason | TEXT | |
+| activated_at | TIMESTAMPTZ | |
+| current_period_start | TIMESTAMPTZ | |
+| current_period_end | TIMESTAMPTZ | |
+| next_renewal_at | TIMESTAMPTZ | |
+| terminated_at | TIMESTAMPTZ | |
+
+### `subscription.bundle_balance`
+| column | type | notes |
+|---|---|---|
+| id | TEXT PK | |
+| subscription_id | TEXT FK→subscription.id | |
+| allowance_type | TEXT | |
+| total | BIGINT | |
+| consumed | BIGINT | |
+| remaining | BIGINT GENERATED ALWAYS AS (total - consumed) STORED | |
+| unit | TEXT | |
+| period_start | TIMESTAMPTZ | |
+| period_end | TIMESTAMPTZ | |
+
+### `subscription.vas_purchase`
+| column | type | notes |
+|---|---|---|
+| id | TEXT PK | |
+| subscription_id | TEXT FK | |
+| vas_offering_id | TEXT | |
+| payment_attempt_id | TEXT | |
+| applied_at | TIMESTAMPTZ | |
+| expires_at | TIMESTAMPTZ | |
+| allowance_added | BIGINT | |
+| allowance_type | TEXT | |
+
+### `subscription.subscription_state_history`
+Standard state history shape.
+
+---
+
+## Schema: `mediation`
+
+### `mediation.usage_event`
+| column | type | notes |
+|---|---|---|
+| id | TEXT PK | `UE-xxx` |
+| msisdn | TEXT | |
+| subscription_id | TEXT | enriched |
+| event_type | TEXT | `data`, `voice`, `sms` |
+| event_time | TIMESTAMPTZ | |
+| quantity | BIGINT | |
+| unit | TEXT | |
+| source | TEXT | `simulator`, `cli`, `scenario` |
+| raw_cdr_ref | TEXT | |
+| processed | BOOL DEFAULT FALSE | |
+| processing_error | TEXT | |
+
+---
+
+## Schema: `billing`
+
+### `billing.billing_account`
+| column | type | notes |
+|---|---|---|
+| id | TEXT PK | `BA-xxx` |
+| customer_id | TEXT UNIQUE | one per customer |
+| payment_method_id | TEXT | default COF |
+| currency | CHAR(3) | |
+
+### `billing.customer_bill`
+| column | type | notes |
+|---|---|---|
+| id | TEXT PK | `BILL-xxx` |
+| billing_account_id | TEXT FK | |
+| subscription_id | TEXT | |
+| period_start | TIMESTAMPTZ | |
+| period_end | TIMESTAMPTZ | |
+| amount | NUMERIC(12,2) | |
+| currency | CHAR(3) | |
+| status | TEXT | `issued`, `paid`, `failed` |
+| payment_attempt_id | TEXT | |
+| issued_at | TIMESTAMPTZ | |
+| paid_at | TIMESTAMPTZ | |
+
+---
+
+## Schema: `audit`
+
+### `audit.domain_event`
+
+The outbox and replay substrate. Every meaningful state change writes here in the same transaction as the domain write.
+
+| column | type | notes |
+|---|---|---|
+| id | BIGSERIAL PK | |
+| event_id | UUID UNIQUE | |
+| event_type | TEXT | e.g., `subscription.exhausted` |
+| aggregate_type | TEXT | `subscription`, `order`, `ticket`, etc. |
+| aggregate_id | TEXT | |
+| occurred_at | TIMESTAMPTZ | |
+| trace_id | TEXT | forward-compat for OTel (Phase 11) |
+| actor | TEXT | from `auth_context.current().actor` |
+| channel | TEXT | from `X-BSS-Channel` header |
+| tenant_id | TEXT | |
+| payload | JSONB | |
+| schema_version | SMALLINT | |
+| published_to_mq | BOOL DEFAULT FALSE | flip to TRUE after RabbitMQ publish |
+
+Indexes:
+- `(aggregate_type, aggregate_id, occurred_at)` for replay
+- `(event_type, occurred_at)` for reporting
+- `(published_to_mq) WHERE NOT published_to_mq` partial index for the replay job (post-v0.1)
+
+---
+
+## Schema: `knowledge` (post-v0.1)
+
+Documented here for forward-compat. Not created in v0.1 migration.
+
+### `knowledge.runbook_document`
+| column | type | notes |
+|---|---|---|
+| id | TEXT PK | slug, e.g. `troubleshooting/data_not_working` |
+| title | TEXT | |
+| category | TEXT | |
+| source_path | TEXT | path in repo |
+| content_sha256 | TEXT | cache key for re-indexing |
+| updated_at | TIMESTAMPTZ | |
+
+### `knowledge.runbook_chunk`
+| column | type | notes |
+|---|---|---|
+| id | BIGSERIAL PK | |
+| document_id | TEXT FK | |
+| chunk_idx | INTEGER | |
+| content | TEXT | |
+| embedding | vector(384) | pgvector, BGE-small dim |
+| tokens | INTEGER | |
+
+Enabled in Phase 11 via `CREATE EXTENSION vector`. Indexed via `ivfflat (embedding vector_cosine_ops)`.
+
+---
+
+## Table count
+
+| Schema | Tables |
+|---|---|
+| crm | 10 (adds `customer_identity`) |
+| catalog | 7 |
+| inventory | 2 (adds `esim_profile`) |
+| payment | 2 |
+| order_mgmt | 3 |
+| service_inventory | 4 |
+| provisioning | 2 |
+| subscription | 4 |
+| mediation | 1 |
+| billing | 2 |
+| audit | 1 |
+
+**Total for v0.1: 38 tables across 11 schemas.** Up from 36 in v2 (added `customer_identity` and `esim_profile`).
+
+`knowledge` schema (2 more tables) added in Phase 11.
+
+## Seed data summary
+
+- 3 product offerings (S, M, L) with prices and allowances
+- 3 VAS offerings
+- 1 product spec, 3 service specs, 3 product-to-service mappings
+- 1000 MSISDN numbers (`90000000`-`90000999`)
+- 1000 eSIM profiles with stubbed ki_refs
+- 5 agents
+- 12 SLA policies
+- 6 fault injection rules (all disabled)
+
+Seed customers deferred to Phase 10 scenarios.
