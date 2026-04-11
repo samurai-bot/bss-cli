@@ -11,8 +11,8 @@ services:
   catalog:
     <<: *bss-service
     build:
-      <<: *bss-build
-      args: { SERVICE: catalog }
+      context: .
+      dockerfile: services/catalog/Dockerfile
     ports: ["8001:8000"]
     environment: { BSS_SERVICE_NAME: catalog }
 
