@@ -31,3 +31,7 @@ strict = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 addopts = "--import-mode=importlib"
+markers = [
+    "integration: requires running downstream services (real CRM, real MQ, etc). Skip with -m 'not integration'.",
+]
+
