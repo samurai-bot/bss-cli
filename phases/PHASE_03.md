@@ -83,7 +83,7 @@ Build the **reference pattern** for all subsequent services. After this phase, e
 
 6. **Tests use testcontainers postgres**, not SQLite. The whole point is to test against real Postgres with the real schema.
 
-7. **Run port:** `8002` (per `ARCHITECTURE.md`)
+7. **Run port:** `8001` (per `ARCHITECTURE.md`)
 
 ## Out of scope
 
