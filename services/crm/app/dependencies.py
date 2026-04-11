@@ -1,0 +1,140 @@
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+
+import structlog
+from fastapi import Depends, FastAPI, Request
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from app.repositories.case_repo import CaseRepository
+from app.repositories.customer_repo import CustomerRepository
+from app.repositories.esim_repo import EsimRepository
+from app.repositories.interaction_repo import InteractionRepository
+from app.repositories.kyc_repo import KycRepository
+from app.repositories.msisdn_repo import MsisdnRepository
+from app.repositories.ticket_repo import TicketRepository
+from app.services.case_service import CaseService
+from app.services.customer_service import CustomerService
+from app.services.inventory_service import InventoryService
+from app.services.kyc_service import KycService
+from app.services.ticket_service import TicketService
+
+log = structlog.get_logger()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    settings = app.state.settings
+    engine = create_async_engine(settings.db_url, pool_size=5, max_overflow=5)
+    app.state.engine = engine
+    app.state.session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    log.info("service.starting", service=settings.service_name)
+    yield
+    log.info("service.stopping", service=settings.service_name)
+    await engine.dispose()
+
+
+async def get_session(request: Request) -> AsyncGenerator[AsyncSession, None]:
+    session_factory: async_sessionmaker[AsyncSession] = request.app.state.session_factory
+    async with session_factory() as session:
+        yield session
+
+
+# ── Repositories ────────────────────────────────────────────────────
+
+async def get_customer_repo(
+    session: AsyncSession = Depends(get_session),
+) -> CustomerRepository:
+    return CustomerRepository(session)
+
+
+async def get_case_repo(
+    session: AsyncSession = Depends(get_session),
+) -> CaseRepository:
+    return CaseRepository(session)
+
+
+async def get_ticket_repo(
+    session: AsyncSession = Depends(get_session),
+) -> TicketRepository:
+    return TicketRepository(session)
+
+
+async def get_interaction_repo(
+    session: AsyncSession = Depends(get_session),
+) -> InteractionRepository:
+    return InteractionRepository(session)
+
+
+async def get_kyc_repo(
+    session: AsyncSession = Depends(get_session),
+) -> KycRepository:
+    return KycRepository(session)
+
+
+async def get_msisdn_repo(
+    session: AsyncSession = Depends(get_session),
+) -> MsisdnRepository:
+    return MsisdnRepository(session)
+
+
+async def get_esim_repo(
+    session: AsyncSession = Depends(get_session),
+) -> EsimRepository:
+    return EsimRepository(session)
+
+
+# ── Services ────────────────────────────────────────────────────────
+
+async def get_customer_service(
+    session: AsyncSession = Depends(get_session),
+) -> CustomerService:
+    return CustomerService(
+        session=session,
+        customer_repo=CustomerRepository(session),
+        interaction_repo=InteractionRepository(session),
+    )
+
+
+async def get_kyc_service(
+    session: AsyncSession = Depends(get_session),
+) -> KycService:
+    return KycService(
+        session=session,
+        customer_repo=CustomerRepository(session),
+        kyc_repo=KycRepository(session),
+        interaction_repo=InteractionRepository(session),
+    )
+
+
+async def get_case_service(
+    session: AsyncSession = Depends(get_session),
+) -> CaseService:
+    return CaseService(
+        session=session,
+        case_repo=CaseRepository(session),
+        customer_repo=CustomerRepository(session),
+        ticket_repo=TicketRepository(session),
+        interaction_repo=InteractionRepository(session),
+    )
+
+
+async def get_ticket_service(
+    session: AsyncSession = Depends(get_session),
+) -> TicketService:
+    return TicketService(
+        session=session,
+        ticket_repo=TicketRepository(session),
+        customer_repo=CustomerRepository(session),
+        case_repo=CaseRepository(session),
+        interaction_repo=InteractionRepository(session),
+    )
+
+
+async def get_inventory_service(
+    session: AsyncSession = Depends(get_session),
+) -> InventoryService:
+    return InventoryService(
+        session=session,
+        msisdn_repo=MsisdnRepository(session),
+        esim_repo=EsimRepository(session),
+    )

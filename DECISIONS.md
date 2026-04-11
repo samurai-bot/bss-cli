@@ -184,3 +184,82 @@ This file records non-obvious decisions. Every Claude Code session appends here 
 ## Running log
 
 _Claude Code appends below this line as phases progress._
+
+### 2026-04-11 — Phase 4 — Case state machine (narrowed cancel)
+**Context:** Original spec allowed cancel from "any except closed", including resolved. Resolved cases should only proceed to closed, not be cancelled.
+**Decision:** Cancel valid only from `{open, in_progress, pending_customer}`. Resolved → closed via explicit close trigger only.
+**Alternatives:** Cancel from any non-terminal — rejected because resolved cases have completed work; cancelling them misrepresents outcome.
+**Consequences:** Cleaner audit trail. Resolved cases always close, never cancel.
+
+#### Case transitions
+
+| From | Trigger | To | Guard / Action |
+|---|---|---|---|
+| open | take | in_progress | action: log_interaction |
+| in_progress | await_customer | pending_customer | — |
+| pending_customer | resume | in_progress | — |
+| in_progress | resolve | resolved | guard: all_tickets_resolved |
+| open | resolve | resolved | guard: no_tickets OR all_resolved |
+| resolved | close | closed | guard: resolution_code_set |
+| open, in_progress, pending_customer | cancel | closed | action: cancel_open_tickets |
+
+### 2026-04-11 — Phase 4 — Ticket state machine
+
+| From | Trigger | To | Guard / Action |
+|---|---|---|---|
+| open | ack | acknowledged | guard: assigned_agent |
+| acknowledged | start | in_progress | — |
+| in_progress | wait | pending | — |
+| pending | resume | in_progress | — |
+| in_progress | resolve | resolved | guard: resolution_notes |
+| resolved | close | closed | — |
+| resolved | reopen | in_progress | — |
+| open, acknowledged, in_progress, pending | cancel | cancelled | — |
+
+Terminal states: closed, cancelled.
+
+### 2026-04-11 — Phase 4 — eSIM profile lifecycle
+
+| From | Trigger | To | Guard / Action |
+|---|---|---|---|
+| available | reserve | reserved | atomic SELECT FOR UPDATE SKIP LOCKED |
+| reserved | assign_msisdn | reserved | sets assigned_msisdn |
+| reserved | download | downloaded | customer scans QR |
+| downloaded | activate | activated | first attach on HLR |
+| activated | suspend | suspended | subscription blocked |
+| suspended | activate | activated | reactivation |
+| activated | recycle | recycled | 90-day cooldown |
+| reserved | release | available | cancelled order path |
+
+### 2026-04-11 — Phase 4 — Test isolation: per-test transactional rollback
+**Context:** CRM is the first write-heavy service. Tests must not pollute the shared tech-vm DB.
+**Decision:** Each test gets a DB connection with an outer transaction. All writes within the test (including nested `session.begin()` calls, which become savepoints) are rolled back in teardown. The client fixture injects this session into the app.
+**Alternatives:** (a) Per-test savepoint — mechanically identical, naming difference. (c) Dedicated test schema with migrations — overkill, slow setup, no benefit over rollback.
+**Consequences:** Zero DB pollution. Tests can run in parallel per-session. No extra infrastructure.
+
+### 2026-04-11 — Phase 4 — Dropped case.add_note.case_not_closed policy
+**Context:** Whether to add a policy preventing notes on closed cases.
+**Decision:** Drop. The state machine prevents mutations on closed cases. Adding a redundant policy check on an append-only operation adds noise.
+**Consequences:** One fewer policy to test. If needed later, enforce at state machine level.
+
+### 2026-04-11 — Phase 4 — ticket.open.requires_customer renamed to ticket.open.requires_customer
+**Context:** Original policy `ticket.open.requires_customer_or_case` was ambiguous — did it mean "either/or"?
+**Decision:** Rename to `ticket.open.requires_customer`. Meaning: `customer_id` is required (NOT NULL), `case_id` is optional. Standalone tickets are allowed.
+**Consequences:** Clearer semantics. Matches DATA_MODEL.md where customer_id is NOT NULL on ticket.
+
+### 2026-04-11 — Phase 4 — API tests must exercise the HTTP layer, not service methods
+
+**Context:** Phase 4 shipped with three bugs that 60 pytest tests did not catch:
+1. `contactMedium` camelCase alias was broken — tests called service methods with snake_case Python dicts, bypassing the Pydantic alias layer entirely. Real HTTP callers would have hit 500s.
+2. In-memory ID counters reset on app restart, causing PK collisions. No test exercised restart behavior.
+3. Ticket transitions `ack`, `start`, `close` existed in the service layer but had no HTTP routes. Tests only exercised `resolve` and `cancel`.
+
+**Decision:** Every service test suite must enforce three rules:
+
+1. **Every endpoint has at least one httpx AsyncClient test with a JSON payload.** Service-layer tests are fine for policy and state machine logic but do not prove the API contract. camelCase aliases, required-field validation, and route wiring are only verified by HTTP-level tests.
+
+2. **Every state machine transition has a parametrized API test.** Use `pytest.mark.parametrize` over the transitions table from `DECISIONS.md`. If a transition exists in the table but has no HTTP route, the test fails at collection time. This catches missing-route bugs automatically.
+
+3. **ID generation must survive restart.** Use database sequences or UUIDs — never module-level counters. Any test fixture that reuses the FastAPI app factory (without full container restart) is sufficient to catch counter-based bugs.
+
+**Consequences:** Slightly larger test suites per service, test-time round-trips through the full HTTP stack (~2ms overhead per test), and real protection against TMF serialization, routing, and persistence bugs. These are the kinds of bugs that otherwise only surface during Phase 10 hero scenarios when the cost of finding them is highest.

@@ -19,8 +19,8 @@ services:
   crm:
     <<: *bss-service
     build:
-      <<: *bss-build
-      args: { SERVICE: crm }
+      context: .
+      dockerfile: services/crm/Dockerfile
     ports: ["8002:8000"]
     environment: { BSS_SERVICE_NAME: crm }
 
