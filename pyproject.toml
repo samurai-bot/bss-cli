@@ -5,6 +5,12 @@ requires-python = ">=3.12"
 description = "Lightweight, SID-aligned, TMF-compliant BSS for terminal-first operation"
 license = "Apache-2.0"
 
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
 [tool.uv.workspace]
 members = ["packages/*"]
 

@@ -1,4 +1,4 @@
-.PHONY: help up up-all up-minimal up-core down build test fmt lint
+.PHONY: help up up-all up-minimal up-core down build test fmt lint migrate seed reset-db
 
 help:
 	@echo "  up          — 10 BSS services (BYOI Postgres/RabbitMQ)"
@@ -30,10 +30,27 @@ build:
 	docker compose build
 
 test:
-	uv run pytest
+	uv run pytest || test $$? -eq 5
 
 fmt:
 	uv run ruff format .
 
 lint:
 	uv run ruff check . && uv run mypy .
+
+# --- Data Model ---
+
+# Derive psql-compatible URL by stripping +asyncpg driver suffix
+BSS_PSQL_URL := $(subst +asyncpg,,$(BSS_DB_URL))
+
+migrate:
+	cd packages/bss-models && uv run --package bss-models alembic upgrade head
+
+seed:
+	uv run --package bss-seed python -m bss_seed.main
+
+reset-db:
+	psql "$(BSS_PSQL_URL)" -c "DROP SCHEMA IF EXISTS crm, catalog, inventory, payment, order_mgmt, service_inventory, provisioning, subscription, mediation, billing, audit CASCADE;"
+	psql "$(BSS_PSQL_URL)" -c "DELETE FROM public.alembic_version;" 2>/dev/null || true
+	$(MAKE) migrate
+	$(MAKE) seed
