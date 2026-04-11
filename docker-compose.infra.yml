@@ -1,0 +1,45 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: bss
+      POSTGRES_PASSWORD: bss
+      POSTGRES_DB: bss
+    ports: ["5432:5432"]
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "bss"]
+      interval: 10s
+      retries: 5
+    networks: [bss]
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    ports: ["5672:5672", "15672:15672"]
+    volumes: [rabbitmq_data:/var/lib/rabbitmq]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      retries: 5
+    networks: [bss]
+
+  metabase:
+    image: metabase/metabase:latest
+    ports: ["3000:3000"]
+    environment:
+      MB_DB_TYPE: postgres
+      MB_DB_DBNAME: bss
+      MB_DB_PORT: 5432
+      MB_DB_USER: bss
+      MB_DB_PASS: bss
+      MB_DB_HOST: postgres
+    depends_on: [postgres]
+    networks: [bss]
+
+volumes:
+  postgres_data: {}
+  rabbitmq_data: {}
+
+networks:
+  bss:
+    driver: bridge

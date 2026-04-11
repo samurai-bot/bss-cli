@@ -1,0 +1,23 @@
+[project]
+name = "bss-cli"
+version = "0.1.0"
+requires-python = ">=3.12"
+description = "Lightweight, SID-aligned, TMF-compliant BSS for terminal-first operation"
+license = "Apache-2.0"
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

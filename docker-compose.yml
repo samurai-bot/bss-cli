@@ -1,0 +1,93 @@
+x-bss-build: &bss-build
+  context: .
+  dockerfile: services/_template/Dockerfile
+
+x-bss-service: &bss-service
+  env_file: .env
+  restart: unless-stopped
+  networks: [bss]
+
+services:
+  catalog:
+    <<: *bss-service
+    build:
+      <<: *bss-build
+      args: { SERVICE: catalog }
+    ports: ["8001:8000"]
+    environment: { BSS_SERVICE_NAME: catalog }
+
+  crm:
+    <<: *bss-service
+    build:
+      <<: *bss-build
+      args: { SERVICE: crm }
+    ports: ["8002:8000"]
+    environment: { BSS_SERVICE_NAME: crm }
+
+  payment:
+    <<: *bss-service
+    build:
+      <<: *bss-build
+      args: { SERVICE: payment }
+    ports: ["8003:8000"]
+    environment: { BSS_SERVICE_NAME: payment }
+
+  com:
+    <<: *bss-service
+    build:
+      <<: *bss-build
+      args: { SERVICE: com }
+    ports: ["8004:8000"]
+    environment: { BSS_SERVICE_NAME: com }
+
+  som:
+    <<: *bss-service
+    build:
+      <<: *bss-build
+      args: { SERVICE: som }
+    ports: ["8005:8000"]
+    environment: { BSS_SERVICE_NAME: som }
+
+  subscription:
+    <<: *bss-service
+    build:
+      <<: *bss-build
+      args: { SERVICE: subscription }
+    ports: ["8006:8000"]
+    environment: { BSS_SERVICE_NAME: subscription }
+
+  mediation:
+    <<: *bss-service
+    build:
+      <<: *bss-build
+      args: { SERVICE: mediation }
+    ports: ["8007:8000"]
+    environment: { BSS_SERVICE_NAME: mediation }
+
+  rating:
+    <<: *bss-service
+    build:
+      <<: *bss-build
+      args: { SERVICE: rating }
+    ports: ["8008:8000"]
+    environment: { BSS_SERVICE_NAME: rating }
+
+  billing:
+    <<: *bss-service
+    build:
+      <<: *bss-build
+      args: { SERVICE: billing }
+    ports: ["8009:8000"]
+    environment: { BSS_SERVICE_NAME: billing }
+
+  provisioning-sim:
+    <<: *bss-service
+    build:
+      <<: *bss-build
+      args: { SERVICE: provisioning-sim }
+    ports: ["8010:8000"]
+    environment: { BSS_SERVICE_NAME: provisioning-sim }
+
+networks:
+  bss:
+    driver: bridge

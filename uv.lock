@@ -1,0 +1,37 @@
+version = 1
+revision = 3
+requires-python = ">=3.12"
+
+[manifest]
+members = [
+    "bss-cli",
+    "bss-clients",
+    "bss-events",
+    "bss-models",
+    "bss-seed",
+]
+
+[[package]]
+name = "bss-cli"
+version = "0.1.0"
+source = { virtual = "." }
+
+[[package]]
+name = "bss-clients"
+version = "0.1.0"
+source = { editable = "packages/bss-clients" }
+
+[[package]]
+name = "bss-events"
+version = "0.1.0"
+source = { editable = "packages/bss-events" }
+
+[[package]]
+name = "bss-models"
+version = "0.1.0"
+source = { editable = "packages/bss-models" }
+
+[[package]]
+name = "bss-seed"
+version = "0.1.0"
+source = { editable = "packages/bss-seed" }
