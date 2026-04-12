@@ -5,7 +5,9 @@ from .base import BSSClient, set_context
 from .catalog import CatalogClient
 from .crm import CRMClient
 from .errors import ClientError, NotFound, PolicyViolationFromServer, ServerError, Timeout
+from .inventory import InventoryClient
 from .payment import PaymentClient
+from .subscription import SubscriptionClient
 
 __all__ = [
     "AuthProvider",
@@ -13,11 +15,13 @@ __all__ = [
     "CatalogClient",
     "CRMClient",
     "ClientError",
+    "InventoryClient",
     "NoAuthProvider",
     "NotFound",
     "PaymentClient",
     "PolicyViolationFromServer",
     "ServerError",
+    "SubscriptionClient",
     "Timeout",
     "set_context",
 ]

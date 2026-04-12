@@ -5,6 +5,8 @@ import structlog
 from fastapi import Depends, FastAPI, Request
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from bss_clients.subscription import SubscriptionClient
+
 from app.repositories.case_repo import CaseRepository
 from app.repositories.customer_repo import CustomerRepository
 from app.repositories.esim_repo import EsimRepository
@@ -27,8 +29,12 @@ async def lifespan(app: FastAPI):
     engine = create_async_engine(settings.db_url, pool_size=5, max_overflow=5)
     app.state.engine = engine
     app.state.session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    app.state.subscription_client = SubscriptionClient(
+        base_url=settings.subscription_url,
+    )
     log.info("service.starting", service=settings.service_name)
     yield
+    await app.state.subscription_client.close()
     log.info("service.stopping", service=settings.service_name)
     await engine.dispose()
 
@@ -86,12 +92,14 @@ async def get_esim_repo(
 # ── Services ────────────────────────────────────────────────────────
 
 async def get_customer_service(
+    request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> CustomerService:
     return CustomerService(
         session=session,
         customer_repo=CustomerRepository(session),
         interaction_repo=InteractionRepository(session),
+        subscription_client=request.app.state.subscription_client,
     )
 
 
