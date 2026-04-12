@@ -49,7 +49,26 @@ bss scenario run scenarios/customer_signup_and_exhaust.yaml
 - `TOOL_SURFACE.md` — The ~65 LLM tools
 - `phases/` — Phase-by-phase build plan
 - `DECISIONS.md` — Architecture decision log
+- `SHIP_CRITERIA.md` — v0.1 ship-gate checklist (run before cutting the tag)
 - `docs/runbooks/` — Procedural knowledge (seed content in v0.1, RAG-indexed in v0.2)
+
+## Scenario harness
+
+```bash
+bss scenario list scenarios                   # inventory
+bss scenario validate scenarios/*.yaml        # parse-check
+bss scenario run scenarios/<name>.yaml        # single run
+bss scenario run-all scenarios --tag hero     # filter by tag
+make scenarios                                # every scenario in ./scenarios
+make scenarios-hero                           # just the three ship-gate scenarios
+```
+
+Scenarios in `scenarios/*.yaml` are the living regression suite. Three
+are tagged `hero` and gate v0.1 — two are fully deterministic (signup
+→ exhaustion, fault-injected provisioning with retry), the third hands
+a blocked subscription to the LLM supervisor in plain English and
+asserts the model diagnoses, tops up, and logs the interaction without
+touching destructive tools.
 
 ## License
 

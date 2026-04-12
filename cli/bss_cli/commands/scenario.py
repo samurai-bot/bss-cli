@@ -25,7 +25,7 @@ from rich.table import Table
 
 from .._runtime import run_async
 from ..scenarios import load_scenario, run_scenario
-from ..scenarios.reporting import render_result
+from ..scenarios.reporting import render_result, render_summary
 from ..scenarios.schema import LLMMode
 
 app = typer.Typer(help="YAML scenario runner.", no_args_is_help=True)
@@ -114,4 +114,56 @@ def run(
     result = run_async(run_scenario(scenario, mode=mode))
     render_result(result)
     if not result.ok:
+        raise typer.Exit(code=1)
+
+
+@app.command("run-all")
+def run_all(
+    directory: Annotated[
+        Path,
+        typer.Argument(help="Directory of scenario YAML files."),
+    ] = Path("scenarios"),
+    no_llm: Annotated[
+        bool,
+        typer.Option("--no-llm", help="Skip ``ask:`` steps — fail fast."),
+    ] = False,
+    tag: Annotated[
+        str | None,
+        typer.Option("--tag", help="Only run scenarios tagged with this value."),
+    ] = None,
+) -> None:
+    """Run every scenario in ``directory`` (alphabetical) and print a summary.
+
+    Exit code is non-zero if any scenario fails. Individual scenario
+    output is rendered in full order; a summary table prints at the end.
+    """
+    if not directory.is_dir():
+        rprint(f"[red]not a directory:[/] {directory}")
+        raise typer.Exit(code=2)
+
+    mode: LLMMode = "disabled" if no_llm else "auto"
+    files = sorted(directory.glob("*.yaml")) + sorted(directory.glob("*.yml"))
+    if not files:
+        rprint(f"[yellow]no YAML files in {directory}[/]")
+        return
+
+    results = []
+    for path in files:
+        try:
+            scenario = load_scenario(path)
+        except (ValidationError, ValueError) as e:
+            rprint(f"[red]invalid scenario {path}:[/] {e}")
+            raise typer.Exit(code=2)
+        if tag is not None and tag not in scenario.tags:
+            continue
+        result = run_async(run_scenario(scenario, mode=mode))
+        render_result(result)
+        results.append(result)
+
+    if not results:
+        rprint(f"[yellow]no scenarios matched tag={tag!r}[/]")
+        return
+
+    render_summary(results)
+    if any(not r.ok for r in results):
         raise typer.Exit(code=1)

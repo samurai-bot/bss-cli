@@ -171,7 +171,12 @@ class CRMClient(BSSClient):
             "document_country": document_country,
             "date_of_birth": date_of_birth,
             "nationality": nationality,
-            "verified_at": verified_at or datetime.now(timezone.utc).isoformat(),
+            # bss-clients is a low-level transport package with no domain
+            # dependencies — it cannot import bss-clock. Callers inside a
+            # service that needs scenario-freezable time should pass
+            # ``verified_at`` from ``bss_clock.now()``; this fallback is
+            # only for ad-hoc CLI calls that don't care about scenario replay.
+            "verified_at": verified_at or datetime.now(timezone.utc).isoformat(),  # noqa: bss-clock
             "attestation_payload": attestation_payload or {
                 "token": attestation_token,
                 "signature": f"stub-sig-{attestation_token[-16:]}",

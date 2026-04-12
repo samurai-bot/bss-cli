@@ -1,15 +1,18 @@
-.PHONY: help up up-all up-minimal up-core down build test fmt lint migrate seed reset-db check-clock
+.PHONY: help up up-all up-minimal up-core down build test fmt lint migrate seed reset-db check-clock scenarios scenarios-hero
 
 help:
-	@echo "  up          — 10 BSS services (BYOI Postgres/RabbitMQ)"
-	@echo "  up-all      — services + Postgres + RabbitMQ + Metabase"
-	@echo "  up-minimal  — catalog + crm + payment only"
-	@echo "  up-core     — minimal + com + som + subscription + provisioning-sim"
-	@echo "  down        — stop everything"
-	@echo "  build       — build all service images"
-	@echo "  test        — run pytest"
-	@echo "  fmt         — format with ruff"
-	@echo "  lint        — lint with ruff + mypy"
+	@echo "  up               — 10 BSS services (BYOI Postgres/RabbitMQ)"
+	@echo "  up-all           — services + Postgres + RabbitMQ + Metabase"
+	@echo "  up-minimal       — catalog + crm + payment only"
+	@echo "  up-core          — minimal + com + som + subscription + provisioning-sim"
+	@echo "  down             — stop everything"
+	@echo "  build            — build all service images"
+	@echo "  test             — run pytest"
+	@echo "  fmt              — format with ruff"
+	@echo "  lint             — lint with ruff + mypy"
+	@echo "  scenarios        — run every scenario in ./scenarios (including LLM ask: steps)"
+	@echo "  scenarios-hero   — run only the three hero ship-gate scenarios"
+	@echo "  check-clock      — grep guard: all datetime.now sites route through bss-clock"
 
 up:
 	docker compose up -d
@@ -70,6 +73,12 @@ migrate:
 
 seed:
 	@$(ENV_SOURCE); uv run --package bss-seed python -m bss_seed.main
+
+scenarios:
+	@uv run bss scenario run-all scenarios
+
+scenarios-hero:
+	@uv run bss scenario run-all scenarios --tag hero
 
 reset-db:
 	@$(ENV_SOURCE); \
