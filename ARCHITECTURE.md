@@ -114,8 +114,8 @@ If strict ordering becomes essential for a future use case, the path forward is 
 | 4 | com | 8004 | TMF622 | stateful FSM | Commercial Order Management |
 | 5 | som | 8005 | TMF641 + TMF638 + TMF640 | stateful FSM | Service Order + decomposition |
 | 6 | subscription | 8006 | custom | stateful FSM | Bundle balance, VAS, renewal |
-| 7 | mediation | 8007 | TMF635 | stateful | CDR ingestion |
-| 8 | rating | 8008 | — | stateless | Pure rating function + consumer |
+| 7 | mediation | 8007 | TMF635 | stateful | **TMF635 online mediation.** Single-event ingest, block-at-edge, not batch. OCS is abstracted outside BSS-CLI — see "What's NOT in the architecture". |
+| 8 | rating | 8008 | — | stateless | Pure rating function + consumer. Bundled-prepaid quota decrement, not per-unit billing-rate CDR rating. |
 | 9 | billing | 8009 | TMF678 | stateful | Bill issuance |
 | 10 | provisioning-sim | 8010 | custom | stateful | Fake HLR/PCRF/OCS/SM-DP+, configurable failures |
 
@@ -468,3 +468,5 @@ Cost estimate: **~$4,000-8,000/month**.
 - **No eKYC implementation.** Channel-layer concern. BSS-CLI receives signed attestations via `customer.attest_kyc` and enforces policies.
 - **No physical SIM logistics.** eSIM-only in v0.1.
 - **No strict event ordering.** Consumers must handle concurrent events causally via policy checks, not assume arrival order. See "Event ordering guarantees" section above.
+- **No Online Charging System (OCS).** BSS-CLI does not implement Diameter Gy/Ro, PCEF quota grants, quota reservation, or `Final-Unit-Indication` signalling to the packet core. OCS is abstracted outside the solution — a real deployment would have an external OCS on the network side making live authorize/deny decisions against the PCEF/GGSN. Our Mediation service is **TMF635 online mediation**: single-event ingest with synchronous block-at-edge policy, driving balance decrement via events. It collapses the customer-facing accounting surface of an OCS (quota depletion → block) into a TMF-shaped REST API, but it does not sit on the data plane.
+- **No batch mediation.** No CDR file ingest, no hourly/daily aggregation jobs, no rerating windows, no deduplication/correlation pipelines. Motto #1 (bundled-prepaid only) removes the reason batch mediation exists — there are no per-unit charges to roll up into an invoice. If post-paid is ever introduced (v0.3+), a batch-rating plane would need to be added alongside the current online path; it is not a modification of it.

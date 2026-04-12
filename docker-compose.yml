@@ -69,22 +69,29 @@ services:
       BSS_CRM_URL: http://crm:8000
       BSS_CATALOG_URL: http://catalog:8000
       BSS_PAYMENT_URL: http://payment:8000
+    depends_on: [crm, catalog, payment]
 
   mediation:
     <<: *bss-service
     build:
-      <<: *bss-build
-      args: { SERVICE: mediation }
+      context: .
+      dockerfile: services/mediation/Dockerfile
     ports: ["8007:8000"]
-    environment: { BSS_SERVICE_NAME: mediation }
+    environment:
+      BSS_SERVICE_NAME: mediation
+      BSS_SUBSCRIPTION_URL: http://subscription:8000
+    depends_on: [subscription]
 
   rating:
     <<: *bss-service
     build:
-      <<: *bss-build
-      args: { SERVICE: rating }
+      context: .
+      dockerfile: services/rating/Dockerfile
     ports: ["8008:8000"]
-    environment: { BSS_SERVICE_NAME: rating }
+    environment:
+      BSS_SERVICE_NAME: rating
+      BSS_CATALOG_URL: http://catalog:8000
+    depends_on: [catalog]
 
   billing:
     <<: *bss-service

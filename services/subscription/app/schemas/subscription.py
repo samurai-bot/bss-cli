@@ -27,13 +27,6 @@ class VasPurchaseRequest(BaseModel):
     vas_offering_id: str
 
 
-class ConsumeForTestRequest(BaseModel):
-    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
-
-    allowance_type: str = "data"
-    quantity: int
-
-
 class BundleBalanceResponse(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 

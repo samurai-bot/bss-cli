@@ -6,6 +6,16 @@ Close the loop from usage events back to bundle balance decrement and exhaustion
 
 Shorter phase — mostly event wiring over domain logic that already exists from Phase 6.
 
+### What this phase is — and isn't
+
+**This is TMF635 online mediation, not batch mediation, and not an OCS.**
+
+- **Online mediation (what we build):** single usage event in, synchronous block-at-edge policy, per-event balance decrement via events, reject-on-exhaust in the request path. Mediation behaves as the customer-facing accounting surface of the usage plane.
+- **Batch mediation (what we don't build):** CDR file ingest, hourly/daily aggregation, deduplication/correlation, rerating windows. Motto #1 (bundled-prepaid only) removes the reason it would exist — there are no per-unit charges to roll up into an invoice.
+- **OCS (abstracted outside BSS-CLI):** Diameter Gy/Ro signalling, PCEF quota grants, quota reservation, `Final-Unit-Indication` to the packet core. A real deployment would have an external OCS on the network side making the live authorize/deny decisions against the PCEF/GGSN. BSS-CLI's "block at the network edge" is a REST-layer approximation of the customer-visible effect of an OCS quota depletion — it does not sit on the data plane.
+
+If this distinction blurs (e.g., someone proposes adding a batch rerating job here, or pretends the `POST /usage` endpoint is a Diameter substitute), stop and re-read this section. The doctrine depends on this boundary being sharp.
+
 ## Deliverables
 
 ### Service: `services/mediation/` (port **8007**)

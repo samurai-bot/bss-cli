@@ -16,7 +16,6 @@ class Settings(BaseSettings):
     crm_url: str = "http://crm:8000"
     payment_url: str = "http://payment:8000"
     catalog_url: str = "http://catalog:8000"
-    enable_test_endpoints: bool = False
 
     model_config = SettingsConfigDict(
         env_file=_REPO_ROOT / ".env",
