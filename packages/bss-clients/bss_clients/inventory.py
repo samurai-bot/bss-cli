@@ -25,6 +25,24 @@ class InventoryClient(BSSClient):
 
     # ── MSISDN ──────────────────────────────────────────────────────
 
+    async def list_msisdns(
+        self,
+        *,
+        state: str | None = None,
+        prefix: str | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """GET /inventory-api/v1/msisdn."""
+        params: dict[str, Any] = {"limit": limit}
+        if state:
+            params["state"] = state
+        if prefix:
+            params["prefix"] = prefix
+        resp = await self._request(
+            "GET", "/inventory-api/v1/msisdn", params=params
+        )
+        return resp.json()
+
     async def get_msisdn(self, msisdn: str) -> dict[str, Any]:
         """GET /inventory-api/v1/msisdn/{msisdn}."""
         resp = await self._request(
@@ -65,6 +83,18 @@ class InventoryClient(BSSClient):
 
     # ── eSIM ────────────────────────────────────────────────────────
 
+    async def list_esims(
+        self, *, state: str | None = None, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        """GET /inventory-api/v1/esim."""
+        params: dict[str, Any] = {"limit": limit}
+        if state:
+            params["state"] = state
+        resp = await self._request(
+            "GET", "/inventory-api/v1/esim", params=params
+        )
+        return resp.json()
+
     async def get_esim(self, iccid: str) -> dict[str, Any]:
         """GET /inventory-api/v1/esim/{iccid}."""
         resp = await self._request(
@@ -101,5 +131,15 @@ class InventoryClient(BSSClient):
         """POST /inventory-api/v1/esim/{iccid}/recycle — activated→recycled."""
         resp = await self._request(
             "POST", f"/inventory-api/v1/esim/{iccid}/recycle"
+        )
+        return resp.json()
+
+    async def get_activation_code(self, iccid: str) -> dict[str, Any]:
+        """GET /inventory-api/v1/esim/{iccid}/activation.
+
+        Returns {iccid, imsi, activationCode, msisdn?}.
+        """
+        resp = await self._request(
+            "GET", f"/inventory-api/v1/esim/{iccid}/activation"
         )
         return resp.json()

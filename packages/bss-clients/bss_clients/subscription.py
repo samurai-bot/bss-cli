@@ -1,7 +1,4 @@
-"""SubscriptionClient — service-to-service client for Subscription.
-
-Used by CRM (customer.close policy) and future services (Mediation, Billing).
-"""
+"""SubscriptionClient — service-to-service client for Subscription (port 8006)."""
 
 from __future__ import annotations
 
@@ -48,8 +45,7 @@ class SubscriptionClient(BSSClient):
     async def get(self, subscription_id: str) -> dict[str, Any]:
         """GET /subscription-api/v1/subscription/{id}."""
         resp = await self._request(
-            "GET",
-            f"/subscription-api/v1/subscription/{subscription_id}",
+            "GET", f"/subscription-api/v1/subscription/{subscription_id}"
         )
         return resp.json()
 
@@ -65,8 +61,14 @@ class SubscriptionClient(BSSClient):
     async def get_by_msisdn(self, msisdn: str) -> dict[str, Any]:
         """GET /subscription-api/v1/subscription/by-msisdn/{msisdn}."""
         resp = await self._request(
-            "GET",
-            f"/subscription-api/v1/subscription/by-msisdn/{msisdn}",
+            "GET", f"/subscription-api/v1/subscription/by-msisdn/{msisdn}"
+        )
+        return resp.json()
+
+    async def get_balance(self, subscription_id: str) -> dict[str, Any]:
+        """GET /subscription-api/v1/subscription/{id}/balance."""
+        resp = await self._request(
+            "GET", f"/subscription-api/v1/subscription/{subscription_id}/balance"
         )
         return resp.json()
 
@@ -81,10 +83,32 @@ class SubscriptionClient(BSSClient):
         )
         return resp.json()
 
-    async def terminate(self, subscription_id: str) -> dict[str, Any]:
-        """POST /subscription-api/v1/subscription/{id}/terminate."""
+    async def renew(self, subscription_id: str) -> dict[str, Any]:
+        """POST /subscription-api/v1/subscription/{id}/renew — manual renewal."""
         resp = await self._request(
-            "POST",
-            f"/subscription-api/v1/subscription/{subscription_id}/terminate",
+            "POST", f"/subscription-api/v1/subscription/{subscription_id}/renew"
         )
         return resp.json()
+
+    async def terminate(self, subscription_id: str) -> dict[str, Any]:
+        """POST /subscription-api/v1/subscription/{id}/terminate — destructive."""
+        resp = await self._request(
+            "POST", f"/subscription-api/v1/subscription/{subscription_id}/terminate"
+        )
+        return resp.json()
+
+    async def get_esim_activation(self, subscription_id: str) -> dict[str, Any]:
+        """Resolve the eSIM activation payload for a subscription.
+
+        Convenience: reads the subscription, extracts its iccid, then fetches
+        the activation-code record from Inventory. Caller typically wants
+        {iccid, imsi, activationCode, msisdn} for first-time QR display.
+        """
+        sub = await self.get(subscription_id)
+        return {
+            "subscriptionId": subscription_id,
+            "iccid": sub.get("iccid"),
+            "msisdn": sub.get("msisdn"),
+            "activationCode": sub.get("activationCode"),
+            "imsi": sub.get("imsi"),
+        }

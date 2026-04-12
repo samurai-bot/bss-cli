@@ -1,5 +1,5 @@
 [project]
-name = "bss-cli"
+name = "bss-cli-workspace"
 version = "0.1.0"
 requires-python = ">=3.12"
 description = "Lightweight, SID-aligned, TMF-compliant BSS for terminal-first operation"
@@ -14,7 +14,7 @@ dev = [
 ]
 
 [tool.uv.workspace]
-members = ["packages/*", "services/*"]
+members = ["packages/*", "services/*", "cli", "orchestrator"]
 exclude = ["services/_template"]
 
 [tool.ruff]

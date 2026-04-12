@@ -7,7 +7,8 @@ COPY services/crm/ services/crm/
 
 WORKDIR /build/services/crm
 # In Docker there is no workspace root — switch source from workspace to path
-RUN sed -i 's|workspace = true|path = "../../packages/bss-models"|' pyproject.toml \
+RUN sed -i 's|bss-models = { workspace = true }|bss-models = { path = "../../packages/bss-models" }|' pyproject.toml \
+    && sed -i 's|bss-clients = { workspace = true }|bss-clients = { path = "../../packages/bss-clients" }|' pyproject.toml \
     && uv venv /app/.venv \
     && uv pip install --python /app/.venv/bin/python .
 
