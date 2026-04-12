@@ -16,6 +16,7 @@ from .commands import (
     order as order_cmd,
     payment as payment_cmd,
     prov as prov_cmd,
+    scenario as scenario_cmd,
     som as som_cmd,
     subscription as subscription_cmd,
     ticket as ticket_cmd,
@@ -43,6 +44,7 @@ app.add_typer(som_cmd.app, name="som")
 app.add_typer(clock_cmd.app, name="clock")
 app.add_typer(trace_cmd.app, name="trace")
 app.add_typer(admin_cmd.app, name="admin")
+app.add_typer(scenario_cmd.app, name="scenario")
 
 
 # `bss ask "..."` is a top-level command, not a subgroup.
