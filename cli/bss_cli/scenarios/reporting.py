@@ -64,6 +64,10 @@ def render_result(result: ScenarioResult, console: Console | None = None) -> Non
 
     if not result.ok:
         _print_failure_context(result, console)
+        # Ask steps may have PASSED but still be relevant to debugging a
+        # later deterministic failure (e.g., LLM "fixed" nothing but the
+        # fix wasn't durable). Surface their traces regardless.
+        _print_ask_traces(result, console)
 
 
 def _step_status(step: StepResult) -> Text:
@@ -79,6 +83,13 @@ def _step_detail(step: StepResult) -> str:
             bits.append(
                 ", ".join(f"{k}={_short(v)}" for k, v in step.captured.items())
             )
+        # For ask steps, surface the tools the LLM actually invoked so a
+        # green scenario still shows the ReAct trace at a glance and a
+        # red one makes the gap between expected and actual obvious.
+        if step.kind == "ask" and step.result is not None:
+            tools = getattr(step.result, "tools_called", None)
+            if tools:
+                bits.append(f"tools: {', '.join(tools)}")
         return "  ".join(bits)
     return (step.error or "").strip().splitlines()[0] if step.error else "failed"
 
@@ -86,6 +97,24 @@ def _step_detail(step: StepResult) -> str:
 def _short(v: object, n: int = 40) -> str:
     s = str(v)
     return s if len(s) <= n else s[: n - 1] + "…"
+
+
+def _print_ask_traces(result: ScenarioResult, console: Console) -> None:
+    for step in result.steps:
+        if step.kind != "ask" or step.result is None:
+            continue
+        tools = getattr(step.result, "tools_called", []) or []
+        final_msg = getattr(step.result, "final_message", "") or ""
+        if not (tools or final_msg):
+            continue
+        trace = []
+        if tools:
+            trace.append(f"tools called ({len(tools)}): {', '.join(tools)}")
+        if final_msg:
+            trace.append(f"\nfinal LLM message:\n{final_msg.strip()}")
+        console.print(
+            Panel("\n".join(trace), title=f"LLM trace — {step.name!r}", border_style="yellow")
+        )
 
 
 def _print_failure_context(result: ScenarioResult, console: Console) -> None:

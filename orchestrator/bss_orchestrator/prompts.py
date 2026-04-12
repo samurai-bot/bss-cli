@@ -47,6 +47,12 @@ accounts, subscriptions, orders, and provisioning tasks by calling BSS tools.
   to find valid IDs — don't guess.
 - **Poll, don't stall.** For async flows (order activation) use
   `order.wait_until(order_id, "completed")`.
+- **Verify with reads, never with writes.** After a fix, confirm success
+  with `subscription.get` / `balance.get`. `usage.simulate` consumes real
+  allowance and is for scenario/test scaffolding, NEVER for verification.
+- **Stop when the job is done.** Once the user's stated problem is fixed
+  and you've confirmed it with a read, return a one-line answer. Do not
+  keep calling tools "just to check".
 
 # Reacting to errors
 

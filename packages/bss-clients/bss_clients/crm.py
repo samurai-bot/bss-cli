@@ -394,22 +394,31 @@ class CRMClient(BSSClient):
         self,
         *,
         customer_id: str,
-        channel: str,
-        action: str,
-        note: str | None = None,
+        summary: str,
+        channel: str | None = None,
+        direction: str = "inbound",
+        body_text: str | None = None,
     ) -> dict[str, Any]:
-        """POST /tmf-api/customerInteractionManagement/v1/interaction."""
-        body: dict[str, Any] = {
+        """POST /tmf-api/customerInteractionManagement/v1/interaction.
+
+        Server schema is TMF683-shaped: ``summary`` is required, ``channel``
+        defaults to the caller's ``X-BSS-Channel`` context, ``direction``
+        defaults to ``inbound``. ``body_text`` (if present) is sent as the
+        optional ``body`` free-text field.
+        """
+        payload: dict[str, Any] = {
             "customerId": customer_id,
-            "channel": channel,
-            "action": action,
+            "summary": summary,
+            "direction": direction,
         }
-        if note:
-            body["note"] = note
+        if channel is not None:
+            payload["channel"] = channel
+        if body_text is not None:
+            payload["body"] = body_text
         resp = await self._request(
             "POST",
             "/tmf-api/customerInteractionManagement/v1/interaction",
-            json=body,
+            json=payload,
         )
         return resp.json()
 
