@@ -5,10 +5,12 @@ RUN pip install --no-cache-dir uv
 COPY packages/ packages/
 COPY services/provisioning-sim/ services/provisioning-sim/
 
+# Rewrite workspace refs in packages/*/pyproject.toml (intra-package deps)
+RUN for p in packages/*/pyproject.toml; do sed -i -E 's|(bss-[a-z]+) = \{ workspace = true \}|\1 = { path = "../\1" }|g' "$p"; done
+
 WORKDIR /build/services/provisioning-sim
 # In Docker there is no workspace root — switch source from workspace to path
-RUN sed -i 's|bss-models = { workspace = true }|bss-models = { path = "../../packages/bss-models" }|' pyproject.toml \
-    && sed -i 's|bss-clients = { workspace = true }|bss-clients = { path = "../../packages/bss-clients" }|' pyproject.toml \
+RUN sed -i -E 's|(bss-[a-z]+) = \{ workspace = true \}|\1 = { path = "../../packages/\1" }|g' pyproject.toml \
     && uv venv /app/.venv \
     && uv pip install --python /app/.venv/bin/python .
 

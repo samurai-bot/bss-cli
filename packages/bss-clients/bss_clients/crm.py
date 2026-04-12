@@ -32,19 +32,33 @@ class CRMClient(BSSClient):
         email: str | None = None,
         phone: str | None = None,
     ) -> dict[str, Any]:
-        """POST /tmf-api/customerManagement/v4/customer."""
-        contact_mediums = []
+        """POST /tmf-api/customerManagement/v4/customer.
+
+        ``name`` is split on the first whitespace into ``givenName`` +
+        ``familyName`` (CRM requires both). At least one contact medium is
+        required by CRM — default to a placeholder email if neither is given.
+        """
+        parts = name.strip().split(None, 1)
+        given_name = parts[0] if parts else name
+        family_name = parts[1] if len(parts) > 1 else given_name
+        contact_mediums: list[dict[str, Any]] = []
         if email:
             contact_mediums.append(
-                {"mediumType": "email", "characteristic": {"emailAddress": email}}
+                {"mediumType": "email", "value": email, "isPrimary": True}
             )
         if phone:
             contact_mediums.append(
-                {"mediumType": "mobile", "characteristic": {"phoneNumber": phone}}
+                {"mediumType": "mobile", "value": phone, "isPrimary": not email}
             )
-        body: dict[str, Any] = {"name": name}
-        if contact_mediums:
-            body["contactMedium"] = contact_mediums
+        if not contact_mediums:
+            contact_mediums.append(
+                {"mediumType": "email", "value": f"{given_name.lower()}@local", "isPrimary": True}
+            )
+        body: dict[str, Any] = {
+            "givenName": given_name,
+            "familyName": family_name,
+            "contactMedium": contact_mediums,
+        }
         resp = await self._request(
             "POST",
             "/tmf-api/customerManagement/v4/customer",
@@ -132,12 +146,41 @@ class CRMClient(BSSClient):
         *,
         provider: str,
         attestation_token: str,
+        provider_reference: str | None = None,
+        document_type: str = "nric",
+        document_number: str = "S1234567D",
+        document_country: str = "SG",
+        date_of_birth: str = "1990-01-01",
+        nationality: str | None = "SG",
+        verified_at: str | None = None,
+        attestation_payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """POST /crm-api/v1/customer/{id}/kyc-attestation."""
+        """POST /crm-api/v1/customer/{id}/kyc-attestation.
+
+        Full channel-layer attestation. Scenario runners can pass only
+        ``provider`` + ``attestation_token`` and rely on the stub defaults
+        for the rest; real channels fill in every field.
+        """
+        from datetime import datetime, timezone
+
+        body = {
+            "provider": provider,
+            "provider_reference": provider_reference or f"{provider}-{attestation_token[-8:]}",
+            "document_type": document_type,
+            "document_number": document_number,
+            "document_country": document_country,
+            "date_of_birth": date_of_birth,
+            "nationality": nationality,
+            "verified_at": verified_at or datetime.now(timezone.utc).isoformat(),
+            "attestation_payload": attestation_payload or {
+                "token": attestation_token,
+                "signature": f"stub-sig-{attestation_token[-16:]}",
+            },
+        }
         resp = await self._request(
             "POST",
             f"/crm-api/v1/customer/{customer_id}/kyc-attestation",
-            json={"provider": provider, "attestationToken": attestation_token},
+            json=body,
         )
         return resp.json()
 

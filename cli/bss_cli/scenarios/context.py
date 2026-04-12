@@ -33,10 +33,12 @@ class ScenarioContext:
     def new(
         cls, *, run_id: str | None = None, seed: dict[str, Any] | None = None
     ) -> "ScenarioContext":
-        base: dict[str, Any] = {"run_id": run_id or secrets.token_hex(4)}
-        if seed:
-            base.update(seed)
-        return cls(variables=base)
+        ctx = cls(variables={"run_id": run_id or secrets.token_hex(4)})
+        # Resolve seed values against already-defined vars so scenarios can
+        # write e.g. ``customer_email: "ck-{{ run_id }}@bss-cli.local"``.
+        for k, v in (seed or {}).items():
+            ctx.variables[k] = ctx.interpolate(v)
+        return ctx
 
     # ── Interpolation ───────────────────────────────────────────────────
 

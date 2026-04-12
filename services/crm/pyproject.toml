@@ -11,6 +11,7 @@ dependencies = [
     "bss-clients",
     "bss-admin",
     "bss-clock",
+    "bss-events",
     "asyncpg>=0.29",
     "sqlalchemy[asyncio]>=2.0",
     "transitions>=0.9",
@@ -35,3 +36,4 @@ bss-models = { workspace = true }
 bss-clients = { workspace = true }
 bss-admin = { workspace = true }
 bss-clock = { workspace = true }
+bss-events = { workspace = true }

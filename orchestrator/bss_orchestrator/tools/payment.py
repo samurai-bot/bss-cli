@@ -4,10 +4,42 @@ from __future__ import annotations
 
 from decimal import Decimal
 from typing import Any
+from uuid import uuid4
 
 from ..clients import get_clients
 from ..types import Currency, CustomerId, PaymentAttemptId, PaymentMethodId
 from ._registry import register
+
+
+def _local_tokenize(card_number: str) -> dict[str, Any]:
+    """Sandbox client-side tokenizer (mirrors services/payment mock_tokenizer).
+
+    Payment service never exposed a public /dev/tokenize endpoint — real
+    tokenization happens client-side (Stripe.js, etc.). We replicate the
+    same FAIL/DECLINE embedding so charge-failure tests stay honest.
+    """
+    digits = card_number.replace(" ", "").replace("-", "")
+    if not digits.isdigit() or len(digits) < 12:
+        raise ValueError(f"Invalid card number: {card_number!r}")
+    last4 = digits[-4:]
+    bin6 = digits[:6]
+    if digits[0] == "4":
+        brand = "visa"
+    elif 51 <= int(bin6[:2] or "0") <= 55:
+        brand = "mastercard"
+    elif bin6[:2] in ("34", "37"):
+        brand = "amex"
+    else:
+        brand = "unknown"
+    uid = str(uuid4())
+    up = card_number.upper()
+    if "FAIL" in up:
+        token = f"tok_FAIL_{uid}"
+    elif "DECLINE" in up:
+        token = f"tok_DECLINE_{uid}"
+    else:
+        token = f"tok_{uid}"
+    return {"cardToken": token, "last4": last4, "brand": brand}
 
 
 @register("payment.add_card")
@@ -33,7 +65,7 @@ async def payment_add_card(
             - ``payment.add_card.token_invalid``: card rejected by mock tokeniser.
     """
     c = get_clients()
-    tok = await c.payment.dev_tokenize_card(card_number)
+    tok = _local_tokenize(card_number)
     return await c.payment.create_payment_method(
         customer_id=customer_id,
         card_token=tok["cardToken"],

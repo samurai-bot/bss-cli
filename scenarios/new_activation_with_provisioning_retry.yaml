@@ -1,0 +1,110 @@
+name: new_activation_with_provisioning_retry
+description: |
+  Proves the retry path in provisioning-sim: we force the HLR_PROVISION
+  task to fail on its first attempt (probability=1.0), place an order, and
+  verify the subscription still activates because SOM retries.
+
+  After the order completes we inspect the provisioning task list and assert
+  the HLR task ran at least twice. Fault injection is disabled in teardown
+  so the scenario leaves the stack clean for the next run.
+
+tags: [hero, resilience, provisioning, deterministic]
+
+setup:
+  reset_operational_data: true
+  freeze_clock_at: "2026-04-11T10:00:00+00:00"
+
+variables:
+  customer_email: "retry-{{ run_id }}@bss-cli.local"
+  plan: PLAN_S
+
+steps:
+  - name: force HLR fail-first-attempt fault
+    action: provisioning.set_fault_injection
+    args:
+      task_type: HLR_PROVISION
+      fault_type: fail_first_attempt
+      enabled: true
+      probability: 1.0
+
+  - name: create customer
+    action: customer.create
+    args:
+      name: "Retry Demo"
+      email: "{{ customer_email }}"
+      phone: "+6590007777"
+    capture:
+      customer_id: "$.id"
+
+  - name: attest KYC
+    action: customer.attest_kyc
+    args:
+      customer_id: "{{ customer_id }}"
+      provider: myinfo
+      attestation_token: "stub-signed-jwt-{{ run_id }}"
+
+  - name: add card on file
+    action: payment.add_card
+    args:
+      customer_id: "{{ customer_id }}"
+      card_number: "4242424242424242"
+
+  - name: place order
+    action: order.create
+    args:
+      customer_id: "{{ customer_id }}"
+      offering_id: "{{ plan }}"
+    capture:
+      order_id: "$.id"
+
+  - name: wait for order to complete despite the injected failure
+    action: order.wait_until
+    args:
+      order_id: "{{ order_id }}"
+      target_state: completed
+      timeout_s: 45
+
+  - name: verify final order state
+    assert:
+      tool: order.get
+      args: {order_id: "{{ order_id }}"}
+      expect:
+        state: completed
+
+  - name: verify subscription activated
+    action: subscription.list_for_customer
+    args:
+      customer_id: "{{ customer_id }}"
+    capture:
+      subscription_id: "$[0].id"
+
+  - name: subscription is active
+    assert:
+      tool: subscription.get
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        state: active
+
+  - name: verify HLR task was retried (attempts >= 2)
+    assert:
+      tool: provisioning.list_tasks
+      args:
+        state: completed
+      expect:
+        any_match:
+          taskType: HLR_PROVISION
+          attempts: {gte: 2}
+      poll:
+        interval_ms: 200
+        timeout_seconds: 10
+
+  - name: disable HLR fault injection
+    action: provisioning.set_fault_injection
+    args:
+      task_type: HLR_PROVISION
+      fault_type: fail_first_attempt
+      enabled: false
+      probability: 0.0
+
+teardown:
+  unfreeze_clock: true
