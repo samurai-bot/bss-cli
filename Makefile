@@ -31,9 +31,9 @@ build:
 
 test:
 	@failed=0; \
-	for dir in packages/bss-clients services/catalog services/crm services/payment services/subscription services/com services/som services/provisioning-sim services/mediation services/rating; do \
+	for dir in packages/bss-clients services/catalog services/crm services/payment services/subscription services/com services/som services/provisioning-sim services/mediation services/rating orchestrator cli; do \
 		printf "\n══ $$dir ══\n"; \
-		PYTHONPATH=$$dir:$$PYTHONPATH uv run pytest $$dir/tests/ -v || failed=1; \
+		PYTHONPATH=$$dir:$$PYTHONPATH uv run pytest $$dir/tests/ -v -m "not integration" || failed=1; \
 	done; \
 	if [ $$failed -eq 1 ]; then printf "\n✗ Some suites failed\n"; exit 1; \
 	else printf "\n✓ All suites passed\n"; fi
@@ -46,17 +46,20 @@ lint:
 
 # --- Data Model ---
 
-# Derive psql-compatible URL by stripping +asyncpg driver suffix
-BSS_PSQL_URL := $(subst +asyncpg,,$(BSS_DB_URL))
+# Source .env (if present) inside every recipe that needs DB/MQ creds. `set -a`
+# exports every var until `set +a`, so children (alembic, psql, bss-seed) inherit them.
+ENV_SOURCE := if [ -f .env ]; then set -a; . ./.env; set +a; fi
 
 migrate:
-	cd packages/bss-models && uv run --package bss-models alembic upgrade head
+	@$(ENV_SOURCE); cd packages/bss-models && uv run --package bss-models alembic upgrade head
 
 seed:
-	uv run --package bss-seed python -m bss_seed.main
+	@$(ENV_SOURCE); uv run --package bss-seed python -m bss_seed.main
 
 reset-db:
-	psql "$(BSS_PSQL_URL)" -c "DROP SCHEMA IF EXISTS crm, catalog, inventory, payment, order_mgmt, service_inventory, provisioning, subscription, mediation, billing, audit CASCADE;"
-	psql "$(BSS_PSQL_URL)" -c "DELETE FROM public.alembic_version;" 2>/dev/null || true
-	$(MAKE) migrate
+	@$(ENV_SOURCE); \
+	PSQL_URL=$${BSS_DB_URL/+asyncpg/}; \
+	psql "$$PSQL_URL" -c "DROP SCHEMA IF EXISTS crm, catalog, inventory, payment, order_mgmt, service_inventory, provisioning, subscription, mediation, billing, audit CASCADE;"; \
+	psql "$$PSQL_URL" -c "DELETE FROM public.alembic_version;" 2>/dev/null || true; \
+	$(MAKE) migrate; \
 	$(MAKE) seed

@@ -8,6 +8,7 @@ dependencies = [
     "structlog>=24.4",
     "pydantic-settings>=2.0",
     "bss-models",
+    "bss-clients",
     "asyncpg>=0.29",
     "sqlalchemy[asyncio]>=2.0",
     "transitions>=0.9",
@@ -29,3 +30,4 @@ packages = ["app"]
 
 [tool.uv.sources]
 bss-models = { workspace = true }
+bss-clients = { workspace = true }

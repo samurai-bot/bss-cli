@@ -55,13 +55,47 @@ class CustomerRepository:
         return cust
 
     async def list_customers(
-        self, *, status: str | None = None, limit: int = 20, offset: int = 0
+        self,
+        *,
+        status: str | None = None,
+        name_contains: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
     ) -> list[Customer]:
-        stmt = select(Customer).limit(limit).offset(offset).order_by(Customer.id)
+        stmt = select(Customer).order_by(Customer.id)
         if status:
             stmt = stmt.where(Customer.status == status)
+        if name_contains:
+            like = f"%{name_contains}%"
+            stmt = (
+                stmt.join(Party, Customer.party_id == Party.id)
+                .join(Individual, Individual.party_id == Party.id)
+                .where(
+                    Individual.given_name.ilike(like)
+                    | Individual.family_name.ilike(like)
+                )
+            )
+        stmt = stmt.limit(limit).offset(offset)
         result = await self._s.execute(stmt)
-        return list(result.scalars().all())
+        customers = list(result.scalars().all())
+
+        # Eager-load party + individual + contact_mediums so the TMF629
+        # projection can emit ``individual.givenName`` / ``familyName``.
+        if customers:
+            party_ids = [c.party_id for c in customers]
+            party_stmt = (
+                select(Party)
+                .options(
+                    selectinload(Party.individual),
+                    selectinload(Party.contact_mediums),
+                )
+                .where(Party.id.in_(party_ids))
+            )
+            parties = (await self._s.execute(party_stmt)).scalars().all()
+            by_id = {p.id: p for p in parties}
+            for c in customers:
+                c._party = by_id.get(c.party_id)
+        return customers
 
     async def find_by_email(self, email: str) -> Customer | None:
         stmt = (

@@ -82,6 +82,64 @@ class TestGetCustomer:
         assert r2.json()["id"] == cust_id
 
 
+class TestListCustomers:
+    async def test_list_returns_populated_individual(self, client: AsyncClient):
+        await client.post(
+            f"{PREFIX}/customer",
+            json={
+                "givenName": "Lister",
+                "familyName": "Alpha",
+                "contactMedium": [{"medium_type": "email", "value": "lister.alpha@example.com"}],
+            },
+        )
+        r = await client.get(f"{PREFIX}/customer")
+        assert r.status_code == 200
+        rows = r.json()
+        assert rows, "expected at least one customer"
+        row = next(r for r in rows if r["id"].startswith("CUST-"))
+        assert row["individual"] is not None
+        assert row["individual"]["givenName"]
+        assert row["individual"]["familyName"]
+
+    async def test_list_filters_by_name_case_insensitive(self, client: AsyncClient):
+        await client.post(
+            f"{PREFIX}/customer",
+            json={
+                "givenName": "Zephyr",
+                "familyName": "Quark",
+                "contactMedium": [{"medium_type": "email", "value": "zephyr.q@example.com"}],
+            },
+        )
+        await client.post(
+            f"{PREFIX}/customer",
+            json={
+                "givenName": "Other",
+                "familyName": "Person",
+                "contactMedium": [{"medium_type": "email", "value": "other.p@example.com"}],
+            },
+        )
+
+        r = await client.get(f"{PREFIX}/customer", params={"name": "zephyr"})
+        assert r.status_code == 200
+        rows = r.json()
+        assert len(rows) == 1
+        assert rows[0]["individual"]["givenName"] == "Zephyr"
+
+        r2 = await client.get(f"{PREFIX}/customer", params={"name": "QUARK"})
+        assert r2.status_code == 200
+        assert len(r2.json()) == 1
+
+        r3 = await client.get(f"{PREFIX}/customer", params={"name": "nonexistent-xyz"})
+        assert r3.status_code == 200
+        assert r3.json() == []
+
+    async def test_list_status_filter_still_works(self, client: AsyncClient):
+        r = await client.get(f"{PREFIX}/customer", params={"status": "active"})
+        assert r.status_code == 200
+        for row in r.json():
+            assert row["status"] == "active"
+
+
 class TestContactMedium:
     async def test_add_contact_medium(self, client: AsyncClient):
         r = await client.post(

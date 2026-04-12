@@ -1,0 +1,37 @@
+[project]
+name = "bss-cli"
+version = "0.1.0"
+requires-python = ">=3.12"
+description = "BSS-CLI command-line interface — direct verbs + LLM REPL"
+dependencies = [
+    "bss-clients",
+    "bss-orchestrator",
+    "typer>=0.12",
+    "rich>=13.7",
+    "qrcode>=7.4",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "structlog>=24.1",
+]
+
+[project.scripts]
+bss = "bss_cli.main:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "respx>=0.21",
+    "syrupy>=4.6",
+]
+
+[tool.uv.sources]
+bss-clients = { workspace = true }
+bss-orchestrator = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["bss_cli"]

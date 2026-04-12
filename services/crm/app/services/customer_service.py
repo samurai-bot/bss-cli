@@ -128,10 +128,18 @@ class CustomerService:
         return await self._customer_repo.get_with_party(customer_id)
 
     async def list_customers(
-        self, *, status: str | None = None, limit: int = 20, offset: int = 0
+        self,
+        *,
+        status: str | None = None,
+        name_contains: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
     ) -> list[Customer]:
         return await self._customer_repo.list_customers(
-            status=status, limit=limit, offset=offset
+            status=status,
+            name_contains=name_contains,
+            limit=limit,
+            offset=offset,
         )
 
     async def update_customer(self, customer_id: str, **updates: str | None) -> Customer:

@@ -1,0 +1,195 @@
+"""Semantic vocabulary for the BSS-CLI LLM tool surface.
+
+Every tool signature MUST use these aliases — never raw ``str`` for IDs or enums.
+
+Why it matters: the LLM sees the Annotated metadata in the JSON schema emitted
+for each tool. When the type says ``Annotated[str, "Subscription ID in SUB-NNN
+format"]``, a small cheap model like MiMo v2 Flash generates valid SUB-NNN IDs
+instead of fabricating ``sub-abc-123``. The type hint IS the semantic hint.
+
+For enum-shaped fields, ``Literal[...]`` renders as a JSON-schema enum and the
+LLM respects the finite set.
+
+Grep-enforced: ``test_types_coverage.py`` walks every tool and confirms no raw
+``str`` is used for an ID or enum argument where an alias exists here.
+"""
+
+from __future__ import annotations
+
+from typing import Annotated, Literal
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ID types — Annotated[str, "format hint"]
+# ─────────────────────────────────────────────────────────────────────────────
+
+CustomerId = Annotated[
+    str,
+    "Customer ID in CUST-NNN format, e.g. CUST-007. "
+    "Get from customer.list or customer.create — never fabricate.",
+]
+SubscriptionId = Annotated[
+    str,
+    "Subscription ID in SUB-NNN format, e.g. SUB-007. "
+    "Get from subscription.list_for_customer.",
+]
+OrderId = Annotated[
+    str,
+    "Product Order ID in ORD-NNN format, e.g. ORD-014. "
+    "Get from order.list or order.create.",
+]
+ServiceOrderId = Annotated[
+    str,
+    "Service Order ID in SO-NNN format, e.g. SO-022. "
+    "Get from service_order.list_for_order.",
+]
+ServiceId = Annotated[
+    str,
+    "Service ID in SVC-NNN format, e.g. SVC-033. "
+    "Get from service.list_for_subscription.",
+]
+CaseId = Annotated[
+    str,
+    "Case ID in CASE-NNN format, e.g. CASE-042. Get from case.list.",
+]
+TicketId = Annotated[
+    str,
+    "Ticket ID in TKT-NNN format, e.g. TKT-101. Get from ticket.list.",
+]
+ContactMediumId = Annotated[
+    str,
+    "Contact Medium ID in CM-NNN format, e.g. CM-012. Get from customer.get.",
+]
+PaymentMethodId = Annotated[
+    str,
+    "Payment Method ID in PM-NNNN format, e.g. PM-0042. "
+    "Get from payment.list_methods.",
+]
+PaymentAttemptId = Annotated[
+    str,
+    "Payment Attempt ID in PAY-NNNNNN format, e.g. PAY-000042.",
+]
+AgentId = Annotated[
+    str,
+    "Agent ID in AGT-NNN format, e.g. AGT-004. Get from agents.list.",
+]
+ProvisioningTaskId = Annotated[
+    str,
+    "Provisioning task ID in PTK-NNN format, e.g. PTK-044. "
+    "Get from provisioning.list_tasks.",
+]
+BillId = Annotated[
+    str,
+    "Bill ID in BILL-NNN format, e.g. BILL-017. Get from billing.list_bills.",
+]
+AggregateId = Annotated[
+    str,
+    "Prefixed ID matching the aggregate_type, e.g. 'SUB-007' for subscription, "
+    "'ORD-014' for order. Never fabricate — read from a prior tool result.",
+]
+ProductOfferingId = Annotated[
+    str,
+    "Plan offering ID — MUST be one of PLAN_S, PLAN_M, PLAN_L. "
+    "No other plans exist in v0.1.",
+]
+VasOfferingId = Annotated[
+    str,
+    "VAS offering ID, e.g. VAS_DATA_5GB, VAS_DATA_DAYPASS. "
+    "Get from catalog.list_vas — never guess.",
+]
+Msisdn = Annotated[
+    str,
+    "Mobile number, 8 digits, e.g. 90000005. No country code, no spaces.",
+]
+Iccid = Annotated[
+    str,
+    "eSIM ICCID, 19-20 digits starting with 8910101, e.g. 8910101000000000005.",
+]
+Email = Annotated[
+    str,
+    "RFC5322 email address, e.g. ck@example.com.",
+]
+Phone = Annotated[
+    str,
+    "E.164 phone number with country code, e.g. +6590000005.",
+]
+Currency = Annotated[
+    str,
+    "ISO-4217 currency code. v0.1 uses SGD only.",
+]
+IsoDatetime = Annotated[
+    str,
+    "ISO-8601 datetime, e.g. 2026-04-12T13:05:00Z. Use clock.now to get current time.",
+]
+Duration = Annotated[
+    str,
+    "Human duration string. Format: Nd (days), Nh (hours), Nm (minutes), Ns (seconds). "
+    "Examples: '30d', '1h', '15m', '45s'.",
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Enum types — Literal[...] renders as JSON-schema enum
+# ─────────────────────────────────────────────────────────────────────────────
+
+CustomerState = Literal["pending", "active", "suspended", "closed"]
+SubscriptionState = Literal["pending", "active", "blocked", "terminated"]
+OrderState = Literal["acknowledged", "in_progress", "completed", "failed", "cancelled"]
+ServiceOrderState = Literal["in_progress", "completed", "failed", "cancelled"]
+ServiceState = Literal[
+    "feasibility_checked",
+    "designed",
+    "reserved",
+    "activated",
+    "failed",
+    "terminated",
+]
+CaseState = Literal["open", "in_progress", "pending_customer", "resolved", "closed"]
+TicketState = Literal[
+    "open",
+    "acknowledged",
+    "in_progress",
+    "pending",
+    "resolved",
+    "closed",
+    "cancelled",
+]
+CasePriority = Literal["low", "medium", "high", "critical"]
+CaseCategory = Literal["technical", "billing", "account", "information"]
+TicketType = Literal[
+    "service_outage",
+    "billing_issue",
+    "information",
+    "complaint",
+    "configuration_change",
+    "fraud_report",
+    "cancellation_request",
+]
+ContactMediumType = Literal["email", "mobile", "address"]
+AgentState = Literal["active", "inactive"]
+UsageEventType = Literal["data", "voice_minutes", "sms"]
+UsageUnit = Literal["mb", "gb", "minutes", "count"]
+ProvisioningTaskState = Literal[
+    "pending",
+    "in_progress",
+    "completed",
+    "failed",
+    "stuck",
+]
+ProvisioningTaskType = Literal[
+    "HLR_PROVISION",
+    "HLR_DEPROVISION",
+    "PCRF_POLICY_PUSH",
+    "OCS_BALANCE_INIT",
+    "ESIM_PROFILE_PREPARE",
+]
+FaultType = Literal["fail_first_attempt", "fail_always", "stuck", "slow"]
+AggregateType = Literal[
+    "customer",
+    "subscription",
+    "order",
+    "service_order",
+    "service",
+    "case",
+    "ticket",
+    "payment_method",
+    "provisioning_task",
+]

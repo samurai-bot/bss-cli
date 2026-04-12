@@ -34,11 +34,14 @@ async def create_customer(
 @router.get("/customer", response_model=list[Tmf629Customer], response_model_by_alias=True)
 async def list_customers(
     status: str | None = None,
+    name: str | None = None,
     limit: int = 20,
     offset: int = 0,
     svc: CustomerService = Depends(get_customer_service),
 ) -> list[Tmf629Customer]:
-    custs = await svc.list_customers(status=status, limit=limit, offset=offset)
+    custs = await svc.list_customers(
+        status=status, name_contains=name, limit=limit, offset=offset
+    )
     return [to_tmf629_customer(c) for c in custs]
 
 
