@@ -1,6 +1,6 @@
 """Bundle balance domain logic — pure functions.
 
-No DB, no side effects, no datetime.utcnow().
+No DB, no side effects, no wall-clock reads.
 All functions take immutable inputs and return new values.
 """
 

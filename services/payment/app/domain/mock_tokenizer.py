@@ -22,6 +22,8 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
+from bss_clock import now as clock_now
+
 
 @dataclass(frozen=True)
 class TokenizeResult:
@@ -61,7 +63,7 @@ def tokenize_card(
     - card_number containing "FAIL" or "DECLINE" embeds that in the token
     - Expired card raises ValueError
     """
-    now = datetime.now(timezone.utc)
+    now = clock_now()
     if exp_year < now.year or (exp_year == now.year and exp_month < now.month):
         raise ValueError(
             f"Card expired: {exp_month:02d}/{exp_year}"

@@ -1,5 +1,6 @@
 """Rating service — stateless pure rate_usage + usage.recorded → usage.rated."""
 
+from bss_clock import clock_admin_router
 from fastapi import FastAPI
 
 from app.api import health, rating
@@ -24,5 +25,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(health.router)
     app.include_router(rating.router, prefix="/rating-api/v1")
+
+    # Admin — scenario clock control (gated by BSS_ALLOW_ADMIN_RESET)
+    app.include_router(clock_admin_router(), prefix="/admin-api/v1")
 
     return app

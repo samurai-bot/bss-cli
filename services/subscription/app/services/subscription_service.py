@@ -10,6 +10,7 @@ from uuid import uuid4
 import aio_pika
 import structlog
 from bss_clients import CatalogClient, CRMClient, InventoryClient, PaymentClient
+from bss_clock import now as clock_now
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.bundle import (
@@ -110,7 +111,7 @@ class SubscriptionService:
             )
 
         # Create subscription
-        now = datetime.now(timezone.utc)
+        now = clock_now()
         period_end = now + timedelta(days=30)
         sub_id = await self._repo.next_id()
 
@@ -342,7 +343,7 @@ class SubscriptionService:
 
         # Record VAS purchase
         vas_id = f"{sub_id}-VAS-{uuid4().hex[:8].upper()}"
-        now = datetime.now(timezone.utc)
+        now = clock_now()
         expiry_hours = vas.get("expiryHours")
         expires_at = now + timedelta(hours=expiry_hours) if expiry_hours else None
         allowance_qty = vas.get("allowanceQuantity", 0)
@@ -468,7 +469,7 @@ class SubscriptionService:
             return await self._repo.get(sub_id)
 
         # Renewal succeeded — reset balances
-        now = datetime.now(timezone.utc)
+        now = clock_now()
         period_end = now + timedelta(days=30)
         allowances = offering.get("bundleAllowance", [])
         specs = [
@@ -529,7 +530,7 @@ class SubscriptionService:
                 context={"state": sub.state},
             )
 
-        now = datetime.now(timezone.utc)
+        now = clock_now()
 
         # Release inventory
         try:

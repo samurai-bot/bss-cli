@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import structlog
+from bss_clock import now as clock_now
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import auth_context
@@ -58,7 +59,7 @@ class CustomerService:
             await customer_policies.check_email_unique(email, self._customer_repo)
 
         # --- Create aggregate ---
-        now = datetime.now(timezone.utc)
+        now = clock_now()
         party_id = _next_id("PTY")
         customer_id = _next_id("CUST")
 
@@ -184,7 +185,7 @@ class CustomerService:
                 channel=ctx.channel,
                 direction="inbound",
                 summary=f"Customer updated: {', '.join(updates.keys())}",
-                occurred_at=datetime.now(timezone.utc),
+                occurred_at=clock_now(),
                 tenant_id=ctx.tenant,
             )
         )
@@ -212,7 +213,7 @@ class CustomerService:
             medium_type=medium_type,
             value=value,
             is_primary=is_primary,
-            valid_from=datetime.now(timezone.utc),
+            valid_from=clock_now(),
             tenant_id=ctx.tenant,
         )
         await self._customer_repo.create_contact_medium(cm)
@@ -231,7 +232,7 @@ class CustomerService:
                 channel=ctx.channel,
                 direction="inbound",
                 summary=f"Contact medium added: {medium_type}",
-                occurred_at=datetime.now(timezone.utc),
+                occurred_at=clock_now(),
                 tenant_id=ctx.tenant,
             )
         )

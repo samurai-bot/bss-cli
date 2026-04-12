@@ -1,17 +1,12 @@
 [project]
-name = "bss-admin"
+name = "bss-clock"
 version = "0.1.0"
 requires-python = ">=3.12"
-description = "Shared admin-api router factory — operational data reset, gated by env flag."
+description = "Process-local scenario clock — wall-clock default, freeze/advance for scenarios."
 dependencies = [
     "fastapi>=0.110",
-    "sqlalchemy>=2.0",
     "structlog>=24.0",
-    "bss-clock",
 ]
-
-[tool.uv.sources]
-bss-clock = { workspace = true }
 
 [dependency-groups]
 dev = [

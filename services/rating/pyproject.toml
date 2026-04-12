@@ -10,6 +10,7 @@ dependencies = [
     "aio-pika>=9.0",
     "bss-models",
     "bss-clients",
+    "bss-clock",
 ]
 
 [dependency-groups]
@@ -30,6 +31,7 @@ packages = ["app"]
 [tool.uv.sources]
 bss-models = { workspace = true }
 bss-clients = { workspace = true }
+bss-clock = { workspace = true }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

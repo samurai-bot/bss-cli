@@ -22,6 +22,7 @@ from typing import Literal
 from uuid import uuid4
 
 import structlog
+from bss_clock import now as clock_now
 from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import text
 
@@ -94,7 +95,7 @@ def admin_router(
 
         session_factory = request.app.state.session_factory
         per_schema: list[dict] = []
-        started_at = datetime.now(timezone.utc)
+        started_at = clock_now()
 
         async with session_factory() as session:
             async with session.begin():

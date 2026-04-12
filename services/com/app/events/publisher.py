@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import aio_pika
 import structlog
+from bss_clock import now as clock_now
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bss_models.audit import DomainEvent
@@ -32,7 +33,7 @@ async def publish(
         event_type=event_type,
         aggregate_type=aggregate_type,
         aggregate_id=aggregate_id,
-        occurred_at=datetime.now(timezone.utc),
+        occurred_at=clock_now(),
         actor=ctx.actor,
         channel=ctx.channel,
         tenant_id=ctx.tenant,

@@ -1,4 +1,4 @@
-.PHONY: help up up-all up-minimal up-core down build test fmt lint migrate seed reset-db
+.PHONY: help up up-all up-minimal up-core down build test fmt lint migrate seed reset-db check-clock
 
 help:
 	@echo "  up          — 10 BSS services (BYOI Postgres/RabbitMQ)"
@@ -31,12 +31,27 @@ build:
 
 test:
 	@failed=0; \
-	for dir in packages/bss-clients packages/bss-admin services/catalog services/crm services/payment services/subscription services/com services/som services/provisioning-sim services/mediation services/rating orchestrator cli; do \
+	for dir in packages/bss-clients packages/bss-admin packages/bss-clock services/catalog services/crm services/payment services/subscription services/com services/som services/provisioning-sim services/mediation services/rating orchestrator cli; do \
 		printf "\n══ $$dir ══\n"; \
 		PYTHONPATH=$$dir:$$PYTHONPATH uv run pytest $$dir/tests/ -v -m "not integration" || failed=1; \
 	done; \
 	if [ $$failed -eq 1 ]; then printf "\n✗ Some suites failed\n"; exit 1; \
 	else printf "\n✓ All suites passed\n"; fi
+
+check-clock:
+	@# Every business-logic site must route through bss_clock.now().
+	@# Tests, CLI, and the bss-clock package itself are allowed to call datetime.now directly.
+	@hits=$$(grep -rnE "datetime\.(utcnow|now)" --include="*.py" services/ packages/ orchestrator/ 2>/dev/null \
+		| grep -v "packages/bss-clock/" \
+		| grep -v "/tests/" \
+		| grep -v "# noqa: bss-clock" \
+		|| true); \
+	if [ -n "$$hits" ]; then \
+		echo "✗ business logic must import clock_now from bss_clock:"; \
+		echo "$$hits"; \
+		exit 1; \
+	fi; \
+	echo "✓ all datetime.now sites route through bss_clock"
 
 fmt:
 	uv run ruff format .

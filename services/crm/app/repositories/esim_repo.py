@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 
+from bss_clock import now as clock_now
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -50,7 +51,7 @@ class EsimRepository:
         iccid = result.scalar_one_or_none()
         if not iccid:
             return None
-        now = datetime.now(timezone.utc)
+        now = clock_now()
         await self._s.execute(
             text("""
                 UPDATE inventory.esim_profile
@@ -68,7 +69,7 @@ class EsimRepository:
         if not row:
             return None
         row.profile_state = new_state
-        now = datetime.now(timezone.utc)
+        now = clock_now()
         if new_state == "downloaded":
             row.downloaded_at = now
         elif new_state == "activated":

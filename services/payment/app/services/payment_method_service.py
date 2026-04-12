@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 import structlog
 from bss_clients import CRMClient
+from bss_clock import now as clock_now
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import auth_context
@@ -54,7 +55,7 @@ class PaymentMethodService:
 
         # --- Create ---
         pm_id = await self._pm_repo.next_id()
-        now = datetime.now(timezone.utc)
+        now = clock_now()
 
         # First method for a customer becomes the default
         existing_count = await self._pm_repo.count_active_for_customer(customer_id)

@@ -10,6 +10,7 @@ dependencies = [
     "bss-models",
     "bss-clients",
     "bss-admin",
+    "bss-clock",
     "asyncpg>=0.29",
     "sqlalchemy[asyncio]>=2.0",
 ]
@@ -33,3 +34,4 @@ packages = ["app"]
 bss-models = { workspace = true }
 bss-clients = { workspace = true }
 bss-admin = { workspace = true }
+bss-clock = { workspace = true }
