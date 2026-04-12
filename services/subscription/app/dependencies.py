@@ -12,6 +12,7 @@ from bss_clients import (
 from fastapi import Depends, FastAPI, Request
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.events.consumer import setup_consumer
 from app.repositories.subscription_repo import SubscriptionRepository
 from app.repositories.vas_repo import VasPurchaseRepository
 from app.services.subscription_service import SubscriptionService
@@ -25,6 +26,8 @@ async def lifespan(app: FastAPI):
     engine = create_async_engine(settings.db_url, pool_size=5, max_overflow=5)
     app.state.engine = engine
     app.state.session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    app.state.mq_exchange = None
+    app.state.mq_connection = None
     app.state.crm_client = CRMClient(
         base_url=settings.crm_url, auth_provider=NoAuthProvider()
     )
@@ -37,9 +40,22 @@ async def lifespan(app: FastAPI):
     app.state.inventory_client = InventoryClient(
         base_url=settings.crm_url, auth_provider=NoAuthProvider()
     )
+
+    try:
+        await setup_consumer(app)
+    except Exception:
+        log.warning("mq.consumer.setup_failed", exc_info=True)
+
     log.info("service.starting", service=settings.service_name)
     yield
     log.info("service.stopping", service=settings.service_name)
+
+    if app.state.mq_connection:
+        try:
+            await app.state.mq_connection.close()
+        except Exception:
+            log.warning("mq.connection.close_failed", exc_info=True)
+
     await app.state.crm_client.close()
     await app.state.payment_client.close()
     await app.state.catalog_client.close()

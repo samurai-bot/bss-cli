@@ -5,7 +5,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.dependencies import get_subscription_service
 from app.schemas.subscription import (
     BundleBalanceResponse,
-    ConsumeForTestRequest,
     SubscriptionCreateRequest,
     SubscriptionResponse,
     VasPurchaseRequest,

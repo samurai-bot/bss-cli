@@ -27,6 +27,7 @@ These are things BSS-CLI deliberately does not do, and the channel layer or exte
 - **Network elements.** HLR/HSS, PCRF, OCS, SM-DP+ — simulated in v0.1, real NE adapters are an integration concern.
 - **Physical SIM.** eSIM-only. No ICCID logistics, no warehousing, no courier integration.
 - **CDR collection from RAN.** Mediation accepts already-parsed CDRs via API. Real CDR collection from network probes is out of scope.
+- **Online Charging System (OCS).** Real-time credit authorization on Diameter Gy/Ro (PCEF quota grant, quota reservation, `Final-Unit-Indication`) is abstracted *outside* BSS-CLI. Our Mediation service is **TMF635 online mediation** — it receives one usage event at a time, enforces block-at-edge synchronously, and drives balance decrement via events. It is NOT a batch rating/mediation pipeline (no CDR file ingest, no hourly aggregation, no rerating windows), and it is NOT an OCS (no Diameter, no quota reservation protocol with the packet core). The real OCS — if one is ever wired in — lives on the network side; BSS-CLI is downstream of its decisions.
 - **Tax calculation.** v0.1 uses SGD inclusive pricing. Real tax engines (Vertex, Avalara) are a post-v0.1 integration.
 - **Regulatory reporting.** IMDA monthly reports, MCMC retention, etc. — extraction jobs against `audit.domain_event`, not built into services.
 

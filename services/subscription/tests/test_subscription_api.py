@@ -147,7 +147,7 @@ async def test_get_balance(client):
 
 
 @pytest.mark.asyncio
-async def test_consume_for_test(client):
+async def test_handle_usage_rated_decrements_balance(client, simulate_usage):
     create_resp = await client.post(
         "/subscription-api/v1/subscription",
         json={
@@ -160,19 +160,15 @@ async def test_consume_for_test(client):
     )
     sub_id = create_resp.json()["id"]
 
-    resp = await client.post(
-        f"/subscription-api/v1/subscription/{sub_id}/consume-for-test",
-        json={"allowanceType": "data", "quantity": 1000},
-    )
-    assert resp.status_code == 200
-    # Check balance decremented
+    await simulate_usage(sub_id, "data", 1000)
+
     bal_resp = await client.get(f"/subscription-api/v1/subscription/{sub_id}/balance")
     data_bal = next(b for b in bal_resp.json() if b["allowanceType"] == "data")
     assert data_bal["consumed"] == 1000
 
 
 @pytest.mark.asyncio
-async def test_consume_until_blocked(client):
+async def test_handle_usage_rated_exhausts_and_blocks(client, simulate_usage):
     create_resp = await client.post(
         "/subscription-api/v1/subscription",
         json={
@@ -186,12 +182,10 @@ async def test_consume_until_blocked(client):
     sub_id = create_resp.json()["id"]
 
     # Exhaust data (30720 MB)
-    resp = await client.post(
-        f"/subscription-api/v1/subscription/{sub_id}/consume-for-test",
-        json={"allowanceType": "data", "quantity": 31000},
-    )
-    assert resp.status_code == 200
-    assert resp.json()["state"] == "blocked"
+    await simulate_usage(sub_id, "data", 31000)
+
+    get_resp = await client.get(f"/subscription-api/v1/subscription/{sub_id}")
+    assert get_resp.json()["state"] == "blocked"
 
 
 @pytest.mark.asyncio

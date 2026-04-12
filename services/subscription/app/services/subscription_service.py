@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 
+import aio_pika
 import structlog
 from bss_clients import CatalogClient, CRMClient, InventoryClient, PaymentClient
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -192,42 +193,62 @@ class SubscriptionService:
     async def get_balances(self, sub_id: str) -> list[BundleBalance]:
         return await self._repo.get_balances(sub_id)
 
-    async def consume_for_test(
-        self, sub_id: str, allowance_type: str, quantity: int
-    ) -> Subscription:
-        """Test-only: simulate usage decrement. Gated by BSS_ENABLE_TEST_ENDPOINTS."""
-        sub = await self._repo.get(sub_id)
+    async def handle_usage_rated(
+        self,
+        *,
+        subscription_id: str,
+        allowance_type: str,
+        consumed_quantity: int,
+        usage_event_id: str,
+        exchange: aio_pika.abc.AbstractExchange | None = None,
+    ) -> None:
+        """Process a `usage.rated` event.
+
+        Concurrency: pessimistic lock via `SELECT ... FOR UPDATE` on the
+        balance row so concurrent events for the same (subscription,
+        allowance) serialize. See DECISIONS.md Phase 8 for why Option A
+        was picked over optimistic locking or MQ partitioning.
+        """
+        sub = await self._repo.get(subscription_id)
         if not sub:
-            raise PolicyViolation(
-                rule="subscription.not_found",
-                message=f"Subscription {sub_id} not found",
-                context={"subscription_id": sub_id},
+            log.warning(
+                "usage.rated.subscription_not_found",
+                subscription_id=subscription_id,
+                usage_event_id=usage_event_id,
             )
+            return
 
-        balances = await self._repo.get_balances(sub_id)
-        target = next((b for b in balances if b.allowance_type == allowance_type), None)
-        if not target:
-            raise PolicyViolation(
-                rule="subscription.consume.invalid_allowance_type",
-                message=f"No {allowance_type} allowance for {sub_id}",
-                context={"allowance_type": allowance_type},
+        # Belt-and-braces: Mediation rejects at ingress, but replays / races
+        # can still deliver events for a non-active subscription. Drop them.
+        if sub.state != "active":
+            log.warning(
+                "usage.rated.subscription_not_active",
+                subscription_id=subscription_id,
+                state=sub.state,
+                usage_event_id=usage_event_id,
             )
+            return
 
-        # Use pure function
+        target = await self._repo.get_balance_for_update(subscription_id, allowance_type)
+        if target is None:
+            log.warning(
+                "usage.rated.allowance_not_on_subscription",
+                subscription_id=subscription_id,
+                allowance_type=allowance_type,
+            )
+            return
+
         snap = BalanceSnapshot(
             allowance_type=target.allowance_type,
             total=target.total,
             consumed=target.consumed,
             unit=target.unit,
         )
-        result = consume(snap, quantity)
-
-        # Write back
+        result = consume(snap, consumed_quantity)
         target.consumed = result.consumed
         await self._repo.update_balance(target)
 
-        # Check exhaustion
-        all_balances = await self._repo.get_balances(sub_id)
+        all_balances = await self._repo.get_balances(subscription_id)
         snapshots = [
             BalanceSnapshot(
                 allowance_type=b.allowance_type, total=b.total,
@@ -236,30 +257,41 @@ class SubscriptionService:
             for b in all_balances
         ]
 
-        if is_exhausted(snapshots) and sub.state == "active":
+        if is_exhausted(snapshots):
             await publisher.publish(
                 self._session,
                 event_type="subscription.exhausted",
                 aggregate_type="subscription",
-                aggregate_id=sub_id,
+                aggregate_id=subscription_id,
                 payload={
-                    "subscriptionId": sub_id,
+                    "subscriptionId": subscription_id,
                     "allowanceType": allowance_type,
                     "consumed": result.consumed,
                     "total": result.total,
+                    "triggeringUsageEventId": usage_event_id,
                 },
+                exchange=exchange,
             )
             await self._transition(sub, "exhaust", reason="primary_allowance_exhausted")
             await publisher.publish(
                 self._session,
                 event_type="subscription.blocked",
                 aggregate_type="subscription",
-                aggregate_id=sub_id,
-                payload={"subscriptionId": sub_id, "reason": "exhausted"},
+                aggregate_id=subscription_id,
+                payload={"subscriptionId": subscription_id, "reason": "exhausted"},
+                exchange=exchange,
             )
 
         await self._session.commit()
-        return await self._repo.get(sub_id)
+        log.info(
+            "usage.rated.applied",
+            subscription_id=subscription_id,
+            allowance_type=allowance_type,
+            consumed_quantity=consumed_quantity,
+            usage_event_id=usage_event_id,
+            new_consumed=result.consumed,
+            final_state=sub.state,
+        )
 
     async def purchase_vas(
         self, sub_id: str, vas_offering_id: str

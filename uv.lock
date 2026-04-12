@@ -722,18 +722,44 @@ name = "mediation"
 version = "0.1.0"
 source = { editable = "services/mediation" }
 dependencies = [
+    { name = "aio-pika" },
+    { name = "asyncpg" },
+    { name = "bss-clients" },
+    { name = "bss-models" },
     { name = "fastapi" },
     { name = "pydantic-settings" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "structlog" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "httpx" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "respx" },
+]
+
 [package.metadata]
 requires-dist = [
+    { name = "aio-pika", specifier = ">=9.0" },
+    { name = "asyncpg", specifier = ">=0.29" },
+    { name = "bss-clients", editable = "packages/bss-clients" },
+    { name = "bss-models", editable = "packages/bss-models" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "pydantic-settings", specifier = ">=2.0" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
     { name = "structlog", specifier = ">=24.4" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=0.23" },
+    { name = "respx", specifier = ">=0.21" },
 ]
 
 [[package]]
@@ -1232,18 +1258,40 @@ name = "rating"
 version = "0.1.0"
 source = { editable = "services/rating" }
 dependencies = [
+    { name = "aio-pika" },
+    { name = "bss-clients" },
+    { name = "bss-models" },
     { name = "fastapi" },
     { name = "pydantic-settings" },
     { name = "structlog" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "httpx" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "respx" },
+]
+
 [package.metadata]
 requires-dist = [
+    { name = "aio-pika", specifier = ">=9.0" },
+    { name = "bss-clients", editable = "packages/bss-clients" },
+    { name = "bss-models", editable = "packages/bss-models" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "pydantic-settings", specifier = ">=2.0" },
     { name = "structlog", specifier = ">=24.4" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=0.23" },
+    { name = "respx", specifier = ">=0.21" },
 ]
 
 [[package]]
@@ -1399,6 +1447,7 @@ name = "subscription"
 version = "0.1.0"
 source = { editable = "services/subscription" }
 dependencies = [
+    { name = "aio-pika" },
     { name = "asyncpg" },
     { name = "bss-clients" },
     { name = "bss-models" },
@@ -1421,6 +1470,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aio-pika", specifier = ">=9.0" },
     { name = "asyncpg", specifier = ">=0.29" },
     { name = "bss-clients", editable = "packages/bss-clients" },
     { name = "bss-models", editable = "packages/bss-models" },

@@ -83,5 +83,24 @@ class SubscriptionRepository:
         result = await self._s.execute(stmt)
         return list(result.scalars().all())
 
+    async def get_balance_for_update(
+        self, sub_id: str, allowance_type: str
+    ) -> BundleBalance | None:
+        """SELECT ... FOR UPDATE on the balance row.
+
+        Serializes concurrent decrement attempts per (subscription, allowance).
+        See DECISIONS.md Phase 8 for why Option A was chosen over B/C.
+        """
+        from sqlalchemy import select
+
+        stmt = (
+            select(BundleBalance)
+            .where(BundleBalance.subscription_id == sub_id)
+            .where(BundleBalance.allowance_type == allowance_type)
+            .with_for_update()
+        )
+        result = await self._s.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def update_balance(self, balance: BundleBalance) -> None:
         await self._s.flush()

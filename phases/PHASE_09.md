@@ -131,13 +131,65 @@ orchestrator/
 │   │   ├── usage.py
 │   │   ├── billing.py
 │   │   └── ops.py
-│   ├── llm.py               # LiteLLM config → MiMo v2 Flash
+│   ├── config.py            # BSS_LLM_* env vars via pydantic-settings (+ _REPO_ROOT)
+│   ├── llm.py               # openai.AsyncOpenAI → OpenRouter (OpenAI-compatible)
 │   ├── prompts.py
 │   ├── safety.py            # destructive op gating
 │   └── session.py           # REPL session state
-├── litellm_config.yaml
 └── pyproject.toml
 ```
+
+### 3a. LLM provider — OpenRouter via openai SDK (no LiteLLM)
+
+BSS-CLI uses **OpenRouter directly** via the `openai` SDK rather than LiteLLM. OpenRouter is already a provider aggregator (100+ models exposed through a single OpenAI-compatible endpoint), so adding LiteLLM in front of it would be proxying a proxy for no v0.1 benefit. This decision saves a container (motto #6), removes a moving part, and keeps the orchestrator→model path to one hop.
+
+**Environment variables (in `.env`, 5 vars not 3):**
+
+```bash
+# --- LLM (Phase 9) ---
+BSS_LLM_BASE_URL=https://openrouter.ai/api/v1
+BSS_LLM_MODEL=anthropic/claude-sonnet-4.6
+BSS_LLM_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxxxxxx
+BSS_LLM_HTTP_REFERER=https://github.com/samurai-bot/bss-cli
+BSS_LLM_APP_NAME=bss-cli
+```
+
+The `HTTP-Referer` and `X-Title` headers are OpenRouter-specific attribution headers. They're optional for the API to work but recommended for dashboard visibility.
+
+**Client construction in `orchestrator/bss_orchestrator/llm.py`:**
+
+```python
+from openai import AsyncOpenAI
+from bss_orchestrator.config import settings
+
+
+def get_llm_client() -> AsyncOpenAI:
+    """Construct the OpenRouter-backed OpenAI-compatible client."""
+    return AsyncOpenAI(
+        base_url=settings.BSS_LLM_BASE_URL,
+        api_key=settings.BSS_LLM_API_KEY,
+        default_headers={
+            "HTTP-Referer": settings.BSS_LLM_HTTP_REFERER,
+            "X-Title": settings.BSS_LLM_APP_NAME,
+        },
+    )
+```
+
+LangGraph consumes this via `langchain_openai.ChatOpenAI` constructed with the same `base_url` / `api_key` / `default_headers` params. Model identifier is `settings.BSS_LLM_MODEL` — an OpenRouter-namespaced string like `anthropic/claude-sonnet-4.6`, `openai/gpt-4o-mini`, `deepseek/deepseek-chat`, etc.
+
+**Dev vs hero model split:**
+
+Use a cheap model for development iteration (DeepSeek Chat, Gemini Flash, GPT-4o-mini — typically under a dollar for a full Phase 9 dev session) and swap to Sonnet/Opus for hero scenarios and demo runs. Swap is via `.env` only, no code changes. Because the orchestrator code never hardcodes a model name, this is zero-friction.
+
+**Unit test LLM mocking:**
+
+Unit tests for the graph use a deterministic fake LLM — a hand-rolled class implementing the same async `chat.completions.create()` interface as the OpenAI client. Return canned `ChatCompletion` objects with the tool calls each test needs. Do not hit OpenRouter in CI — too slow, non-deterministic, costs money. One or two smoke tests against the real OpenRouter model are fine, marked `@pytest.mark.integration` and skipped by default — same pattern as Phase 5's `test_payment_crm_integration.py`.
+
+**Why not LiteLLM:**
+
+Considered and rejected. LiteLLM's value propositions are (1) unified provider interface, (2) cost tracking, (3) rate limiting, (4) local mock mode, (5) single config file. OpenRouter already provides #1 and #2 via its own dashboard. #3 and #5 are nice-to-have, not load-bearing for v0.1. #4 is solved by a hand-rolled fake LLM for unit tests. Adding a LiteLLM container would mean an extra ~150 MB RAM, one more port, one more config file, one more thing to debug when something goes wrong. Not worth it for v0.1.
+
+If Phase 11+ wants unified provider config for A/B testing models, or an on-prem demo without internet egress, LiteLLM can be added then — zero code changes required beyond swapping `BSS_LLM_BASE_URL` to point at the LiteLLM proxy. The direct `openai` SDK usage here survives that swap unchanged.
 
 ### 4. Tool implementation pattern — dumb, thin, no retries
 
@@ -367,10 +419,12 @@ Use the `qrcode` Python library with text output mode (`qrcode.QRCode(...).print
 Every CLI command sets the `X-BSS-Channel` header when making HTTP calls through `bss-clients`:
 
 - Direct CLI: `X-BSS-Channel: cli`, `X-BSS-Actor: cli-user`
-- LLM mode: `X-BSS-Channel: llm`, `X-BSS-Actor: llm-mimo-v2-flash`
-- Scenario runner (Phase 10): `X-BSS-Channel: scenario`, `X-BSS-Actor: scenario:<name>`
+- LLM mode: `X-BSS-Channel: llm`, `X-BSS-Actor: llm-<model-slug>` (e.g. `llm-anthropic-claude-sonnet-4.6`)
+- Scenario runner (Phase 10): `X-BSS-Channel: scenario`, `X-BSS-Actor: scenario:<n>`
 
 CRM's interaction auto-logging reads these headers (wired in Phase 4). Phase 9 just ensures the CLI sets them correctly via `bss-clients`' header-propagation hook.
+
+The LLM actor string is derived from `settings.BSS_LLM_MODEL` at startup — slashes replaced with hyphens. This means when you swap from dev model (cheap) to hero model (Sonnet/Opus), the audit trail reflects which model actually performed the actions. Useful for debugging "why did the LLM do X" when model capability matters.
 
 ## Test strategy
 
@@ -390,7 +444,7 @@ Phase 4 lessons apply: httpx-equivalent testing through Typer's `CliRunner`, no 
 
 ### LLM mocking strategy
 
-Unit tests for the graph use `LiteLLM`'s mock mode or a deterministic fake model that returns pre-programmed tool call sequences. Don't hit a real model in CI tests — too slow, non-deterministic, costs money. One or two smoke tests against the real MiMo model are fine, marked `@pytest.mark.integration` and skipped by default.
+Unit tests for the graph use a deterministic fake LLM — a hand-rolled class implementing the `openai.AsyncOpenAI.chat.completions.create()` interface — that returns pre-programmed `ChatCompletion` responses with specific tool calls per test case. Don't hit OpenRouter in CI tests: too slow, non-deterministic, costs money. One or two smoke tests against the real OpenRouter model are fine, marked `@pytest.mark.integration` and skipped by default (same pattern as Phase 5's real-CRM integration test, registered in root `pyproject.toml` `[tool.pytest.ini_options].markers`).
 
 ## Verification checklist
 
@@ -403,7 +457,7 @@ Unit tests for the graph use `LiteLLM`'s mock mode or a deterministic fake model
 - [ ] `bss order show ORD-xxx` renders with SOM decomposition tree (snapshot)
 - [ ] `bss catalog list` renders the 3-column plan comparison (snapshot)
 - [ ] `bss subscription show SUB-xxx --show-esim` renders the eSIM activation card with QR ASCII
-- [ ] `bss ask "create a customer named Ck on plan M with card 4242 4242 4242 4242"` produces the same end-to-end result as direct commands
+- [ ] `bss ask "create a customer named Ck on plan M with card 4242 4242 4242 4242"` produces the same end-to-end result as direct commands (uses real OpenRouter model, marked integration)
 - [ ] `bss ask "show me Ck's bundle"` returns the ASCII render
 - [ ] `bss ask "terminate Ck's subscription"` is blocked with `DESTRUCTIVE_OPERATION_BLOCKED`
 - [ ] `bss ask "terminate Ck's subscription" --allow-destructive` succeeds
@@ -412,7 +466,8 @@ Unit tests for the graph use `LiteLLM`'s mock mode or a deterministic fake model
 - [ ] LLM tool calls log structured JSON to stdout/file
 - [ ] Every CLI action shows up as an interaction in the relevant customer's log (`bss customer show` → recent interactions section populated)
 - [ ] `grep -rn "retry\|backoff" orchestrator/bss_orchestrator/tools/` returns **zero hits** (tools stay dumb)
-- [ ] `make test` — all suites green including CLI and orchestrator
+- [ ] `grep -rn -i "litellm" orchestrator/ cli/ pyproject.toml` returns **zero hits** (no accidental LiteLLM reference in code or deps)
+- [ ] `make test` — all suites green including CLI and orchestrator unit tests
 - [ ] Campaign OS schemas untouched
 
 ## Out of scope
@@ -422,11 +477,20 @@ Unit tests for the graph use `LiteLLM`'s mock mode or a deterministic fake model
 - Tab completion for IDs
 - Color themes
 - Save/load REPL sessions
+- LiteLLM container (rejected — see section 3a)
 - Real model in CI (integration tests only)
 
 ## Session prompt
 
 > Read `CLAUDE.md`, `ARCHITECTURE.md`, `TOOL_SURFACE.md` (this is the source of truth for tools), `DECISIONS.md`, `phases/PHASE_07.md` (end-to-end flow), `phases/PHASE_08.md` (usage pipeline), and `phases/PHASE_09.md`.
+>
+> **LLM provider is OpenRouter via the `openai` SDK directly — NOT LiteLLM.** See section 3a of the phase spec for the rationale. The five `BSS_LLM_*` env vars should already be in `.env`. Verify them before starting the plan:
+>
+> ```bash
+> grep "^BSS_LLM" .env
+> ```
+>
+> Expected output (values redacted): `BSS_LLM_BASE_URL`, `BSS_LLM_MODEL`, `BSS_LLM_API_KEY`, `BSS_LLM_HTTP_REFERER`, `BSS_LLM_APP_NAME`. If any are missing, stop and tell me so I can add them before you continue.
 >
 > Before writing any code, produce a plan that includes:
 >
@@ -440,25 +504,32 @@ Unit tests for the graph use `LiteLLM`'s mock mode or a deterministic fake model
 >
 > 5. **Safety wrapper** — paste the `DESTRUCTIVE_TOOLS` set and the `wrap_destructive` function.
 >
-> 6. **Channel injection mechanism** — confirm `bss-clients` propagates `X-BSS-Channel` and `X-BSS-Actor` from the CLI's `auth_context.current()`. No hardcoded headers in individual tools.
+> 6. **Channel injection mechanism** — confirm `bss-clients` propagates `X-BSS-Channel` and `X-BSS-Actor` from the CLI's `auth_context.current()`. No hardcoded headers in individual tools. Confirm the LLM actor string derives from `settings.BSS_LLM_MODEL` at startup.
 >
-> 7. **LLM mocking strategy** — confirm unit tests use a deterministic fake model, not real MiMo. Integration tests marked `@pytest.mark.integration` and skipped by default.
+> 7. **LLM client construction** — paste the contents of `orchestrator/bss_orchestrator/llm.py` showing `AsyncOpenAI` construction with `base_url`, `api_key`, and `default_headers` for OpenRouter attribution. Confirm no `litellm` import anywhere in the codebase or in `pyproject.toml` deps.
 >
-> 8. **REPL session state** — paste the session object showing how captured IDs persist across turns.
+> 8. **LangGraph model binding** — paste the exact code that constructs the LangGraph `ChatOpenAI` (or equivalent) from `settings.BSS_LLM_MODEL`, `base_url`, `api_key`, `default_headers`. Confirm `settings.BSS_LLM_MODEL` is the only place the model name lives.
 >
-> 9. **Tool dumbness contract** — confirm every tool is a thin async wrapper with no retries, no fallbacks, no business logic. Supervisor handles retries at the graph level. Paste one tool as an example of the canonical shape.
+> 9. **LLM mocking strategy** — confirm unit tests use a deterministic fake client implementing the same async interface as `AsyncOpenAI`, not real OpenRouter. Integration tests marked `@pytest.mark.integration` and skipped by default.
+>
+> 10. **REPL session state** — paste the session object showing how captured IDs persist across turns.
+>
+> 11. **Tool dumbness contract** — confirm every tool is a thin async wrapper with no retries, no fallbacks, no business logic. Supervisor handles retries at the graph level. Paste one tool as an example of the canonical shape.
 >
 > Wait for my approval before writing any code.
 >
 > After I approve, implement in this order:
+>
 > 1. Direct Typer commands (no LLM) — every command works end-to-end
 > 2. Channel injection wire-through via `bss-clients` hook
 > 3. ASCII renderers — subscription first (hero), then customer 360, case, order, catalog, eSIM
 > 4. Orchestrator tools — one file per domain, 1:1 with TOOL_SURFACE.md
 > 5. Safety wrapper + destructive gating
-> 6. LangGraph supervisor + system prompt + few-shot examples
-> 7. REPL with session state
-> 8. Integration tests including LLM path with deterministic fake model
+> 6. `orchestrator/bss_orchestrator/config.py` with `BSS_LLM_*` via pydantic-settings (`_REPO_ROOT` pattern)
+> 7. `orchestrator/bss_orchestrator/llm.py` with `AsyncOpenAI` → OpenRouter
+> 8. LangGraph supervisor + system prompt + few-shot examples
+> 9. REPL with session state
+> 10. Integration tests: unit tests with deterministic fake client, plus one real-OpenRouter smoke test marked `@pytest.mark.integration`
 >
 > Run full verification checklist. Do not commit.
 
@@ -468,8 +539,12 @@ Unit tests for the graph use `LiteLLM`'s mock mode or a deterministic fake model
 
 **Tools stay dumb.** If you catch yourself adding retry logic to a tool, stop. That's supervisor territory. Grep check: `grep -rn "retry\|backoff\|except" orchestrator/bss_orchestrator/tools/` should find only the minimum required error re-raising, no retry loops.
 
+**No LiteLLM.** If Claude Code proposes adding a `litellm_config.yaml` or installing `litellm` as a dep, reject. The decision is documented in section 3a. Use `openai.AsyncOpenAI` directly against OpenRouter's OpenAI-compatible endpoint. LangGraph's `ChatOpenAI` binding works with OpenRouter the same way it works with OpenAI — `base_url` + `api_key` + `default_headers`, nothing more.
+
 **Don't try to make the LLM "smart".** It only needs to be good enough to chain 3-5 tool calls with clean error handling. A dumb-but-reliable orchestrator beats a clever one that fabricates IDs. Catch fabrication early: if the LLM proposes a tool call with an ID that wasn't in any prior tool result, reject the call and loop back with the error.
 
 **Snapshot-test the renderers.** They're easy to break accidentally (someone changes a field name in the TMF schema, the renderer silently renders garbage). Snapshot tests catch drift immediately.
 
 **Channel injection is not optional.** If CLI actions don't show up in CRM's interaction log, the audit trail is broken and the "this customer called support, this agent did X" story fails at the demo. Test explicitly.
+
+**Use a cheap model during Phase 9 dev, switch to the hero model for the final verification run.** DeepSeek Chat, Gemini 2.0 Flash, or GPT-4o-mini will handle orchestrator tool-chaining correctly for a few cents per dev session. Swap to `anthropic/claude-sonnet-4.6` via `.env` for the final `bss ask` verification run and for Phase 10's hero scenarios. The model name never appears in code, only in config.

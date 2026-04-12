@@ -31,13 +31,4 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         prefix="/subscription-api/v1",
     )
 
-    # Test endpoints — conditionally registered
-    if settings.enable_test_endpoints:
-        from app.api import test_endpoints
-
-        app.include_router(
-            test_endpoints.router,
-            prefix="/subscription-api/v1",
-        )
-
     return app

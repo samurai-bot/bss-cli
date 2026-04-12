@@ -139,10 +139,7 @@ def _mock_inventory() -> AsyncMock:
 @pytest_asyncio.fixture
 async def client(settings: Settings, db_engine, db_session: AsyncSession):
     """ASGI test client wired to the rolled-back session."""
-    test_settings = Settings(
-        db_url=settings.db_url,
-        enable_test_endpoints=True,
-    )
+    test_settings = Settings(db_url=settings.db_url)
     app = create_app(test_settings)
     app.state.engine = db_engine
 
@@ -181,3 +178,42 @@ async def mock_clients(client):
         "catalog": app.state.catalog_client,
         "inventory": app.state.inventory_client,
     }
+
+
+@pytest_asyncio.fixture
+async def simulate_usage(client, db_session):
+    """Invoke SubscriptionService.handle_usage_rated directly.
+
+    Replaces the Phase 6 `consume-for-test` HTTP endpoint for unit tests
+    that want to simulate the Rating → Subscription event without wiring
+    RabbitMQ. The real consumer is exercised in integration tests.
+    """
+    from app.repositories.subscription_repo import SubscriptionRepository
+    from app.repositories.vas_repo import VasPurchaseRepository
+    from app.services.subscription_service import SubscriptionService
+
+    app = client._transport.app
+
+    async def _call(
+        sub_id: str,
+        allowance_type: str,
+        quantity: int,
+        usage_event_id: str = "UE-TEST-0001",
+    ) -> None:
+        svc = SubscriptionService(
+            session=db_session,
+            repo=SubscriptionRepository(db_session),
+            vas_repo=VasPurchaseRepository(db_session),
+            crm_client=app.state.crm_client,
+            payment_client=app.state.payment_client,
+            catalog_client=app.state.catalog_client,
+            inventory_client=app.state.inventory_client,
+        )
+        await svc.handle_usage_rated(
+            subscription_id=sub_id,
+            allowance_type=allowance_type,
+            consumed_quantity=quantity,
+            usage_event_id=usage_event_id,
+        )
+
+    return _call

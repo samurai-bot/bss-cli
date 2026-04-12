@@ -39,14 +39,11 @@ async def test_vas_purchase_active(client, mock_clients):
 
 
 @pytest.mark.asyncio
-async def test_vas_purchase_blocked_to_active(client, mock_clients):
+async def test_vas_purchase_blocked_to_active(client, mock_clients, simulate_usage):
     sub_id = await _create_sub(client)
 
     # Exhaust data
-    await client.post(
-        f"/subscription-api/v1/subscription/{sub_id}/consume-for-test",
-        json={"allowanceType": "data", "quantity": 31000},
-    )
+    await simulate_usage(sub_id, "data", 31000)
 
     # Verify blocked
     get_resp = await client.get(f"/subscription-api/v1/subscription/{sub_id}")
