@@ -1,0 +1,132 @@
+name: customer_signup_and_exhaust
+description: |
+  Full happy-path: create customer + COF + KYC, order PLAN_S, simulate usage
+  to exhaustion, verify block-on-exhaust, top up via VAS, verify unblock,
+  verify usage flows again. Every step is a direct tool call — no LLM.
+
+  This is the service-layer regression test: it exercises the order pipeline
+  (COM → SOM → provisioning-sim → subscription activation), the mediation
+  edge (block-on-exhaust), and the VAS top-up path. Runs against a live
+  stack; `setup.reset_operational_data` wipes operational data first so the
+  scenario is idempotent.
+
+tags: [hero, smoke, regression, deterministic]
+
+setup:
+  reset_operational_data: true
+  freeze_clock_at: "2026-04-11T09:00:00+00:00"
+
+variables:
+  customer_email: "ck-{{ run_id }}@bss-cli.local"
+  customer_phone: "+6590001234"
+  plan: PLAN_S
+  vas_top_up: VAS_DATA_1GB
+
+steps:
+  - name: create customer
+    action: customer.create
+    args:
+      name: "Ck Demo"
+      email: "{{ customer_email }}"
+      phone: "{{ customer_phone }}"
+    capture:
+      customer_id: "$.id"
+
+  - name: attest KYC
+    action: customer.attest_kyc
+    args:
+      customer_id: "{{ customer_id }}"
+      provider: myinfo
+      attestation_token: "stub-signed-jwt-{{ run_id }}"
+
+  - name: add card on file
+    action: payment.add_card
+    args:
+      customer_id: "{{ customer_id }}"
+      card_number: "4242424242424242"
+
+  - name: place order
+    action: order.create
+    args:
+      customer_id: "{{ customer_id }}"
+      offering_id: "{{ plan }}"
+    capture:
+      order_id: "$.id"
+
+  - name: wait for order to complete
+    action: order.wait_until
+    args:
+      order_id: "{{ order_id }}"
+      target_state: completed
+      timeout_s: 30
+
+  - name: find the subscription
+    action: subscription.list_for_customer
+    args:
+      customer_id: "{{ customer_id }}"
+    capture:
+      subscription_id: "$[0].id"
+      msisdn: "$[0].msisdn"
+
+  - name: verify subscription is active with full bundle
+    assert:
+      tool: subscription.get
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        state: active
+        balances.data.remaining: 5120
+
+  - name: burn 4 GB of data
+    action: usage.simulate
+    args:
+      msisdn: "{{ msisdn }}"
+      event_type: data
+      quantity: 4096
+      unit: mb
+
+  - name: burn final 1 GB (exhausts bundle)
+    action: usage.simulate
+    args:
+      msisdn: "{{ msisdn }}"
+      event_type: data
+      quantity: 1024
+      unit: mb
+
+  - name: verify subscription is blocked
+    assert:
+      tool: subscription.get
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        state: blocked
+        balances.data.remaining: 0
+      poll:
+        interval_ms: 100
+        timeout_seconds: 5
+
+  - name: top up with 1 GB VAS
+    action: subscription.purchase_vas
+    args:
+      subscription_id: "{{ subscription_id }}"
+      vas_offering_id: "{{ vas_top_up }}"
+
+  - name: verify subscription is active again with non-zero data
+    assert:
+      tool: subscription.get
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        state: active
+        balances.data.remaining: {gt: 0}
+      poll:
+        interval_ms: 100
+        timeout_seconds: 5
+
+  - name: verify usage flows again after top-up
+    action: usage.simulate
+    args:
+      msisdn: "{{ msisdn }}"
+      event_type: data
+      quantity: 100
+      unit: mb
+
+teardown:
+  unfreeze_clock: true

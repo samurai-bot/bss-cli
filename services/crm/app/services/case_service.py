@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 import structlog
+from bss_clock import now as clock_now
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import auth_context
@@ -53,7 +54,7 @@ class CaseService:
 
         await case_policies.check_customer_active(customer_id, self._customer_repo)
 
-        now = datetime.now(timezone.utc)
+        now = clock_now()
         case_id = _next_id("CASE")
         case = Case(
             id=case_id,
@@ -138,13 +139,13 @@ class CaseService:
         case.state = new_state
 
         if new_state == "closed":
-            case.closed_at = datetime.now(timezone.utc)
+            case.closed_at = clock_now()
             # Cancel open tickets on cancel trigger
             if trigger == "cancel":
                 open_tickets = await self._ticket_repo.find_open_by_case(case_id)
                 for ticket in open_tickets:
                     ticket.state = "cancelled"
-                    ticket.closed_at = datetime.now(timezone.utc)
+                    ticket.closed_at = clock_now()
                     await self._ticket_repo.update(ticket)
 
         await self._case_repo.update(case)
@@ -164,7 +165,7 @@ class CaseService:
                 direction="inbound",
                 summary=f"Case {trigger}: {old_state} → {new_state}",
                 related_case_id=case_id,
-                occurred_at=datetime.now(timezone.utc),
+                occurred_at=clock_now(),
                 tenant_id=ctx.tenant,
             )
         )

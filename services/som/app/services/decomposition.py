@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import aio_pika.abc
 
 from bss_clients import InventoryClient
+from bss_clock import now as clock_now
 from bss_models.service_inventory import Service, ServiceOrder, ServiceOrderItem
 
 from app.events.publisher import publish
@@ -158,8 +159,7 @@ async def decompose_order(
     # ── 10. SO: acknowledged → in_progress ─────────────────────────────
     check_service_order_transition(so.state, "in_progress")
     so.state = "in_progress"
-    from datetime import datetime, timezone
-    so.started_at = datetime.now(timezone.utc)
+    so.started_at = clock_now()
     await so_repo.update(so)
 
     await publish(

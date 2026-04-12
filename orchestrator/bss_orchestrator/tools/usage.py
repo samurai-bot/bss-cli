@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from bss_clock import now as clock_now
+
 from ..clients import get_clients
 from ..types import IsoDatetime, Msisdn, SubscriptionId, UsageEventType, UsageUnit
 from ._registry import register
@@ -38,7 +40,7 @@ async def usage_simulate(
         PolicyViolationFromServer: various; the usual recoveries are to check
         subscription state and add VAS if exhausted.
     """
-    now = event_time or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    now = event_time or clock_now().replace(microsecond=0).isoformat()
     return await get_clients().mediation.submit_usage(
         msisdn=msisdn,
         event_type=event_type,

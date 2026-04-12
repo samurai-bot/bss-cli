@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 import structlog
+from bss_clock import now as clock_now
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import auth_context
@@ -59,7 +60,7 @@ class PaymentService:
 
         # --- Execute charge via mock gateway ---
         attempt_id = await self._attempt_repo.next_id()
-        now = datetime.now(timezone.utc)
+        now = clock_now()
 
         charge_result = await mock_tokenizer.charge(
             method.token, amount, currency

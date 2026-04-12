@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 
+from bss_clock import now as clock_now
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -55,7 +56,7 @@ class MsisdnRepository:
                 SET status = 'reserved', reserved_at = :now, updated_at = :now
                 WHERE msisdn = :m
             """),
-            {"m": msisdn, "now": datetime.now(timezone.utc)},
+            {"m": msisdn, "now": clock_now()},
         )
         # Re-fetch as ORM object
         return await self.get(msisdn)
@@ -80,7 +81,7 @@ class MsisdnRepository:
                 SET status = 'reserved', reserved_at = :now, updated_at = :now
                 WHERE msisdn = :m
             """),
-            {"m": msisdn, "now": datetime.now(timezone.utc)},
+            {"m": msisdn, "now": clock_now()},
         )
         return await self.get(msisdn)
 

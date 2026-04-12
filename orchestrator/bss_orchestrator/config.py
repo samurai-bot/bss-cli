@@ -38,8 +38,9 @@ class Settings(BaseSettings):
     som_url: str = "http://localhost:8005"
     subscription_url: str = "http://localhost:8006"
     mediation_url: str = "http://localhost:8007"
-    provisioning_url: str = "http://localhost:8008"
+    rating_url: str = "http://localhost:8008"
     billing_url: str = "http://localhost:8009"
+    provisioning_url: str = "http://localhost:8010"
 
     # ── Misc ────────────────────────────────────────────────────────────
     env: str = "development"

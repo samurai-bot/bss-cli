@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 import aio_pika
 import structlog
 from bss_clients import SubscriptionClient
+from bss_clock import now as clock_now
 from bss_models.mediation import UsageEvent
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -167,7 +168,7 @@ class MediationService:
             "source": source,
             "rawCdrRef": raw_cdr_ref,
             "reason": reason,
-            "rejectedAt": datetime.now(timezone.utc).isoformat(),
+            "rejectedAt": clock_now().isoformat(),
         }
         await publisher.publish(
             self._session,

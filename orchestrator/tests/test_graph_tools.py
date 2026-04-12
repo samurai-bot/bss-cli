@@ -10,20 +10,29 @@ from __future__ import annotations
 
 import pytest
 
-from bss_orchestrator.graph import build_tools
+from bss_orchestrator.graph import _LLM_HIDDEN_TOOLS, build_tools
 from bss_orchestrator.safety import DESTRUCTIVE_TOOLS
 from bss_orchestrator.tools import TOOL_REGISTRY
 
 
 def test_build_tools_matches_registry_size() -> None:
     tools = build_tools(allow_destructive=False)
-    assert len(tools) == len(TOOL_REGISTRY)
+    # Every registered tool except those explicitly hidden from the LLM
+    # (scenario-scaffolding tools like ``usage.simulate``).
+    assert len(tools) == len(TOOL_REGISTRY) - len(_LLM_HIDDEN_TOOLS)
 
 
 def test_build_tools_preserves_dotted_names() -> None:
     tools = build_tools(allow_destructive=False)
     names = {t.name for t in tools}
-    assert names == set(TOOL_REGISTRY)
+    assert names == set(TOOL_REGISTRY) - _LLM_HIDDEN_TOOLS
+
+
+def test_hidden_tools_are_actually_registered() -> None:
+    # If a name lands in _LLM_HIDDEN_TOOLS but not the registry, the hide
+    # filter silently no-ops and a future regression is invisible.
+    missing = _LLM_HIDDEN_TOOLS - set(TOOL_REGISTRY)
+    assert not missing, f"hidden-from-LLM tools are not registered: {missing}"
 
 
 def test_build_tools_descriptions_come_from_docstrings() -> None:

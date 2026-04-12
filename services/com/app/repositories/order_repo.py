@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 
+from bss_clock import now as clock_now
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -66,7 +67,7 @@ class OrderRepository:
             to_state=to_state,
             changed_by=ctx.actor,
             reason=reason,
-            event_time=datetime.now(timezone.utc),
+            event_time=clock_now(),
         )
         self._s.add(history)
 

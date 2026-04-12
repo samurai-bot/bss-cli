@@ -8,13 +8,16 @@ import typer
 from rich import print as rprint
 
 from .commands import (
+    admin as admin_cmd,
     case as case_cmd,
     catalog as catalog_cmd,
     clock as clock_cmd,
     customer as customer_cmd,
+    inventory as inventory_cmd,
     order as order_cmd,
     payment as payment_cmd,
     prov as prov_cmd,
+    scenario as scenario_cmd,
     som as som_cmd,
     subscription as subscription_cmd,
     ticket as ticket_cmd,
@@ -39,8 +42,11 @@ app.add_typer(payment_cmd.app, name="payment")
 app.add_typer(usage_cmd.app, name="usage")
 app.add_typer(prov_cmd.app, name="prov")
 app.add_typer(som_cmd.app, name="som")
+app.add_typer(inventory_cmd.app, name="inventory")
 app.add_typer(clock_cmd.app, name="clock")
 app.add_typer(trace_cmd.app, name="trace")
+app.add_typer(admin_cmd.app, name="admin")
+app.add_typer(scenario_cmd.app, name="scenario")
 
 
 # `bss ask "..."` is a top-level command, not a subgroup.

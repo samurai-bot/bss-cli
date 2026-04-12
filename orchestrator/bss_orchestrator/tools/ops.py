@@ -12,6 +12,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from bss_clock import now as clock_now
+
 from ..clients import get_clients
 from ..types import (
     AgentState,
@@ -69,7 +71,7 @@ async def clock_now() -> dict[str, Any]:
     Raises:
         (none)
     """
-    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    now = clock_now().replace(microsecond=0).isoformat()
     return {"now": now, "source": "system"}
 
 

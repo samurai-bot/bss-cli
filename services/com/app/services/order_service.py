@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 
 import structlog
+from bss_clock import now as clock_now
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bss_models.order_mgmt import OrderItem, ProductOrder
@@ -62,7 +63,7 @@ class OrderService:
             id=order_id,
             customer_id=customer_id,
             state="acknowledged",
-            order_date=datetime.now(timezone.utc),
+            order_date=clock_now(),
             msisdn_preference=msisdn_preference,
             notes=notes,
         )
@@ -154,7 +155,7 @@ class OrderService:
 
         old_state = order.state
         order.state = "cancelled"
-        order.completed_date = datetime.now(timezone.utc)
+        order.completed_date = clock_now()
         await self._repo.add_state_history(order_id, old_state, "cancelled", reason="cancelled by user")
         await self._repo.update(order)
 
@@ -210,7 +211,7 @@ class OrderService:
 
         check_order_transition(order.state, "completed")
         order.state = "completed"
-        order.completed_date = datetime.now(timezone.utc)
+        order.completed_date = clock_now()
         await self._repo.add_state_history(
             order.id, "in_progress", "completed", reason="service order completed"
         )
@@ -248,7 +249,7 @@ class OrderService:
 
         check_order_transition(order.state, "failed")
         order.state = "failed"
-        order.completed_date = datetime.now(timezone.utc)
+        order.completed_date = clock_now()
         if order.items:
             order.items[0].state = "failed"
 

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 import aio_pika.abc
 import structlog
+from bss_clock import now as clock_now
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -97,7 +98,7 @@ class SOMService:
             return
 
         # All tasks done — activate everything
-        now = datetime.now(timezone.utc)
+        now = clock_now()
 
         # CFS → activated
         check_service_transition(cfs.state, "activated")
@@ -208,7 +209,7 @@ class SOMService:
         if so:
             check_service_order_transition(so.state, "failed")
             so.state = "failed"
-            so.completed_at = datetime.now(timezone.utc)
+            so.completed_at = clock_now()
             await self._so_repo.update(so)
 
         # Publish service_order.failed

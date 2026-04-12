@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 import structlog
+from bss_clock import now as clock_now
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import auth_context
@@ -67,7 +68,7 @@ class TicketService:
                     context={"case_id": case_id},
                 )
 
-        now = datetime.now(timezone.utc)
+        now = clock_now()
         ticket_id = _next_id("TKT")
         ticket = Ticket(
             id=ticket_id,
@@ -178,7 +179,7 @@ class TicketService:
             resolution_notes = kwargs.get("resolution_notes")
             ticket_policies.check_resolution_notes(resolution_notes)
             ticket.resolution_notes = resolution_notes
-            ticket.resolved_at = datetime.now(timezone.utc)
+            ticket.resolved_at = clock_now()
 
         # Apply
         old_state = ticket.state
@@ -186,7 +187,7 @@ class TicketService:
         ticket.state = new_state
 
         if new_state in ("closed", "cancelled"):
-            ticket.closed_at = datetime.now(timezone.utc)
+            ticket.closed_at = clock_now()
 
         await self._ticket_repo.update(ticket)
 
@@ -217,7 +218,7 @@ class TicketService:
                 summary=f"Ticket {trigger}: {old_state} → {new_state}",
                 related_ticket_id=ticket_id,
                 related_case_id=ticket.case_id,
-                occurred_at=datetime.now(timezone.utc),
+                occurred_at=clock_now(),
                 tenant_id=ctx.tenant,
             )
         )

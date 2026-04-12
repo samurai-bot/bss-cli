@@ -15,6 +15,7 @@ from uuid import uuid4
 
 import aio_pika
 import structlog
+from bss_clock import now as clock_now
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import auth_context
@@ -66,7 +67,7 @@ async def process_task(
     # Stuck fault — never auto-retry
     if fault and fault.fault_type == "stuck" and _should_fire(fault.probability):
         task.state = "stuck"
-        task.started_at = datetime.now(timezone.utc)
+        task.started_at = clock_now()
         await _audit_and_publish(
             session, exchange, "provisioning.task.stuck", task,
             service_order_id, commercial_order_id,
@@ -79,7 +80,7 @@ async def process_task(
     while task.attempts < task.max_attempts:
         task.attempts += 1
         task.state = "running"
-        task.started_at = task.started_at or datetime.now(timezone.utc)
+        task.started_at = task.started_at or clock_now()
         await session.flush()
 
         # fail_always
@@ -121,7 +122,7 @@ async def process_task(
 
         # Success
         task.state = "completed"
-        task.completed_at = datetime.now(timezone.utc)
+        task.completed_at = clock_now()
         await _audit_and_publish(
             session, exchange, "provisioning.task.completed", task,
             service_order_id, commercial_order_id,
@@ -177,7 +178,7 @@ async def _audit_and_publish(
         event_type=event_type,
         aggregate_type="provisioning_task",
         aggregate_id=task.id,
-        occurred_at=datetime.now(timezone.utc),
+        occurred_at=clock_now(),
         actor=ctx.actor,
         channel=ctx.channel,
         tenant_id=ctx.tenant,

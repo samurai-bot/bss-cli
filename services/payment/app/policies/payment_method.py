@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from bss_clients import CRMClient, NotFound
+from bss_clock import now as clock_now
 
 from .base import PolicyViolation, policy
 
@@ -52,7 +53,7 @@ def check_customer_active_or_pending(customer: dict) -> None:
 @policy("payment_method.add.card_not_expired")
 def check_card_not_expired(exp_month: int, exp_year: int) -> None:
     """Card must not be expired."""
-    now = datetime.now(timezone.utc)
+    now = clock_now()
     if exp_year < now.year or (exp_year == now.year and exp_month < now.month):
         raise PolicyViolation(
             rule="payment_method.add.card_not_expired",

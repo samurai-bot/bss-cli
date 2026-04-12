@@ -79,23 +79,32 @@ class PaymentClient(BSSClient):
         card_token: str,
         last4: str,
         brand: str,
-        exp_month: int | None = None,
-        exp_year: int | None = None,
+        exp_month: int = 12,
+        exp_year: int = 2030,
+        tokenization_provider: str = "sandbox",
+        country: str | None = "SG",
     ) -> dict[str, Any]:
         """POST /tmf-api/paymentMethodManagement/v4/paymentMethod.
 
-        Server is pre-tokenized (no PAN on the wire).
+        Server is pre-tokenized (no PAN on the wire). ``card_token`` is the
+        opaque provider token we pass through as ``providerToken``; real
+        channels would pass a Stripe/Adyen token with the matching provider.
         """
+        card_summary: dict[str, Any] = {
+            "brand": brand,
+            "last4": last4,
+            "expMonth": exp_month,
+            "expYear": exp_year,
+        }
+        if country is not None:
+            card_summary["country"] = country
         body: dict[str, Any] = {
             "customerId": customer_id,
-            "cardToken": card_token,
-            "last4": last4,
-            "brand": brand,
+            "type": "card",
+            "tokenizationProvider": tokenization_provider,
+            "providerToken": card_token,
+            "cardSummary": card_summary,
         }
-        if exp_month is not None:
-            body["expMonth"] = exp_month
-        if exp_year is not None:
-            body["expYear"] = exp_year
         resp = await self._request(
             "POST",
             "/tmf-api/paymentMethodManagement/v4/paymentMethod",

@@ -238,29 +238,27 @@ async def customer_get_kyc_status(customer_id: CustomerId) -> dict[str, Any]:
 @register("interaction.log")
 async def interaction_log(
     customer_id: CustomerId,
-    channel: str,
-    action: str,
-    note: str | None = None,
+    summary: str,
+    body: str | None = None,
 ) -> dict[str, Any]:
-    """Explicitly log an interaction. RARELY NEEDED — every write tool is
-    auto-logged by CRM's decorator (keyed on the ``X-BSS-Actor`` /
-    ``X-BSS-Channel`` headers). Only call this when recording something
-    that didn't go through a write tool (e.g. "customer called in").
+    """Log a customer interaction note (TMF683). Call this ONCE when wrapping
+    up a troubleshooting conversation so the next CSR has context.
 
     Args:
         customer_id: Customer ID in CUST-NNN format.
-        channel: Interaction channel (e.g. ``"phone"``, ``"cli"``, ``"llm"``).
-        action: Short action verb (e.g. ``"inbound_call"``, ``"chat_message"``).
-        note: Optional free text.
+        summary: One-line summary of the interaction (required). Example:
+            ``"Purchased VAS_DATA_1GB — subscription unblocked."``
+        body: Optional longer free text (diagnosis steps, cited IDs, etc.).
 
     Returns:
-        The created interaction dict.
+        The created interaction dict. ``channel`` is filled from the
+        request context server-side, so callers don't pass it.
 
     Raises:
         (none expected)
     """
     return await get_clients().crm.log_interaction(
-        customer_id=customer_id, channel=channel, action=action, note=note
+        customer_id=customer_id, summary=summary, body_text=body
     )
 
 

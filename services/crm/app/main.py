@@ -1,8 +1,10 @@
 """CRM service — FastAPI app factory."""
 
+from bss_clock import clock_admin_router
+from bss_events import audit_events_router
 from fastapi import FastAPI
 
-from app.api import health
+from app.api import admin, health
 from app.api.crm import agent, case, kyc
 from app.api.inventory import esim, msisdn
 from app.api.tmf import customer, interaction, ticket
@@ -60,5 +62,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # Inventory — eSIM
     app.include_router(esim.router, prefix="/inventory-api/v1")
+
+    # Admin — operational-data reset (gated by BSS_ALLOW_ADMIN_RESET)
+    app.include_router(admin.router, prefix="/admin-api/v1")
+
+    # Admin — scenario clock control (gated by BSS_ALLOW_ADMIN_RESET)
+    app.include_router(clock_admin_router(), prefix="/admin-api/v1")
+
+    # Audit — read-only view onto audit.domain_event
+    app.include_router(audit_events_router(), prefix="/audit-api/v1")
 
     return app

@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 
+from bss_clock import now as clock_now
 from fastapi import APIRouter, Depends
 
 from app import auth_context
@@ -41,7 +42,7 @@ async def create_interaction(
         agent_id=body.agent_id,
         related_case_id=body.related_case_id,
         related_ticket_id=body.related_ticket_id,
-        occurred_at=datetime.now(timezone.utc),
+        occurred_at=clock_now(),
         tenant_id=ctx.tenant,
     )
     await repo.create(interaction)

@@ -5,9 +5,11 @@ requires-python = ">=3.12"
 [manifest]
 members = [
     "billing",
+    "bss-admin",
     "bss-cli",
     "bss-cli-workspace",
     "bss-clients",
+    "bss-clock",
     "bss-events",
     "bss-models",
     "bss-orchestrator",
@@ -154,14 +156,50 @@ requires-dist = [
 ]
 
 [[package]]
+name = "bss-admin"
+version = "0.1.0"
+source = { editable = "packages/bss-admin" }
+dependencies = [
+    { name = "bss-clock" },
+    { name = "fastapi" },
+    { name = "sqlalchemy" },
+    { name = "structlog" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "httpx" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "bss-clock", editable = "packages/bss-clock" },
+    { name = "fastapi", specifier = ">=0.110" },
+    { name = "sqlalchemy", specifier = ">=2.0" },
+    { name = "structlog", specifier = ">=24.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=0.23" },
+]
+
+[[package]]
 name = "bss-cli"
 version = "0.1.0"
 source = { editable = "cli" }
 dependencies = [
     { name = "bss-clients" },
     { name = "bss-orchestrator" },
+    { name = "httpx" },
+    { name = "jsonpath-ng" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "pyyaml" },
     { name = "qrcode" },
     { name = "rich" },
     { name = "structlog" },
@@ -180,8 +218,11 @@ dev = [
 requires-dist = [
     { name = "bss-clients", editable = "packages/bss-clients" },
     { name = "bss-orchestrator", editable = "orchestrator" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "jsonpath-ng", specifier = ">=1.6" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pydantic-settings", specifier = ">=2.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "qrcode", specifier = ">=7.4" },
     { name = "rich", specifier = ">=13.7" },
     { name = "structlog", specifier = ">=24.1" },
@@ -249,9 +290,64 @@ dev = [
 ]
 
 [[package]]
+name = "bss-clock"
+version = "0.1.0"
+source = { editable = "packages/bss-clock" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "structlog" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "httpx" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", specifier = ">=0.110" },
+    { name = "structlog", specifier = ">=24.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=0.23" },
+]
+
+[[package]]
 name = "bss-events"
 version = "0.1.0"
 source = { editable = "packages/bss-events" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "sqlalchemy" },
+    { name = "structlog" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "httpx" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", specifier = ">=0.110" },
+    { name = "sqlalchemy", specifier = ">=2.0" },
+    { name = "structlog", specifier = ">=24.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=0.23" },
+]
 
 [[package]]
 name = "bss-models"
@@ -278,6 +374,7 @@ version = "0.1.0"
 source = { editable = "orchestrator" }
 dependencies = [
     { name = "bss-clients" },
+    { name = "bss-clock" },
     { name = "httpx" },
     { name = "langchain-core" },
     { name = "langchain-openai" },
@@ -298,6 +395,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "bss-clients", editable = "packages/bss-clients" },
+    { name = "bss-clock", editable = "packages/bss-clock" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "langchain-core", specifier = ">=0.3" },
     { name = "langchain-openai", specifier = ">=0.2" },
@@ -481,7 +579,10 @@ source = { editable = "services/com" }
 dependencies = [
     { name = "aio-pika" },
     { name = "asyncpg" },
+    { name = "bss-admin" },
     { name = "bss-clients" },
+    { name = "bss-clock" },
+    { name = "bss-events" },
     { name = "bss-models" },
     { name = "fastapi" },
     { name = "pydantic-settings" },
@@ -502,7 +603,10 @@ dev = [
 requires-dist = [
     { name = "aio-pika", specifier = ">=9.0" },
     { name = "asyncpg", specifier = ">=0.29" },
+    { name = "bss-admin", editable = "packages/bss-admin" },
     { name = "bss-clients", editable = "packages/bss-clients" },
+    { name = "bss-clock", editable = "packages/bss-clock" },
+    { name = "bss-events", editable = "packages/bss-events" },
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "pydantic-settings", specifier = ">=2.0" },
@@ -609,7 +713,10 @@ version = "0.1.0"
 source = { editable = "services/crm" }
 dependencies = [
     { name = "asyncpg" },
+    { name = "bss-admin" },
     { name = "bss-clients" },
+    { name = "bss-clock" },
+    { name = "bss-events" },
     { name = "bss-models" },
     { name = "fastapi" },
     { name = "pydantic-settings" },
@@ -629,7 +736,10 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "asyncpg", specifier = ">=0.29" },
+    { name = "bss-admin", editable = "packages/bss-admin" },
     { name = "bss-clients", editable = "packages/bss-clients" },
+    { name = "bss-clock", editable = "packages/bss-clock" },
+    { name = "bss-events", editable = "packages/bss-events" },
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "pydantic-settings", specifier = ">=2.0" },
@@ -899,6 +1009,15 @@ wheels = [
 ]
 
 [[package]]
+name = "jsonpath-ng"
+version = "1.8.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/32/58/250751940d75c8019659e15482d548a4aa3b6ce122c515102a4bfdac50e3/jsonpath_ng-1.8.0.tar.gz", hash = "sha256:54252968134b5e549ea5b872f1df1168bd7defe1a52fed5a358c194e1943ddc3", size = 74513, upload-time = "2026-02-24T14:42:06.182Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/03/99/33c7d78a3fb70d545fd5411ac67a651c81602cc09c9cf0df383733f068c5/jsonpath_ng-1.8.0-py3-none-any.whl", hash = "sha256:b8dde192f8af58d646fc031fac9c99fe4d00326afc4148f1f043c601a8cfe138", size = 67844, upload-time = "2026-02-28T00:53:19.637Z" },
+]
+
+[[package]]
 name = "jsonpointer"
 version = "3.1.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1119,7 +1238,10 @@ source = { editable = "services/mediation" }
 dependencies = [
     { name = "aio-pika" },
     { name = "asyncpg" },
+    { name = "bss-admin" },
     { name = "bss-clients" },
+    { name = "bss-clock" },
+    { name = "bss-events" },
     { name = "bss-models" },
     { name = "fastapi" },
     { name = "pydantic-settings" },
@@ -1140,7 +1262,10 @@ dev = [
 requires-dist = [
     { name = "aio-pika", specifier = ">=9.0" },
     { name = "asyncpg", specifier = ">=0.29" },
+    { name = "bss-admin", editable = "packages/bss-admin" },
     { name = "bss-clients", editable = "packages/bss-clients" },
+    { name = "bss-clock", editable = "packages/bss-clock" },
+    { name = "bss-events", editable = "packages/bss-events" },
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "pydantic-settings", specifier = ">=2.0" },
@@ -1391,7 +1516,10 @@ version = "0.1.0"
 source = { editable = "services/payment" }
 dependencies = [
     { name = "asyncpg" },
+    { name = "bss-admin" },
     { name = "bss-clients" },
+    { name = "bss-clock" },
+    { name = "bss-events" },
     { name = "bss-models" },
     { name = "fastapi" },
     { name = "pydantic-settings" },
@@ -1411,7 +1539,10 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "asyncpg", specifier = ">=0.29" },
+    { name = "bss-admin", editable = "packages/bss-admin" },
     { name = "bss-clients", editable = "packages/bss-clients" },
+    { name = "bss-clock", editable = "packages/bss-clock" },
+    { name = "bss-events", editable = "packages/bss-events" },
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "pydantic-settings", specifier = ">=2.0" },
@@ -1528,7 +1659,10 @@ source = { editable = "services/provisioning-sim" }
 dependencies = [
     { name = "aio-pika" },
     { name = "asyncpg" },
+    { name = "bss-admin" },
     { name = "bss-clients" },
+    { name = "bss-clock" },
+    { name = "bss-events" },
     { name = "bss-models" },
     { name = "fastapi" },
     { name = "pydantic-settings" },
@@ -1549,7 +1683,10 @@ dev = [
 requires-dist = [
     { name = "aio-pika", specifier = ">=9.0" },
     { name = "asyncpg", specifier = ">=0.29" },
+    { name = "bss-admin", editable = "packages/bss-admin" },
     { name = "bss-clients", editable = "packages/bss-clients" },
+    { name = "bss-clock", editable = "packages/bss-clock" },
+    { name = "bss-events", editable = "packages/bss-events" },
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "pydantic-settings", specifier = ">=2.0" },
@@ -1778,6 +1915,8 @@ source = { editable = "services/rating" }
 dependencies = [
     { name = "aio-pika" },
     { name = "bss-clients" },
+    { name = "bss-clock" },
+    { name = "bss-events" },
     { name = "bss-models" },
     { name = "fastapi" },
     { name = "pydantic-settings" },
@@ -1797,6 +1936,8 @@ dev = [
 requires-dist = [
     { name = "aio-pika", specifier = ">=9.0" },
     { name = "bss-clients", editable = "packages/bss-clients" },
+    { name = "bss-clock", editable = "packages/bss-clock" },
+    { name = "bss-events", editable = "packages/bss-events" },
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "pydantic-settings", specifier = ">=2.0" },
@@ -1986,7 +2127,10 @@ source = { editable = "services/som" }
 dependencies = [
     { name = "aio-pika" },
     { name = "asyncpg" },
+    { name = "bss-admin" },
     { name = "bss-clients" },
+    { name = "bss-clock" },
+    { name = "bss-events" },
     { name = "bss-models" },
     { name = "fastapi" },
     { name = "pydantic-settings" },
@@ -2007,7 +2151,10 @@ dev = [
 requires-dist = [
     { name = "aio-pika", specifier = ">=9.0" },
     { name = "asyncpg", specifier = ">=0.29" },
+    { name = "bss-admin", editable = "packages/bss-admin" },
     { name = "bss-clients", editable = "packages/bss-clients" },
+    { name = "bss-clock", editable = "packages/bss-clock" },
+    { name = "bss-events", editable = "packages/bss-events" },
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "pydantic-settings", specifier = ">=2.0" },
@@ -2113,7 +2260,10 @@ source = { editable = "services/subscription" }
 dependencies = [
     { name = "aio-pika" },
     { name = "asyncpg" },
+    { name = "bss-admin" },
     { name = "bss-clients" },
+    { name = "bss-clock" },
+    { name = "bss-events" },
     { name = "bss-models" },
     { name = "fastapi" },
     { name = "pydantic-settings" },
@@ -2136,7 +2286,10 @@ dev = [
 requires-dist = [
     { name = "aio-pika", specifier = ">=9.0" },
     { name = "asyncpg", specifier = ">=0.29" },
+    { name = "bss-admin", editable = "packages/bss-admin" },
     { name = "bss-clients", editable = "packages/bss-clients" },
+    { name = "bss-clock", editable = "packages/bss-clock" },
+    { name = "bss-events", editable = "packages/bss-events" },
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "pydantic-settings", specifier = ">=2.0" },

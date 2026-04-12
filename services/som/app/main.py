@@ -1,8 +1,10 @@
 """SOM (Service Order Management) — FastAPI app factory."""
 
+from bss_clock import clock_admin_router
+from bss_events import audit_events_router
 from fastapi import FastAPI
 
-from app.api import health, service, service_order
+from app.api import admin, health, service, service_order
 from app.config import Settings
 from app.dependencies import lifespan
 from app.logging import configure_logging
@@ -36,5 +38,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         service.router,
         prefix="/tmf-api/serviceInventoryManagement/v4",
     )
+
+    # Admin — operational-data reset (gated by BSS_ALLOW_ADMIN_RESET)
+    app.include_router(admin.router, prefix="/admin-api/v1")
+
+    # Admin — scenario clock control (gated by BSS_ALLOW_ADMIN_RESET)
+    app.include_router(clock_admin_router(), prefix="/admin-api/v1")
+
+    # Audit — read-only view onto audit.domain_event
+    app.include_router(audit_events_router(), prefix="/audit-api/v1")
 
     return app

@@ -8,6 +8,7 @@ import hashlib
 from datetime import datetime, timezone
 
 import structlog
+from bss_clock import now as clock_now
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import auth_context
@@ -72,7 +73,7 @@ class KycService:
         # --- Write ---
         from datetime import date as date_type
 
-        now = datetime.now(timezone.utc)
+        now = clock_now()
         identity = CustomerIdentity(
             customer_id=customer_id,
             document_type=document_type,
