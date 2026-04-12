@@ -1,10 +1,12 @@
 # Phase 10 — Scenario Runner + Hero Scenarios
 
 > **The shipping phase.** When this is green, v0.1 is done. Resist scope creep. Ship when the checklist is checked.
+>
+> **This is also the phase where we prove the LLM actually works end-to-end.** Phase 9 built the semantic layer and wired the LLM path; Phase 10 proves it by running hero scenarios through the real model against real services. If Phase 10 only tests the tool path and skips the LLM path, v0.1 is a BSS with an LLM demo bolted on, not an LLM-native BSS. Do not skip LLM-mode scenarios.
 
 ## Goal
 
-A YAML scenario runner and the two hero scenarios that prove the system works end-to-end. These scenarios are also the seed mechanism for demo data, the regression test suite, and the thing you'll show on LinkedIn post-v0.2.
+A YAML scenario runner with **two execution modes** (deterministic tool-call and LLM-driven), plus three hero scenarios that prove the system works end-to-end. These scenarios are also the seed mechanism for demo data, the regression test suite, and the thing you'll show on LinkedIn post-v0.2.
 
 ## Deliverables
 
@@ -13,11 +15,12 @@ A YAML scenario runner and the two hero scenarios that prove the system works en
 ```
 cli/bss_cli/scenarios/
 ├── __init__.py
-├── runner.py           # main loop
+├── runner.py           # main loop — deterministic and LLM modes
 ├── schema.py           # pydantic models for YAML
 ├── actions.py          # action registry (maps action name → tool call)
 ├── assertions.py       # assertion evaluator with polling
 ├── context.py          # variable interpolation + captured values
+├── llm_executor.py     # LLM-mode step executor — routes natural language through orchestrator
 └── reporting.py        # pass/fail rendering
 ```
 
@@ -26,18 +29,71 @@ Invoked via:
 ```
 bss scenario run scenarios/customer_signup_and_exhaust.yaml
 bss scenario run scenarios/new_activation_with_provisioning_retry.yaml
+bss scenario run scenarios/llm_troubleshoot_blocked_subscription.yaml
 bss scenario list
 bss scenario validate scenarios/*.yaml
+
+# Force deterministic mode (override ask: steps to fail)
+bss scenario run scenarios/foo.yaml --no-llm
+
+# Force LLM mode (convert action: steps to natural language if the scenario supports it)
+bss scenario run scenarios/foo.yaml --via-llm
 ```
 
-### 2. Scenario YAML schema
+### 2. Execution modes — deterministic and LLM
+
+Phase 10 defines **two scenario execution modes**, with per-step granularity.
+
+**Deterministic mode** — the default for most steps. A step with an `action:` field invokes an orchestrator tool directly as a Python function call. Fast (~10ms per step), reliable, zero LLM cost, reproducible across runs. This is the regression test suite — it exercises services, the event chain, the policy layer, and the renderers, but bypasses the LLM.
+
+**LLM mode** — for steps that prove the LLM works. A step with an `ask:` field passes natural-language instructions through the real OpenRouter-backed LangGraph orchestrator. The LLM plans, calls tools, handles errors, and either completes the instruction or reports why it can't. Slower (~2-10s per step depending on tool chain length), costs real money (a few cents per scenario run), requires OpenRouter to be reachable.
+
+**Per-step mode selection:**
+
+```yaml
+steps:
+  # Deterministic step — direct tool call, no LLM
+  - name: create customer
+    action: customer.create
+    args:
+      name: "Ck Demo"
+      email: "ck@bss-cli.local"
+    capture:
+      customer_id: "$.id"
+
+  # LLM step — natural language through real LLM
+  - name: diagnose the blocked subscription
+    ask: "The customer {{ customer_id }} says their data stopped working. Figure out why and fix it if possible."
+    expect_tools_called_include:
+      - subscription.get
+      - subscription.get_balance
+      - catalog.list_vas
+      - subscription.purchase_vas
+    expect_final_state:
+      subscription_id: "{{ subscription_id }}"
+      state: active
+```
+
+A scenario can mix both styles. Setup and teardown are typically deterministic (for reproducibility); the core value-adding steps can be LLM-driven to prove the agent's reasoning.
+
+**Why not always-LLM:** LLM calls are slow, cost money, and are mildly non-deterministic. Forcing every setup step through the LLM means a 30-second scenario becomes a 3-minute scenario and costs 10x more to run. The hybrid model lets you keep setup fast and reproducible while proving the interesting parts through the real agent.
+
+**Why not always-deterministic:** a scenario that only calls tools directly never exercises the LLM. If the LLM path breaks — bad docstring, wrong tool schema, fabrication in the supervisor loop — deterministic-only scenarios won't catch it. You'd ship a broken agent with a green test suite.
+
+**Mode flags:**
+
+- Default: each step runs in its declared mode (`action:` → deterministic, `ask:` → LLM).
+- `--no-llm`: every `ask:` step fails immediately with a clear error. Useful for fast iteration in CI where you don't want OpenRouter in the loop.
+- `--via-llm`: every `action:` step is converted into a natural-language `ask:` equivalent at runtime. **Experimental** — some actions don't translate cleanly (e.g., `admin.reset_operational_data` has no natural phrasing). Use only on scenarios that were designed with this in mind.
+
+### 3. Scenario YAML schema
 
 ```yaml
 name: customer_signup_and_exhaust
 description: |
   Creates a customer, attaches COF, orders PLAN_S, simulates usage to exhaustion,
   verifies blocking, tops up via VAS, verifies unblocking.
-tags: [hero, smoke, regression]
+tags: [hero, smoke, regression, deterministic]
 
 setup:
   reset_operational_data: true      # calls admin.reset_operational_data before starting
@@ -58,28 +114,147 @@ steps:
     capture:
       customer_id: "$.id"
 
-  - name: attest KYC (simulating channel-layer Myinfo flow)
+  # (rest of the scenario as deterministic action: steps, unchanged from v3 spec)
+
+teardown:
+  unfreeze_clock: true
+```
+
+**Step types:**
+
+- `action:` — direct tool call (deterministic mode). Args are structured.
+- `ask:` — natural-language instruction (LLM mode). Single string, may use `{{ variable }}` interpolation.
+- `assert:` — tool call with expected result shape. Polling optional.
+
+**LLM step fields:**
+
+```yaml
+- name: diagnose and fix
+  ask: "Ck's subscription {{ subscription_id }} is blocked. Figure out why and fix it."
+
+  # What tools the LLM MUST call at least once. Test fails if any are missing.
+  expect_tools_called_include:
+    - subscription.get
+    - subscription.get_balance
+    - subscription.purchase_vas
+
+  # What tools the LLM MUST NOT call. Test fails if any are called.
+  expect_tools_not_called:
+    - subscription.terminate
+    - customer.close
+
+  # The final state of some resource after the LLM finishes. Test fails if wrong.
+  expect_final_state:
+    subscription_id: "{{ subscription_id }}"
+    state: active
+
+  # Max wall-clock seconds for the LLM to finish. Default 60.
+  timeout_seconds: 60
+
+  # Optional: require the LLM to have emitted a specific event sequence
+  expect_event_sequence:
+    - subscription.vas_purchased
+    - subscription.unblocked
+
+  # Optional: allow the LLM to ask clarifying questions (default false — strict mode)
+  allow_clarification: false
+```
+
+**Why `expect_tools_called_include` instead of exact match:** the LLM may legitimately call extra read tools (e.g., `customer.get` to verify) that a hand-crafted scenario didn't anticipate. Exact match would be too brittle. Include-mode asserts "at minimum, these tools ran" without forbidding reasonable exploration.
+
+**Why `expect_final_state`:** the most important check isn't "did the LLM call the right tools" — it's "is the system in the right state when the LLM finished." A good LLM might take a different path to the same correct result. Assert the result, not the path, unless the path itself is what you're testing.
+
+### 4. Runner mechanics
+
+- **Variable interpolation:** Jinja-style `{{ var }}`, substituted at step evaluation time. Captures from earlier steps are in scope.
+- **Capture:** JSONPath expressions via `jsonpath-ng` pull values from tool results into the variable context.
+- **Assertions:** dot-path field checks against tool results. Polling (`poll.interval_ms`, `poll.timeout_seconds`) for async-settling state.
+- **LLM step execution:** `llm_executor.py` constructs the LangGraph orchestrator with the real OpenRouter client, injects the current variable context as system context, passes the `ask:` string, runs the graph to completion, captures tool-call trace and final state.
+- **Reset:** `admin.reset_operational_data` wipes operational tables, preserves reference data.
+- **Clock freeze:** `clock.freeze` propagates to every service. `teardown.unfreeze_clock` restores.
+- **Channel injection:** runner sets `X-BSS-Channel: scenario` and `X-BSS-Actor: scenario:<n>` for deterministic steps; LLM steps use `X-BSS-Channel: llm`, `X-BSS-Actor: llm-<model-slug>`. Both paths auto-log to CRM interactions.
+- **Reporting:** structured pass/fail per step, final summary with elapsed time per step, LLM token usage per step, link to event log.
+
+### 5. Hero scenario 1 — `scenarios/customer_signup_and_exhaust.yaml` (deterministic)
+
+Demonstrates the full happy-path flow with deterministic steps:
+- Customer create + KYC attestation + COF + order flow (COM → SOM → provisioning-sim → subscription activation)
+- Usage → bundle decrement → exhaustion → block
+- Mediation ingress rejection (block-on-exhaust doctrine at the edge)
+- VAS top-up → unblock
+- Usage resumes
+
+All steps use `action:` (direct tool calls). This is the regression test for the service layer, event chain, and policy enforcement. Runs in ~3-5 seconds per invocation.
+
+See the full YAML in the v3 spec — no changes for Phase 10 other than the `tags: [hero, smoke, regression, deterministic]` line to mark the execution mode.
+
+### 6. Hero scenario 2 — `scenarios/new_activation_with_provisioning_retry.yaml` (deterministic)
+
+Demonstrates provisioning resilience with deterministic steps:
+- Enables HLR fail-first-attempt fault injection
+- Places an order via direct `order.create`
+- Verifies SOM retries the failed task
+- Verifies the order still completes
+- Verifies the event sequence includes the retry
+
+All steps use `action:`. Runs in ~8-12 seconds (because of the fault injection delay).
+
+Tagged `[hero, resilience, provisioning, deterministic]`.
+
+### 7. Hero scenario 3 — `scenarios/llm_troubleshoot_blocked_subscription.yaml` (LLM-driven) — **NEW**
+
+**This is the scenario that proves the LLM is load-bearing, not decorative.**
+
+```yaml
+name: llm_troubleshoot_blocked_subscription
+description: |
+  An LLM-driven troubleshooting scenario. Setup is deterministic (create customer,
+  COF, order, burn data to exhaustion). The core step passes a natural-language
+  problem description to the real LLM and asserts that the LLM correctly diagnoses
+  the blocked state, reads the balance, checks available VAS offerings, purchases
+  the right one, and verifies the subscription is active again.
+
+  This scenario is a v0.1 ship gate. If it doesn't pass with the default model
+  (MiMo v2 Flash), the LLM path is broken and v0.1 is not shippable as "LLM-native".
+
+tags: [hero, llm, ship_gate, reasoning]
+
+setup:
+  reset_operational_data: true
+  freeze_clock_at: "2026-04-11T14:00:00+08:00"
+
+variables:
+  customer_email: "llm-demo-{{ run_id }}@bss-cli.local"
+  plan: PLAN_S
+
+# === DETERMINISTIC SETUP ===
+# We drive the setup via direct tool calls to keep it fast and reproducible.
+# Once everything is in place, we hand over to the LLM for the real test.
+
+steps:
+  - name: create customer
+    action: customer.create
+    args:
+      name: "LLM Demo"
+      email: "{{ customer_email }}"
+      phone: "+6590008888"
+    capture:
+      customer_id: "$.id"
+
+  - name: attest KYC
     action: customer.attest_kyc
     args:
       customer_id: "{{ customer_id }}"
       provider: myinfo
-      provider_reference: "myinfo-scenario-{{ run_id }}"
+      provider_reference: "llm-demo-{{ run_id }}"
       document_type: nric
-      document_number: "S{{ run_id }}A"
+      document_number: "S{{ run_id }}B"
       document_country: SG
       date_of_birth: "1985-03-15"
       nationality: SG
       attestation_payload:
         issuer: singpass.gov.sg
-        signature: "stub-signature-for-v0.1"
-
-  - name: verify KYC status
-    assert:
-      tool: customer.get_kyc_status
-      args: { customer_id: "{{ customer_id }}" }
-      expect:
-        kyc_status: verified
-        kyc_verification_method: myinfo
+        signature: "stub-signature"
 
   - name: add card on file
     action: payment.add_card
@@ -89,10 +264,8 @@ steps:
       exp_month: 12
       exp_year: 2030
       cvv: "123"
-    capture:
-      payment_method_id: "$.id"
 
-  - name: place order
+  - name: place order (direct, not via LLM)
     action: order.create
     args:
       customer_id: "{{ customer_id }}"
@@ -100,49 +273,39 @@ steps:
     capture:
       order_id: "$.id"
 
-  - name: wait for order completion
+  - name: wait for activation
     action: order.wait_until
     args:
       order_id: "{{ order_id }}"
       state: completed
       timeout_seconds: 10
 
-  - name: get subscription
+  - name: get the subscription
     action: subscription.list_for_customer
     args:
       customer_id: "{{ customer_id }}"
     capture:
       subscription_id: "$[0].id"
       msisdn: "$[0].msisdn"
-      iccid: "$[0].iccid"
 
-  - name: verify subscription is active with eSIM binding
+  - name: verify subscription active before exhaustion
     assert:
       tool: subscription.get
       args: { subscription_id: "{{ subscription_id }}" }
       expect:
         state: active
-        balances.data.remaining: 5120   # 5 GB in MB
-        msisdn: { not_null: true }
-        iccid: { not_null: true }
+        balances.data.remaining: 5120   # 5 GB on PLAN_S
 
-  - name: verify eSIM activation code is retrievable
-    assert:
-      tool: subscription.get_esim_activation
-      args: { subscription_id: "{{ subscription_id }}" }
-      expect:
-        iccid: "{{ iccid }}"
-        activation_code: { starts_with: "LPA:1$smdp.bss-cli.local$" }
-
-  - name: burn data — 4 GB
+  # Burn the bundle deliberately to set up the problem the LLM will solve
+  - name: burn 4 GB
     action: usage.simulate
     args: { msisdn: "{{ msisdn }}", type: data, quantity: 4096, unit: mb }
 
-  - name: burn data — 1 GB (exhausts bundle)
+  - name: burn final 1 GB (exhausts bundle)
     action: usage.simulate
     args: { msisdn: "{{ msisdn }}", type: data, quantity: 1024, unit: mb }
 
-  - name: verify blocked
+  - name: verify blocked before handing to LLM
     assert:
       tool: subscription.get
       args: { subscription_id: "{{ subscription_id }}" }
@@ -152,208 +315,137 @@ steps:
         interval_ms: 100
         timeout_seconds: 5
 
-  - name: verify next usage is rejected at ingress
-    action: usage.simulate
-    args: { msisdn: "{{ msisdn }}", type: data, quantity: 100, unit: mb }
-    expect_error:
-      code: POLICY_VIOLATION
-      rule: usage.record.subscription_must_be_active
+  # === LLM HAND-OVER ===
+  # The environment is now set up. Customer exists, COF exists, subscription is
+  # blocked due to exhaustion. Hand over to the LLM with a natural-language
+  # problem description and see if it figures out the right fix.
 
-  - name: top up with VAS 5GB
-    action: subscription.purchase_vas
-    args:
-      subscription_id: "{{ subscription_id }}"
-      vas_offering_id: VAS_DATA_5GB
+  - name: LLM diagnoses and fixes the blocked subscription
+    ask: |
+      The customer with email {{ customer_email }} (customer id {{ customer_id }})
+      called support. They say their data stopped working. Figure out what's wrong
+      with their subscription and fix it if possible. If you can't fix it without
+      doing something destructive, explain what you'd need to do and stop — don't
+      take destructive actions without explicit approval.
+    timeout_seconds: 90
 
-  - name: verify unblocked
+    # Required: the LLM MUST call these tools at least once.
+    expect_tools_called_include:
+      - subscription.list_for_customer
+      - subscription.get
+      - subscription.get_balance
+      - catalog.list_vas
+      - subscription.purchase_vas
+
+    # Forbidden: the LLM MUST NOT call these tools.
+    expect_tools_not_called:
+      - subscription.terminate
+      - customer.close
+      - admin.force_state
+      - admin.reset_operational_data
+
+    # Final state: after the LLM is done, the subscription must be active.
+    expect_final_state:
+      resource: subscription
+      id: "{{ subscription_id }}"
+      state: active
+      balances.data.remaining: { gt: 0 }
+
+    # Event trace: a successful fix must emit these events in causal order.
+    expect_event_sequence:
+      - subscription.vas_purchased
+      - subscription.unblocked
+
+    allow_clarification: false
+
+  # === DETERMINISTIC VERIFICATION ===
+  # Belt-and-braces: re-read the subscription state via direct tool call after
+  # the LLM finishes. The LLM's self-reported success is not sufficient.
+
+  - name: verify subscription is active again (post-LLM verification)
     assert:
       tool: subscription.get
       args: { subscription_id: "{{ subscription_id }}" }
       expect:
         state: active
-        balances.data.remaining: 5120
+        balances.data.remaining: { gt: 0 }
 
   - name: verify usage flows again
     action: usage.simulate
-    args: { msisdn: "{{ msisdn }}", type: data, quantity: 500, unit: mb }
+    args: { msisdn: "{{ msisdn }}", type: data, quantity: 100, unit: mb }
 
-teardown:
-  unfreeze_clock: true
-```
-
-### 3. Runner mechanics
-
-- **Variable interpolation:** `{{ var }}` Jinja-style, substituted at step evaluation time (not load time). Captures from earlier steps are available.
-- **Capture:** JSONPath expressions using `jsonpath-ng` to pull values out of tool results into the variable context.
-- **Assertions:** dot-path field checks against tool result. Support polling (`poll.interval_ms`, `poll.timeout_seconds`) for async-settling state. Fail cleanly with actual-vs-expected diff.
-- **expect_error:** step succeeds if the action raises a `PolicyViolationFromServer` matching the given `code` and `rule`.
-- **reset_operational_data:** calls `admin.reset_operational_data` — wipes operational tables (subscriptions, orders, services, payments, usage, cases, tickets, interactions) while preserving reference data (catalog, agents, SLA policies, MSISDN pool, fault rules). Reference data stays. This is the "clean slate per scenario" mechanism.
-- **freeze_clock_at:** calls `clock.freeze` with the given timestamp. All services read time via the clock service, so the whole stack operates at the frozen time. `teardown.unfreeze_clock` restores wall clock at the end.
-- **Channel injection:** runner sets `X-BSS-Channel: scenario` and `X-BSS-Actor: scenario:<name>` on every call. Every step auto-logs to `interaction` via the CRM auto-logging in Phase 4.
-- **Reporting:** structured pass/fail per step, final summary with elapsed time per step, link to event log (`bss trace events --since <start>`).
-
-### 4. Hero scenario 1 — `scenarios/customer_signup_and_exhaust.yaml`
-
-As above. Demonstrates:
-- Customer create + COF + order flow (COM → SOM → provisioning-sim → subscription activation)
-- Usage → bundle decrement → exhaustion → block
-- Mediation ingress rejection (block-on-exhaust doctrine at the edge)
-- VAS top-up → unblock
-- Usage resumes
-
-### 5. Hero scenario 2 — `scenarios/new_activation_with_provisioning_retry.yaml`
-
-```yaml
-name: new_activation_with_provisioning_retry
-description: |
-  Enables HLR fail-first-attempt fault injection, places an order, verifies that
-  SOM retries and the activation still completes. Proves the retry flow, the
-  provisioning simulator's fault injection, and end-to-end resilience.
-tags: [hero, resilience, provisioning]
-
-setup:
-  reset_operational_data: true
-  freeze_clock_at: "2026-04-11T10:00:00+08:00"
-
-variables:
-  customer_email: "retry-demo-{{ run_id }}@bss-cli.local"
-  plan: PLAN_M
-
-steps:
-  - name: enable HLR fail-first-attempt
-    action: provisioning.set_fault_injection
-    args:
-      task_type: HLR_PROVISION
-      fault_type: fail_first_attempt
-      probability: 1.0      # deterministic for the scenario
-      enabled: true
-
-  - name: create customer
-    action: customer.create
-    args:
-      name: "Retry Demo"
-      email: "{{ customer_email }}"
-      phone: "+6590009999"
-    capture:
-      customer_id: "$.id"
-
-  - name: add card on file
-    action: payment.add_card
-    args:
-      customer_id: "{{ customer_id }}"
-      card_number: "4242424242424242"
-      exp_month: 12
-      exp_year: 2030
-      cvv: "123"
-
-  - name: place order
-    action: order.create
-    args:
-      customer_id: "{{ customer_id }}"
-      offering_id: "{{ plan }}"
-    capture:
-      order_id: "$.id"
-
-  - name: wait for order completion (must survive the retry)
-    action: order.wait_until
-    args:
-      order_id: "{{ order_id }}"
-      state: completed
-      timeout_seconds: 15
-
-  - name: verify order completed despite first-attempt failure
+  - name: verify the LLM's actions are logged in the customer's interaction history
     assert:
-      tool: order.get
-      args: { order_id: "{{ order_id }}" }
+      tool: customer.get_interactions
+      args: { customer_id: "{{ customer_id }}", limit: 20 }
       expect:
-        state: completed
-
-  - name: verify at least one HLR task had 2 attempts
-    assert:
-      tool: provisioning.list_tasks
-      args:
-        filter:
-          related_order_id: "{{ order_id }}"
-          task_type: HLR_PROVISION
-      expect_any:
-        attempts: 2
-        state: completed
-
-  - name: verify subscription active
-    action: subscription.list_for_customer
-    args: { customer_id: "{{ customer_id }}" }
-    capture:
-      subscription_id: "$[0].id"
-    assert_captured:
-      subscription_id: { not_null: true }
-
-  - name: verify trace shows the retry sequence
-    action: trace.for_order
-    args: { order_id: "{{ order_id }}" }
-    expect_event_sequence:
-      - order.acknowledged
-      - order.in_progress
-      - service_order.created
-      - provisioning.task.created
-      - provisioning.task.started
-      - provisioning.task.failed        # first attempt
-      - provisioning.task.started       # retry
-      - provisioning.task.completed
-      - service.activated
-      - service_order.completed
-      - order.completed
-      - subscription.activated
+        # At least one interaction should have channel=llm
+        any_match:
+          channel: llm
+          actor: { starts_with: "llm-" }
 
 teardown:
   unfreeze_clock: true
-  cleanup_fault_injection:
-    - { task_type: HLR_PROVISION, fault_type: fail_first_attempt, enabled: false }
 ```
 
-Demonstrates:
-- Configurable fault injection (the simulator doing its job)
-- SOM retry semantics (policy `provisioning_task.retry.max_attempts`)
-- Event-driven resilience (the chain survives a failure)
-- `bss trace` shows the full story including the retry
+**What this scenario proves:**
 
-### 6. Mandatory code grep before building the runner — precondition, not optional
+1. **The LLM can diagnose from natural language.** "Data stopped working" with no technical vocabulary. The LLM must translate this to the right diagnostic steps.
+
+2. **The LLM uses the semantic layer correctly.** It reads docstrings, picks the right tools, uses typed IDs, handles the tool results, decides what to do next.
+
+3. **The LLM respects destructive operation gating.** `subscription.terminate` is in the forbidden list. If the LLM reaches for it without `--allow-destructive`, the scenario fails.
+
+4. **The LLM interprets structured errors.** It sees `state: blocked` and knows this means "bundle exhausted, needs top-up" because the system prompt and the error recovery patterns tell it so.
+
+5. **The end state is verified by direct tool call.** We don't trust the LLM's self-report — we re-read the system state after the LLM finishes and confirm it's actually correct. LLMs can be confidently wrong; verification can't.
+
+6. **The audit trail attributes actions correctly.** The final assertion walks the customer's interaction log and confirms the LLM-channel actions are present. This proves channel injection works in LLM mode, not just direct mode.
+
+7. **It's ship-gate critical.** If MiMo v2 Flash can't handle this, either the semantic layer needs tightening, the system prompt needs iteration, or we swap to a stronger model. In any case, v0.1 doesn't ship until this scenario is green against a real model.
+
+### 8. Mandatory code grep before building the runner — precondition
 
 ```bash
 grep -rn "datetime.utcnow\|datetime.now()" --include="*.py" services/ packages/
 ```
 
-**Must return zero hits outside the `clock` service itself.** If anything uses wall clock directly, `freeze_clock_at` will silently not work and scenarios will be non-deterministic — you'll chase ghost failures that only happen at certain times of day. **Run this grep first. Fix any violations in a separate `chore: route datetime through clock service` commit BEFORE touching the scenario runner.**
-
-If the grep finds more than a few hits, that's a meaningful pre-phase commit. Don't bundle it into Phase 10's commit — it's a cross-cutting fix that affects every service. Keep it clean.
+Must return zero hits outside the `clock` service itself. Fix any violations in a separate `chore: route datetime through clock service` commit BEFORE touching the scenario runner.
 
 ## Verification checklist
 
 - [ ] Datetime grep returns zero hits outside the clock service (precondition)
-- [ ] `bss scenario validate scenarios/*.yaml` — both files parse clean
-- [ ] `bss scenario run scenarios/customer_signup_and_exhaust.yaml` passes from a clean DB
+- [ ] `bss scenario validate scenarios/*.yaml` — all three files parse clean
+- [ ] `bss scenario run scenarios/customer_signup_and_exhaust.yaml` passes from a clean DB (deterministic, ~3-5s)
 - [ ] Same scenario passes again immediately (idempotent reset)
-- [ ] `bss scenario run scenarios/new_activation_with_provisioning_retry.yaml` passes
-- [ ] Retry scenario genuinely observes 2 attempts on the HLR task (not just a lucky first success)
-- [ ] Fault injection is cleaned up after scenario (state returns to default)
-- [ ] Clock frozen during scenario, unfrozen after
-- [ ] Running both scenarios back-to-back → both pass, no cross-contamination
-- [ ] Deliberately break a step → runner reports which step failed, actual-vs-expected diff, step duration
-- [ ] `make scenarios` runs both hero scenarios in sequence as part of CI
-- [ ] `grep -rn "datetime.utcnow\|datetime.now()" --include="*.py" services/ packages/` still returns zero (regression)
+- [ ] `bss scenario run scenarios/new_activation_with_provisioning_retry.yaml` passes (deterministic, ~8-12s)
+- [ ] `bss scenario run scenarios/llm_troubleshoot_blocked_subscription.yaml` passes against the real OpenRouter model (LLM-driven, ~30-60s, costs real money)
+- [ ] The LLM scenario passes **three runs in a row** (non-determinism check — if it's flaky, the semantic layer or system prompt needs iteration)
+- [ ] `--no-llm` flag: LLM scenario fails with clear error that `ask:` steps are disabled
+- [ ] Running all three scenarios back-to-back → all pass, no cross-contamination
+- [ ] Deliberately break a step → runner reports which step failed, actual-vs-expected diff, step duration, LLM token usage for LLM steps
+- [ ] LLM step reporting shows: tools called (and whether expected set was satisfied), tools forbidden (and whether any were triggered), LLM reasoning trace if the model returned one, total LLM tokens and cost
+- [ ] `make scenarios-deterministic` runs scenarios 1 and 2 as part of CI
+- [ ] `make scenarios-llm` runs scenario 3, marked as requiring OpenRouter, not run in CI by default
+- [ ] `make scenarios-all` runs all three, used before v0.1.0 tag
 
 ## v0.1 Ship Criteria — this is the release gate
 
 - [ ] All 10 phases complete, every phase's verification checklist passed
-- [ ] `docker compose up` → `make seed` → `bss scenario run scenarios/customer_signup_and_exhaust.yaml` → green on a fresh clone
-- [ ] `bss scenario run scenarios/new_activation_with_provisioning_retry.yaml` → green
+- [ ] `docker compose up` → `make seed` → `bss scenario run scenarios/customer_signup_and_exhaust.yaml` → green on a fresh clone (deterministic path works)
+- [ ] `bss scenario run scenarios/new_activation_with_provisioning_retry.yaml` → green (resilience path works)
+- [ ] **`bss scenario run scenarios/llm_troubleshoot_blocked_subscription.yaml` → green, three runs in a row, against the default model (`xiaomi/mimo-v2-flash`)** — the LLM path works
 - [ ] Stack RSS under 4 GB (`docker stats` snapshot committed as evidence)
 - [ ] Cold start under 30 seconds (measured)
 - [ ] Internal p99 API latency under 50ms (measured during exhaustion scenario)
+- [ ] LLM scenario total cost per run under $0.10 (cost budget sanity check)
 - [ ] `README.md` quickstart tested on a fresh machine
 - [ ] `LICENSE` is Apache-2.0
 - [ ] `CLAUDE.md`, `ARCHITECTURE.md`, `DATA_MODEL.md`, `TOOL_SURFACE.md`, `DECISIONS.md` all reflect the shipped state
 - [ ] Campaign OS schemas untouched across the entire v0.1 build history
 - [ ] Tag `v0.1.0`
+
+**Non-negotiable:** the LLM scenario is a ship gate. If it's flaky or failing, diagnose the cause (semantic layer, system prompt, model capability) and fix before tagging v0.1.0. Do not ship v0.1 without a green LLM scenario. "LLM-native BSS" that doesn't actually prove the LLM works is marketing, not product.
 
 ## Out of scope for v0.1
 
@@ -362,71 +454,96 @@ If the grep finds more than a few hits, that's a meaningful pre-phase commit. Do
 - Random/fuzz scenarios
 - Data volume / load scenarios
 - Scenario recording from REPL (auto-capture)
+- More than one LLM-mode hero scenario (one is sufficient for the ship gate; more come in v0.2)
 
 ## Post-v0.1 backlog (Phase 11+)
 
-- **OpenTelemetry wire-through:** real traces across all services, Jaeger/Tempo container
-- **`bss trace` ASCII swimlane:** renders OTel spans as per-service lanes with time axis — the visualization that turns BSS-CLI into a teaching tool
-- **Metabase dashboards:** pre-built dashboards reading `audit.domain_event` for customer ops, provisioning SLOs, usage trends
-- **Renewal scheduler:** background job that renews active subscriptions on period boundary, charges COF, handles failures → blocked
-- **VAS expiry:** 24h unlimited day pass enforcement via scheduled job
-- **TMF REST hardening:** full conformance against TMF reference payloads, pagination, filtering, fields selection
-- **Multi-tenancy activation:** real tenant scoping via header + policy
-- **Authentication (Phase 12):** OAuth2 client credentials per service, RBAC on top of the `auth_context.py` seam already in place
-- **Organization party type:** business customers
-- **Multi-CFS products:** plans with add-ons as separate CFS
-- **Scenario record/replay:** capture a REPL session as a scenario YAML
-- **CDR file ingestion:** batch usage file drop
-- **`bss doctor`:** health check + diagnostic command
+- **Multiple LLM scenarios** covering different reasoning patterns: ambiguity resolution, multi-customer disambiguation, escalation decisions, refund handling
+- **LLM scenario matrix** across multiple models (MiMo, Sonnet, GPT-4o) to compare tool-calling quality
+- **OpenTelemetry wire-through**, `bss trace` ASCII swimlane
+- Metabase dashboards
+- Renewal scheduler, VAS expiry
+- TMF REST hardening
+- Multi-tenancy activation
+- Authentication (Phase 12)
+- Organization party type
+- Multi-CFS products
+- Scenario record/replay from REPL
+- CDR file ingestion
+- `bss doctor` health check
 
 ## Session prompt
 
 > Read `CLAUDE.md`, `ARCHITECTURE.md`, `TOOL_SURFACE.md`, `DECISIONS.md`, `phases/PHASE_09.md`, and `phases/PHASE_10.md`.
 >
-> **Precondition check before planning anything else:**
+> **Phase 10 has three hero scenarios, not two. The third is LLM-driven and is a v0.1 ship gate.** Do not skip it.
 >
-> Run this command and paste the results:
+> **Precondition check before planning anything else:**
 >
 > ```bash
 > grep -rn "datetime.utcnow\|datetime.now()" --include="*.py" services/ packages/
 > ```
 >
-> If any hits exist outside the `clock` service, stop. These must be fixed in a separate `chore: route datetime through clock service` commit on main BEFORE Phase 10 starts. Do not bundle that fix into Phase 10. If there are many hits and the fix is non-trivial, tell me and I'll decide whether to scope it as a pre-phase chore or as a mini Phase 10a.
+> If any hits exist outside the `clock` service, stop. These must be fixed in a separate `chore: route datetime through clock service` commit on main BEFORE Phase 10 starts.
 >
-> Once the grep is clean, produce the rest of the plan:
+> Also verify Phase 9 shipped clean and the LLM path is functional:
 >
-> 1. **YAML schema as pydantic models** — paste the full `Scenario`, `Step`, `Assertion`, `Setup`, `Teardown`, `ExpectError` models. Confirm fields like `poll`, `capture`, `expect_error`, `expect_event_sequence` are all supported.
+> ```bash
+> git tag | grep phase-09
+> bss ask "show me catalog plans"
+> # Expected: calls catalog.list_offerings, renders the three-column plan comparison
+> ```
 >
-> 2. **Action registry** — list every action name the runner supports and confirm each maps 1:1 to an existing orchestrator tool from Phase 9. No invented actions.
+> If `bss ask` doesn't work, stop and fix before Phase 10.
 >
-> 3. **Hero scenario walkthroughs** — for each of the two hero scenarios, walk through step-by-step and predict what events should appear in `audit.domain_event`. This is the reviewer's proof that the scenario does what the YAML says.
+> Once the preconditions are clean, produce the rest of the plan:
 >
-> 4. **Reset + freeze mechanics** — confirm `admin.reset_operational_data` wipes only operational tables, preserves reference data. Confirm `clock.freeze` propagates to every service that reads time. Paste the reset SQL or the admin API call.
+> 1. **YAML schema as pydantic models** — paste the full `Scenario`, `Step`, `Action`, `Ask`, `Assertion`, `Setup`, `Teardown`, `ExpectError`, `ExpectToolsCalled`, `ExpectFinalState`, `ExpectEventSequence` models. Confirm both `action:` and `ask:` step types are supported.
 >
-> 5. **Reporting format** — paste a sample pass output and a sample fail output showing actual-vs-expected diff and step durations.
+> 2. **Action registry** — list every action name the runner supports for deterministic mode and confirm each maps 1:1 to an existing orchestrator tool from Phase 9.
 >
-> 6. **v0.1 ship criteria self-check** — run each line of the v0.1 ship criteria checklist above and confirm it's achievable in this phase. Flag anything that looks borderline.
+> 3. **LLM executor design** — paste the `llm_executor.py` design showing how an `ask:` step constructs the LangGraph orchestrator, injects variable context, runs the graph, captures tool trace, verifies expectations, reports results. Confirm it uses the same `AsyncOpenAI` → OpenRouter client constructed in Phase 9.
+>
+> 4. **Hero scenario walkthroughs** — for each of the three hero scenarios, walk through step-by-step and predict what events should appear in `audit.domain_event`. For scenario 3, predict what tool sequence the LLM is likely to take.
+>
+> 5. **Expectation semantics** — paste the matching logic for `expect_tools_called_include` (subset match), `expect_tools_not_called` (disjoint match), `expect_final_state` (dot-path match with operators like `gt`, `not_null`, `starts_with`), `expect_event_sequence` (causal subsequence match).
+>
+> 6. **Reset + freeze mechanics** — confirm `admin.reset_operational_data` wipes only operational tables, preserves reference data. Confirm `clock.freeze` propagates.
+>
+> 7. **Reporting format** — paste sample pass output and sample fail output. For LLM steps, reporting must show: tools called (✓/✗ against expected), forbidden tools triggered (✗ if any), final state check (✓/✗ per field), event sequence match (✓/✗), total tokens used, total cost in USD.
+>
+> 8. **v0.1 ship criteria self-check** — run each line of the v0.1 ship criteria checklist and confirm it's achievable. Flag anything borderline. Specifically call out the "LLM scenario passes three runs in a row" criterion and propose what to do if it's flaky.
 >
 > Wait for my approval before writing any code.
 >
 > After I approve, implement in this order:
-> 1. YAML schema + validator (`bss scenario validate` works)
-> 2. Action registry + variable interpolation + capture (simplest linear steps work)
+>
+> 1. YAML schema + validator (`bss scenario validate` works for all three hero scenarios)
+> 2. Deterministic runner: action registry + variable interpolation + capture (scenarios 1 and 2 structure works)
 > 3. Assertion evaluator with polling
 > 4. Setup/teardown (reset + clock freeze mechanics)
-> 5. Hero scenario 1 → iterate until green
-> 6. Hero scenario 2 → iterate until green
-> 7. Reporter polish
-> 8. Full v0.1 ship criteria checklist
+> 5. Hero scenario 1 (deterministic) → iterate until green
+> 6. Hero scenario 2 (deterministic with fault injection) → iterate until green
+> 7. LLM executor (`llm_executor.py`) — wraps the Phase 9 orchestrator, captures tool trace
+> 8. LLM expectation evaluators (`expect_tools_called_include`, `expect_tools_not_called`, `expect_final_state`, `expect_event_sequence`)
+> 9. Hero scenario 3 (LLM-driven) → iterate until green, three runs in a row
+> 10. Reporter polish — especially LLM step reporting (tokens, cost, tool trace)
+> 11. Full v0.1 ship criteria checklist
 >
 > **Do not tag v0.1.0 yourself — that's my job after I verify on a fresh clone.**
 
 ## The trap
 
-**The retry scenario is the whole point of the v3 rework.** If it doesn't prove the SOM retry flow visibly, the SOM and simulator work was wasted. Do not cut the `expect_event_sequence` assertion — it's what turns "it worked" into "I can see it worked, and so can a LinkedIn reader."
+**The LLM scenario is the whole point of v0.1.** If you skip it or water it down, v0.1 is a BSS with an LLM demo, not an LLM-native BSS. Do not let Claude Code propose "we'll add the LLM scenario in Phase 11" — it's Phase 10 or bust.
 
-**Don't let Claude Code quietly widen scope.** Scenario runners attract feature creep — parallel steps, conditional branches, loops, HTTP mocking. Stop it. v0.1 only needs linear steps with variable interpolation, capture, assertions, and polling. Anything more is Phase 11+.
+**Don't trust the LLM's self-report.** Always verify the final state with a direct tool call after the LLM finishes. LLMs can be confidently wrong. Verification can't.
 
-**Ship when green.** When both scenarios pass on a fresh clone, you are done. Resist the urge to add "just one more thing" before tagging. v0.1 is a foundation, not a destination.
+**If the LLM scenario is flaky, the fix is the semantic layer, not the test.** Don't add retry loops or relax the assertions. If MiMo v2 Flash can't diagnose a blocked subscription three times in a row, either the system prompt needs iteration, the docstrings need tightening, or the error recovery patterns need more examples. The test should stay strict.
 
-**Don't let the datetime grep become "just skip those, they're tests".** If any non-test code uses wall clock, scenarios will silently fail on certain days or at certain times. The whole point of `clock.freeze` is deterministic scenarios; direct `datetime.now()` calls bypass it. Fix all of them first, or the scenario runner ships broken.
+**Don't let Claude Code quietly widen scope.** Scenario runners attract feature creep — parallel steps, conditional branches, loops, HTTP mocking. Stop it. v0.1 needs deterministic steps, LLM steps, variable interpolation, capture, assertions, polling. Nothing more.
+
+**Ship when green.** When all three scenarios pass on a fresh clone, you are done. The LLM scenario must pass three times in a row, but after that, stop. v0.1 is a foundation, not a destination.
+
+**Don't let the datetime grep become "just skip those, they're tests".** If any non-test code uses wall clock, scenarios will silently fail on certain days or at certain times. Fix all of them first.
+
+**Budget the LLM scenario cost up front.** MiMo v2 Flash at current rates means each scenario run costs under a cent. Three-runs-in-a-row ship gate = under 5 cents. If Claude Code proposes "let's only run it once in CI to save money", reject — the three-runs check is what catches non-determinism. If the cost were genuinely high (Sonnet/Opus territory), the answer is "move dev to MiMo, only run hero with the expensive model once manually before tagging". But at MiMo prices, cost is not a real constraint.
