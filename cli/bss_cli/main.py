@@ -13,6 +13,7 @@ from .commands import (
     catalog as catalog_cmd,
     clock as clock_cmd,
     customer as customer_cmd,
+    inventory as inventory_cmd,
     order as order_cmd,
     payment as payment_cmd,
     prov as prov_cmd,
@@ -41,6 +42,7 @@ app.add_typer(payment_cmd.app, name="payment")
 app.add_typer(usage_cmd.app, name="usage")
 app.add_typer(prov_cmd.app, name="prov")
 app.add_typer(som_cmd.app, name="som")
+app.add_typer(inventory_cmd.app, name="inventory")
 app.add_typer(clock_cmd.app, name="clock")
 app.add_typer(trace_cmd.app, name="trace")
 app.add_typer(admin_cmd.app, name="admin")

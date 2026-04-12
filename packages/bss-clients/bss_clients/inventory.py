@@ -35,7 +35,7 @@ class InventoryClient(BSSClient):
         """GET /inventory-api/v1/msisdn."""
         params: dict[str, Any] = {"limit": limit}
         if state:
-            params["state"] = state
+            params["status"] = state
         if prefix:
             params["prefix"] = prefix
         resp = await self._request(
@@ -89,7 +89,7 @@ class InventoryClient(BSSClient):
         """GET /inventory-api/v1/esim."""
         params: dict[str, Any] = {"limit": limit}
         if state:
-            params["state"] = state
+            params["status"] = state
         resp = await self._request(
             "GET", "/inventory-api/v1/esim", params=params
         )
