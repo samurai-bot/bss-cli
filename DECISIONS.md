@@ -339,6 +339,56 @@ Forbidden transitions: any trigger from `terminated`, any undefined `(from_state
 **Alternatives:** Build the real event consumer early — too much Phase 8 scope creep.
 **Consequences:** **This endpoint must be removed in Phase 8** when the real `usage.rated` event consumer replaces it. If it ships to v0.1 without a gate, usage simulation can bypass Mediation's ingress rules and break the block-on-exhaust doctrine.
 
+### 2026-04-12 — Phase 7 — COM order state machine
+
+| From | Trigger | To | Guard | Action |
+|---|---|---|---|---|
+| acknowledged | start | in_progress | — | emit `order.in_progress` |
+| acknowledged | cancel | cancelled | — | emit `order.cancelled` |
+| in_progress | cancel | cancelled | no service_order exists (SOMClient check) | emit `order.cancelled` |
+| in_progress | complete | completed | triggered by `service_order.completed` event | call SubscriptionClient.create, emit `order.completed` |
+| in_progress | fail | failed | triggered by `service_order.failed` event | emit `order.failed` |
+
+Terminal states: `completed`, `failed`, `cancelled`.
+
+Notes: `acknowledged → in_progress` happens synchronously within POST /productOrder. SOM cleanup releases resources before emitting `service_order.failed`, so COM does not call InventoryClient on failure.
+
+### 2026-04-12 — Phase 7 — SOM ServiceOrder state machine
+
+| From | Trigger | To | Guard | Action |
+|---|---|---|---|---|
+| acknowledged | start | in_progress | — | decompose, reserve resources, create services, emit provisioning tasks |
+| in_progress | complete | completed | all services activated | emit `service_order.completed` with CFS characteristics |
+| in_progress | fail | failed | any service permanently failed | release MSISDN + eSIM via InventoryClient, emit `service_order.failed` |
+
+Terminal states: `completed`, `failed`.
+
+### 2026-04-12 — Phase 7 — SOM Service state machine (CFS + RFS)
+
+| From | Trigger | To | Guard | Action |
+|---|---|---|---|---|
+| designed | reserve | reserved | — | CFS: reserve MSISDN+eSIM via InventoryClient, populate characteristics; RFS: mark provisioning tasks submitted |
+| reserved | activate | activated | RFS: all tasks completed; CFS: all child RFS activated + all CFS tasks completed | emit `service.activated` |
+| designed | fail | failed | — | — |
+| reserved | fail | failed | — | CFS: release MSISDN+eSIM via InventoryClient |
+| activated | terminate | terminated | — | CFS: release MSISDN, recycle eSIM |
+
+Terminal states: `failed`, `terminated`.
+
+Notes: `feasibility_checked` state exists in the model but is skipped in v0.1. Services are created directly in `designed`. Task completion tracked in service `characteristics` JSONB via `pending_tasks` dict.
+
+### 2026-04-12 — Phase 7 — RabbitMQ pub/sub introduced
+**Context:** Existing publisher only writes to `audit.domain_event` with `published_to_mq=False`. Phase 7 requires event consumers (SOM listens for `order.in_progress`, `provisioning.task.completed`; COM listens for `service_order.completed`; provisioning-sim listens for `provisioning.task.created`).
+**Decision:** Enhance publisher to accept an optional `aio_pika.Exchange` parameter. After writing the audit row and committing, publish to RabbitMQ best-effort. Each consuming service declares its own durable queue bound to `bss.events` topic exchange during lifespan startup. Existing services (catalog, crm, payment, subscription) that don't consume events pass `exchange=None` and continue audit-only.
+**Alternatives:** (a) Separate outbox worker polling `published_to_mq=False` rows — more reliable but adds infrastructure complexity for v0.1. (b) Publish before commit — risks publishing events for rolled-back transactions.
+**Consequences:** First real event-driven flow in the system. Consumers must be idempotent. Replay job (post-v0.1) can republish from audit rows where `published_to_mq=False`.
+
+### 2026-04-12 — Phase 7 — eSIM release vs recycle distinction
+**Context:** Failure cleanup requires returning a reserved eSIM to `available`. Existing `recycle_esim` transitions `activated→recycled`, not `reserved→available`.
+**Decision:** Add `POST /inventory-api/v1/esim/{iccid}/release` endpoint to CRM + `release_esim(iccid)` to InventoryClient. `release` = reserved→available (failed/cancelled order, eSIM never used). `recycle` = activated→recycled (terminated subscription, eSIM was used).
+**Alternatives:** Overload `recycle` to handle both — breaks the eSIM state machine semantics.
+**Consequences:** SOM calls `release_esim` on failure, `recycle_esim` on termination. Phase 6 subscription code uses `recycle_esim` on fail_activate path — acceptable for now since the subscription is being terminated, but could be tightened to `release_esim` in a future cleanup.
+
 ### 2026-04-11 — Phase 5 — Integration tests must use unique identifiers per run
 **Context:** `test_payment_crm_integration.py` hardcoded `integ-payment@test.com` as the test customer email. On second run, CRM returned 422 (`email_unique` policy), test silently skipped with "Could not create test customer: 422". This made it look like CRM was down when it was actually working.
 **Decision:** Integration tests that create real data in external services must use `uuid.uuid4().hex[:8]` or similar in any unique field (email, MSISDN, external refs). The test should still clean up after itself where possible, but uniqueness prevents silent failures on re-run.

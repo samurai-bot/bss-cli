@@ -7,6 +7,7 @@ from .crm import CRMClient
 from .errors import ClientError, NotFound, PolicyViolationFromServer, ServerError, Timeout
 from .inventory import InventoryClient
 from .payment import PaymentClient
+from .som import SOMClient
 from .subscription import SubscriptionClient
 
 __all__ = [
@@ -20,6 +21,7 @@ __all__ = [
     "NotFound",
     "PaymentClient",
     "PolicyViolationFromServer",
+    "SOMClient",
     "ServerError",
     "SubscriptionClient",
     "Timeout",

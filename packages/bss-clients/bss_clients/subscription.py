@@ -22,6 +22,29 @@ class SubscriptionClient(BSSClient):
     ):
         super().__init__(base_url, auth_provider, timeout)
 
+    async def create(
+        self,
+        *,
+        customer_id: str,
+        offering_id: str,
+        msisdn: str,
+        iccid: str,
+        payment_method_id: str,
+    ) -> dict[str, Any]:
+        """POST /subscription-api/v1/subscription — create and activate."""
+        resp = await self._request(
+            "POST",
+            "/subscription-api/v1/subscription",
+            json={
+                "customerId": customer_id,
+                "offeringId": offering_id,
+                "msisdn": msisdn,
+                "iccid": iccid,
+                "paymentMethodId": payment_method_id,
+            },
+        )
+        return resp.json()
+
     async def get(self, subscription_id: str) -> dict[str, Any]:
         """GET /subscription-api/v1/subscription/{id}."""
         resp = await self._request(

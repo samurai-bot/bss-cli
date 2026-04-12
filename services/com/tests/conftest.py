@@ -1,0 +1,156 @@
+"""Test fixtures for COM service."""
+
+from unittest.mock import AsyncMock
+
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+
+from app.config import Settings
+from app.logging import configure_logging
+from app.main import create_app
+from bss_clients import (
+    CatalogClient,
+    CRMClient,
+    PaymentClient,
+    SOMClient,
+    SubscriptionClient,
+)
+
+
+@pytest.fixture(scope="session")
+def settings() -> Settings:
+    s = Settings()
+    if not s.db_url:
+        pytest.fail("BSS_DB_URL is not set. Export it or add to .env.")
+    return s
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _configure_logging(settings: Settings) -> None:
+    configure_logging(settings.log_level)
+
+
+@pytest_asyncio.fixture
+async def db_engine(settings: Settings):
+    engine = create_async_engine(settings.db_url, pool_size=2, max_overflow=2)
+    yield engine
+    await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def db_session(db_engine):
+    conn = await db_engine.connect()
+    txn = await conn.begin()
+    session = AsyncSession(bind=conn, expire_on_commit=False)
+
+    async def _fake_commit():
+        await session.flush()
+    session.commit = _fake_commit
+
+    yield session
+
+    await txn.rollback()
+    await conn.close()
+
+
+def _mock_crm() -> AsyncMock:
+    mock = AsyncMock(spec=CRMClient)
+    mock.get_customer = AsyncMock(return_value={
+        "id": "CUST-0001",
+        "status": "active",
+        "kycStatus": "verified",
+    })
+    mock.close = AsyncMock()
+    return mock
+
+
+def _mock_catalog() -> AsyncMock:
+    mock = AsyncMock(spec=CatalogClient)
+    mock.get_offering = AsyncMock(return_value={
+        "id": "PLAN_M",
+        "name": "Standard",
+        "productOfferingPrice": [{
+            "priceType": "recurring",
+            "price": {
+                "taxIncludedAmount": {"value": "25.00", "unit": "SGD"},
+            },
+        }],
+    })
+    mock.close = AsyncMock()
+    return mock
+
+
+def _mock_payment() -> AsyncMock:
+    mock = AsyncMock(spec=PaymentClient)
+    mock.list_methods = AsyncMock(return_value=[{
+        "id": "PM-0001",
+        "customerId": "CUST-0001",
+        "isDefault": True,
+        "status": "active",
+    }])
+    mock.close = AsyncMock()
+    return mock
+
+
+def _mock_som() -> AsyncMock:
+    mock = AsyncMock(spec=SOMClient)
+    # list_for_order returns empty (no service orders started)
+    mock.list_for_order = AsyncMock(return_value=[])
+    mock.close = AsyncMock()
+    return mock
+
+
+def _mock_subscription() -> AsyncMock:
+    mock = AsyncMock(spec=SubscriptionClient)
+    mock.create = AsyncMock(return_value={
+        "id": "SUB-0001",
+        "customerId": "CUST-0001",
+        "state": "active",
+    })
+    mock.close = AsyncMock()
+    return mock
+
+
+@pytest_asyncio.fixture
+async def client(settings: Settings, db_engine, db_session: AsyncSession):
+    app = create_app(settings)
+    app.state.engine = db_engine
+    app.state.mq_exchange = None
+    app.state.mq_connection = None
+    app.state.crm_client = _mock_crm()
+    app.state.catalog_client = _mock_catalog()
+    app.state.payment_client = _mock_payment()
+    app.state.som_client = _mock_som()
+    app.state.subscription_client = _mock_subscription()
+
+    class _FakeSessionFactory:
+        def __call__(self):
+            return _FakeContextManager(db_session)
+
+    class _FakeContextManager:
+        def __init__(self, session):
+            self._session = session
+        async def __aenter__(self):
+            return self._session
+        async def __aexit__(self, *args):
+            pass
+
+    app.state.session_factory = _FakeSessionFactory()
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+
+
+@pytest_asyncio.fixture
+async def mock_clients(client):
+    app = client._transport.app
+    return {
+        "crm": app.state.crm_client,
+        "catalog": app.state.catalog_client,
+        "payment": app.state.payment_client,
+        "som": app.state.som_client,
+        "subscription": app.state.subscription_client,
+    }

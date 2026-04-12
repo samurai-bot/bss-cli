@@ -81,6 +81,15 @@ async def recycle_esim(
     return to_esim_response(row)
 
 
+@router.post("/esim/{iccid}/release", response_model=EsimResponse)
+async def release_esim(
+    iccid: str,
+    svc: InventoryService = Depends(get_inventory_service),
+) -> EsimResponse:
+    row = await svc.release_esim(iccid)
+    return to_esim_response(row)
+
+
 @router.get("/esim/{iccid}/activation", response_model=EsimActivationResponse)
 async def get_activation_code(
     iccid: str,

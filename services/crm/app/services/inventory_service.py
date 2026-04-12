@@ -55,6 +55,22 @@ class InventoryService:
         await self._session.commit()
         return result
 
+    async def reserve_next_msisdn(self, preference: str | None = None) -> MsisdnPool:
+        """Reserve next available MSISDN, or a preferred one if specified."""
+        ctx = auth_context.current()
+        if preference:
+            result = await self._msisdn_repo.reserve_atomic(preference, ctx.tenant)
+        else:
+            result = await self._msisdn_repo.reserve_next_available(ctx.tenant)
+        if not result:
+            raise PolicyViolation(
+                rule="msisdn.reserve.no_available",
+                message="No MSISDN available matching criteria",
+                context={"preference": preference},
+            )
+        await self._session.commit()
+        return result
+
     async def assign_msisdn(self, msisdn: str, subscription_id: str | None = None) -> MsisdnPool:
         row = await self._msisdn_repo.get(msisdn)
         if not row:

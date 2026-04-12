@@ -35,26 +35,40 @@ services:
   com:
     <<: *bss-service
     build:
-      <<: *bss-build
-      args: { SERVICE: com }
+      context: .
+      dockerfile: services/com/Dockerfile
     ports: ["8004:8000"]
-    environment: { BSS_SERVICE_NAME: com }
+    environment:
+      BSS_SERVICE_NAME: com
+      BSS_CRM_URL: http://crm:8000
+      BSS_CATALOG_URL: http://catalog:8000
+      BSS_PAYMENT_URL: http://payment:8000
+      BSS_SOM_URL: http://som:8000
+      BSS_SUBSCRIPTION_URL: http://subscription:8000
+    depends_on: [crm, catalog, payment, som, subscription]
 
   som:
     <<: *bss-service
     build:
-      <<: *bss-build
-      args: { SERVICE: som }
+      context: .
+      dockerfile: services/som/Dockerfile
     ports: ["8005:8000"]
-    environment: { BSS_SERVICE_NAME: som }
+    environment:
+      BSS_SERVICE_NAME: som
+      BSS_CRM_URL: http://crm:8000
+    depends_on: [crm]
 
   subscription:
     <<: *bss-service
     build:
-      <<: *bss-build
-      args: { SERVICE: subscription }
+      context: .
+      dockerfile: services/subscription/Dockerfile
     ports: ["8006:8000"]
-    environment: { BSS_SERVICE_NAME: subscription }
+    environment:
+      BSS_SERVICE_NAME: subscription
+      BSS_CRM_URL: http://crm:8000
+      BSS_CATALOG_URL: http://catalog:8000
+      BSS_PAYMENT_URL: http://payment:8000
 
   mediation:
     <<: *bss-service
@@ -83,10 +97,11 @@ services:
   provisioning-sim:
     <<: *bss-service
     build:
-      <<: *bss-build
-      args: { SERVICE: provisioning-sim }
+      context: .
+      dockerfile: services/provisioning-sim/Dockerfile
     ports: ["8010:8000"]
-    environment: { BSS_SERVICE_NAME: provisioning-sim }
+    environment:
+      BSS_SERVICE_NAME: provisioning-sim
 
 networks:
   bss:

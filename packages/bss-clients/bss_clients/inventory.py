@@ -39,6 +39,16 @@ class InventoryClient(BSSClient):
         )
         return resp.json()
 
+    async def reserve_next_msisdn(
+        self, preference: str | None = None
+    ) -> dict[str, Any]:
+        """POST /inventory-api/v1/msisdn/reserve-next — atomic auto-pick."""
+        body = {"preference": preference} if preference else {}
+        resp = await self._request(
+            "POST", "/inventory-api/v1/msisdn/reserve-next", json=body
+        )
+        return resp.json()
+
     async def assign_msisdn(self, msisdn: str) -> dict[str, Any]:
         """POST /inventory-api/v1/msisdn/{msisdn}/assign."""
         resp = await self._request(
@@ -80,8 +90,15 @@ class InventoryClient(BSSClient):
         )
         return resp.json()
 
+    async def release_esim(self, iccid: str) -> dict[str, Any]:
+        """POST /inventory-api/v1/esim/{iccid}/release — reserved→available."""
+        resp = await self._request(
+            "POST", f"/inventory-api/v1/esim/{iccid}/release"
+        )
+        return resp.json()
+
     async def recycle_esim(self, iccid: str) -> dict[str, Any]:
-        """POST /inventory-api/v1/esim/{iccid}/recycle."""
+        """POST /inventory-api/v1/esim/{iccid}/recycle — activated→recycled."""
         resp = await self._request(
             "POST", f"/inventory-api/v1/esim/{iccid}/recycle"
         )

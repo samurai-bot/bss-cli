@@ -41,6 +41,16 @@ async def reserve_msisdn(
     return to_msisdn_response(row)
 
 
+@router.post("/msisdn/reserve-next", response_model=MsisdnResponse, status_code=201)
+async def reserve_next_msisdn(
+    body: dict | None = None,
+    svc: InventoryService = Depends(get_inventory_service),
+) -> MsisdnResponse:
+    preference = (body or {}).get("preference")
+    row = await svc.reserve_next_msisdn(preference=preference)
+    return to_msisdn_response(row)
+
+
 @router.post("/msisdn/{msisdn}/assign", response_model=MsisdnResponse)
 async def assign_msisdn(
     msisdn: str,
