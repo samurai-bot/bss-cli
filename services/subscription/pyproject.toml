@@ -14,6 +14,7 @@ dependencies = [
     "bss-clients",
     "bss-admin",
     "bss-clock",
+    "bss-events",
 ]
 
 [dependency-groups]
@@ -38,6 +39,7 @@ bss-models = { workspace = true }
 bss-clients = { workspace = true }
 bss-admin = { workspace = true }
 bss-clock = { workspace = true }
+bss-events = { workspace = true }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

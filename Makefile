@@ -31,7 +31,7 @@ build:
 
 test:
 	@failed=0; \
-	for dir in packages/bss-clients packages/bss-admin packages/bss-clock services/catalog services/crm services/payment services/subscription services/com services/som services/provisioning-sim services/mediation services/rating orchestrator cli; do \
+	for dir in packages/bss-clients packages/bss-admin packages/bss-clock packages/bss-events services/catalog services/crm services/payment services/subscription services/com services/som services/provisioning-sim services/mediation services/rating orchestrator cli; do \
 		printf "\n══ $$dir ══\n"; \
 		PYTHONPATH=$$dir:$$PYTHONPATH uv run pytest $$dir/tests/ -v -m "not integration" || failed=1; \
 	done; \

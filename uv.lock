@@ -316,6 +316,32 @@ dev = [
 name = "bss-events"
 version = "0.1.0"
 source = { editable = "packages/bss-events" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "sqlalchemy" },
+    { name = "structlog" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "httpx" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", specifier = ">=0.110" },
+    { name = "sqlalchemy", specifier = ">=2.0" },
+    { name = "structlog", specifier = ">=24.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=0.23" },
+]
 
 [[package]]
 name = "bss-models"
@@ -550,6 +576,7 @@ dependencies = [
     { name = "bss-admin" },
     { name = "bss-clients" },
     { name = "bss-clock" },
+    { name = "bss-events" },
     { name = "bss-models" },
     { name = "fastapi" },
     { name = "pydantic-settings" },
@@ -573,6 +600,7 @@ requires-dist = [
     { name = "bss-admin", editable = "packages/bss-admin" },
     { name = "bss-clients", editable = "packages/bss-clients" },
     { name = "bss-clock", editable = "packages/bss-clock" },
+    { name = "bss-events", editable = "packages/bss-events" },
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "pydantic-settings", specifier = ">=2.0" },
@@ -1196,6 +1224,7 @@ dependencies = [
     { name = "bss-admin" },
     { name = "bss-clients" },
     { name = "bss-clock" },
+    { name = "bss-events" },
     { name = "bss-models" },
     { name = "fastapi" },
     { name = "pydantic-settings" },
@@ -1219,6 +1248,7 @@ requires-dist = [
     { name = "bss-admin", editable = "packages/bss-admin" },
     { name = "bss-clients", editable = "packages/bss-clients" },
     { name = "bss-clock", editable = "packages/bss-clock" },
+    { name = "bss-events", editable = "packages/bss-events" },
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "pydantic-settings", specifier = ">=2.0" },
@@ -1472,6 +1502,7 @@ dependencies = [
     { name = "bss-admin" },
     { name = "bss-clients" },
     { name = "bss-clock" },
+    { name = "bss-events" },
     { name = "bss-models" },
     { name = "fastapi" },
     { name = "pydantic-settings" },
@@ -1494,6 +1525,7 @@ requires-dist = [
     { name = "bss-admin", editable = "packages/bss-admin" },
     { name = "bss-clients", editable = "packages/bss-clients" },
     { name = "bss-clock", editable = "packages/bss-clock" },
+    { name = "bss-events", editable = "packages/bss-events" },
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "pydantic-settings", specifier = ">=2.0" },
@@ -1613,6 +1645,7 @@ dependencies = [
     { name = "bss-admin" },
     { name = "bss-clients" },
     { name = "bss-clock" },
+    { name = "bss-events" },
     { name = "bss-models" },
     { name = "fastapi" },
     { name = "pydantic-settings" },
@@ -1636,6 +1669,7 @@ requires-dist = [
     { name = "bss-admin", editable = "packages/bss-admin" },
     { name = "bss-clients", editable = "packages/bss-clients" },
     { name = "bss-clock", editable = "packages/bss-clock" },
+    { name = "bss-events", editable = "packages/bss-events" },
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "pydantic-settings", specifier = ">=2.0" },
@@ -1865,6 +1899,7 @@ dependencies = [
     { name = "aio-pika" },
     { name = "bss-clients" },
     { name = "bss-clock" },
+    { name = "bss-events" },
     { name = "bss-models" },
     { name = "fastapi" },
     { name = "pydantic-settings" },
@@ -1885,6 +1920,7 @@ requires-dist = [
     { name = "aio-pika", specifier = ">=9.0" },
     { name = "bss-clients", editable = "packages/bss-clients" },
     { name = "bss-clock", editable = "packages/bss-clock" },
+    { name = "bss-events", editable = "packages/bss-events" },
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "pydantic-settings", specifier = ">=2.0" },
@@ -2077,6 +2113,7 @@ dependencies = [
     { name = "bss-admin" },
     { name = "bss-clients" },
     { name = "bss-clock" },
+    { name = "bss-events" },
     { name = "bss-models" },
     { name = "fastapi" },
     { name = "pydantic-settings" },
@@ -2100,6 +2137,7 @@ requires-dist = [
     { name = "bss-admin", editable = "packages/bss-admin" },
     { name = "bss-clients", editable = "packages/bss-clients" },
     { name = "bss-clock", editable = "packages/bss-clock" },
+    { name = "bss-events", editable = "packages/bss-events" },
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "pydantic-settings", specifier = ">=2.0" },
@@ -2208,6 +2246,7 @@ dependencies = [
     { name = "bss-admin" },
     { name = "bss-clients" },
     { name = "bss-clock" },
+    { name = "bss-events" },
     { name = "bss-models" },
     { name = "fastapi" },
     { name = "pydantic-settings" },
@@ -2233,6 +2272,7 @@ requires-dist = [
     { name = "bss-admin", editable = "packages/bss-admin" },
     { name = "bss-clients", editable = "packages/bss-clients" },
     { name = "bss-clock", editable = "packages/bss-clock" },
+    { name = "bss-events", editable = "packages/bss-events" },
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "pydantic-settings", specifier = ">=2.0" },
