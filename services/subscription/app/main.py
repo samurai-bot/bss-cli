@@ -2,7 +2,7 @@
 
 from fastapi import FastAPI
 
-from app.api import health, subscription
+from app.api import admin, health, subscription
 from app.config import Settings
 from app.dependencies import lifespan
 from app.logging import configure_logging
@@ -30,5 +30,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         subscription.router,
         prefix="/subscription-api/v1",
     )
+
+    # Admin — operational-data reset (gated by BSS_ALLOW_ADMIN_RESET)
+    app.include_router(admin.router, prefix="/admin-api/v1")
 
     return app

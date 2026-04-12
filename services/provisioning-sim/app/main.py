@@ -2,7 +2,7 @@
 
 from fastapi import FastAPI
 
-from app.api import fault_injection, health, task
+from app.api import admin, fault_injection, health, task
 from app.config import Settings
 from app.dependencies import lifespan
 from app.logging import configure_logging
@@ -34,5 +34,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         fault_injection.router,
         prefix="/provisioning-api/v1",
     )
+
+    # Admin — operational-data reset (gated by BSS_ALLOW_ADMIN_RESET)
+    app.include_router(admin.router, prefix="/admin-api/v1")
 
     return app

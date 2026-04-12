@@ -2,7 +2,7 @@
 
 from fastapi import FastAPI
 
-from app.api import health, usage
+from app.api import admin, health, usage
 from app.config import Settings
 from app.dependencies import lifespan
 from app.logging import configure_logging
@@ -30,5 +30,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         usage.router,
         prefix="/tmf-api/usageManagement/v4",
     )
+
+    # Admin — operational-data reset (gated by BSS_ALLOW_ADMIN_RESET)
+    app.include_router(admin.router, prefix="/admin-api/v1")
 
     return app

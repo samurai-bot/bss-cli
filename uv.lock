@@ -5,6 +5,7 @@ requires-python = ">=3.12"
 [manifest]
 members = [
     "billing",
+    "bss-admin",
     "bss-cli",
     "bss-cli-workspace",
     "bss-clients",
@@ -151,6 +152,23 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.0" },
     { name = "structlog", specifier = ">=24.4" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
+]
+
+[[package]]
+name = "bss-admin"
+version = "0.1.0"
+source = { editable = "packages/bss-admin" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "sqlalchemy" },
+    { name = "structlog" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", specifier = ">=0.110" },
+    { name = "sqlalchemy", specifier = ">=2.0" },
+    { name = "structlog", specifier = ">=24.0" },
 ]
 
 [[package]]
@@ -481,6 +499,7 @@ source = { editable = "services/com" }
 dependencies = [
     { name = "aio-pika" },
     { name = "asyncpg" },
+    { name = "bss-admin" },
     { name = "bss-clients" },
     { name = "bss-models" },
     { name = "fastapi" },
@@ -502,6 +521,7 @@ dev = [
 requires-dist = [
     { name = "aio-pika", specifier = ">=9.0" },
     { name = "asyncpg", specifier = ">=0.29" },
+    { name = "bss-admin", editable = "packages/bss-admin" },
     { name = "bss-clients", editable = "packages/bss-clients" },
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "fastapi", specifier = ">=0.115" },
@@ -609,6 +629,7 @@ version = "0.1.0"
 source = { editable = "services/crm" }
 dependencies = [
     { name = "asyncpg" },
+    { name = "bss-admin" },
     { name = "bss-clients" },
     { name = "bss-models" },
     { name = "fastapi" },
@@ -629,6 +650,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "asyncpg", specifier = ">=0.29" },
+    { name = "bss-admin", editable = "packages/bss-admin" },
     { name = "bss-clients", editable = "packages/bss-clients" },
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "fastapi", specifier = ">=0.115" },
@@ -1119,6 +1141,7 @@ source = { editable = "services/mediation" }
 dependencies = [
     { name = "aio-pika" },
     { name = "asyncpg" },
+    { name = "bss-admin" },
     { name = "bss-clients" },
     { name = "bss-models" },
     { name = "fastapi" },
@@ -1140,6 +1163,7 @@ dev = [
 requires-dist = [
     { name = "aio-pika", specifier = ">=9.0" },
     { name = "asyncpg", specifier = ">=0.29" },
+    { name = "bss-admin", editable = "packages/bss-admin" },
     { name = "bss-clients", editable = "packages/bss-clients" },
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "fastapi", specifier = ">=0.115" },
@@ -1391,6 +1415,7 @@ version = "0.1.0"
 source = { editable = "services/payment" }
 dependencies = [
     { name = "asyncpg" },
+    { name = "bss-admin" },
     { name = "bss-clients" },
     { name = "bss-models" },
     { name = "fastapi" },
@@ -1411,6 +1436,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "asyncpg", specifier = ">=0.29" },
+    { name = "bss-admin", editable = "packages/bss-admin" },
     { name = "bss-clients", editable = "packages/bss-clients" },
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "fastapi", specifier = ">=0.115" },
@@ -1528,6 +1554,7 @@ source = { editable = "services/provisioning-sim" }
 dependencies = [
     { name = "aio-pika" },
     { name = "asyncpg" },
+    { name = "bss-admin" },
     { name = "bss-clients" },
     { name = "bss-models" },
     { name = "fastapi" },
@@ -1549,6 +1576,7 @@ dev = [
 requires-dist = [
     { name = "aio-pika", specifier = ">=9.0" },
     { name = "asyncpg", specifier = ">=0.29" },
+    { name = "bss-admin", editable = "packages/bss-admin" },
     { name = "bss-clients", editable = "packages/bss-clients" },
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "fastapi", specifier = ">=0.115" },
@@ -1986,6 +2014,7 @@ source = { editable = "services/som" }
 dependencies = [
     { name = "aio-pika" },
     { name = "asyncpg" },
+    { name = "bss-admin" },
     { name = "bss-clients" },
     { name = "bss-models" },
     { name = "fastapi" },
@@ -2007,6 +2036,7 @@ dev = [
 requires-dist = [
     { name = "aio-pika", specifier = ">=9.0" },
     { name = "asyncpg", specifier = ">=0.29" },
+    { name = "bss-admin", editable = "packages/bss-admin" },
     { name = "bss-clients", editable = "packages/bss-clients" },
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "fastapi", specifier = ">=0.115" },
@@ -2113,6 +2143,7 @@ source = { editable = "services/subscription" }
 dependencies = [
     { name = "aio-pika" },
     { name = "asyncpg" },
+    { name = "bss-admin" },
     { name = "bss-clients" },
     { name = "bss-models" },
     { name = "fastapi" },
@@ -2136,6 +2167,7 @@ dev = [
 requires-dist = [
     { name = "aio-pika", specifier = ">=9.0" },
     { name = "asyncpg", specifier = ">=0.29" },
+    { name = "bss-admin", editable = "packages/bss-admin" },
     { name = "bss-clients", editable = "packages/bss-clients" },
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "fastapi", specifier = ">=0.115" },

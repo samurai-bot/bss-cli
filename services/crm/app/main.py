@@ -2,7 +2,7 @@
 
 from fastapi import FastAPI
 
-from app.api import health
+from app.api import admin, health
 from app.api.crm import agent, case, kyc
 from app.api.inventory import esim, msisdn
 from app.api.tmf import customer, interaction, ticket
@@ -60,5 +60,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # Inventory — eSIM
     app.include_router(esim.router, prefix="/inventory-api/v1")
+
+    # Admin — operational-data reset (gated by BSS_ALLOW_ADMIN_RESET)
+    app.include_router(admin.router, prefix="/admin-api/v1")
 
     return app

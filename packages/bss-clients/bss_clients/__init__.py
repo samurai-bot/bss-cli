@@ -1,5 +1,6 @@
 """bss-clients — shared HTTP client package for service-to-service calls."""
 
+from .admin import AdminClient
 from .auth import AuthProvider, NoAuthProvider
 from .base import BSSClient, set_context
 from .billing import BillingClient
@@ -15,6 +16,7 @@ from .som import SOMClient
 from .subscription import SubscriptionClient
 
 __all__ = [
+    "AdminClient",
     "AuthProvider",
     "BSSClient",
     "BillingClient",

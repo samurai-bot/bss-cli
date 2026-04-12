@@ -8,6 +8,7 @@ import typer
 from rich import print as rprint
 
 from .commands import (
+    admin as admin_cmd,
     case as case_cmd,
     catalog as catalog_cmd,
     clock as clock_cmd,
@@ -41,6 +42,7 @@ app.add_typer(prov_cmd.app, name="prov")
 app.add_typer(som_cmd.app, name="som")
 app.add_typer(clock_cmd.app, name="clock")
 app.add_typer(trace_cmd.app, name="trace")
+app.add_typer(admin_cmd.app, name="admin")
 
 
 # `bss ask "..."` is a top-level command, not a subgroup.

@@ -2,7 +2,7 @@
 
 from fastapi import FastAPI
 
-from app.api import health
+from app.api import admin, health
 from app.api.tmf import payment, payment_method
 from app.config import Settings
 from app.dependencies import lifespan
@@ -37,5 +37,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         payment.router,
         prefix="/tmf-api/paymentManagement/v4",
     )
+
+    # Admin — operational-data reset (gated by BSS_ALLOW_ADMIN_RESET)
+    app.include_router(admin.router, prefix="/admin-api/v1")
 
     return app
