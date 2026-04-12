@@ -1,6 +1,9 @@
 """Customer service — orchestrates policies, repos, events."""
 
+from __future__ import annotations
+
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import structlog
@@ -12,6 +15,9 @@ from app.policies import customer as customer_policies
 from app.repositories.customer_repo import CustomerRepository
 from app.repositories.interaction_repo import InteractionRepository
 from bss_models.crm import ContactMedium, Customer, Individual, Interaction, Party
+
+if TYPE_CHECKING:
+    from bss_clients.subscription import SubscriptionClient
 
 log = structlog.get_logger()
 
@@ -27,10 +33,12 @@ class CustomerService:
         session: AsyncSession,
         customer_repo: CustomerRepository,
         interaction_repo: InteractionRepository,
+        subscription_client: SubscriptionClient | None = None,
     ) -> None:
         self._session = session
         self._customer_repo = customer_repo
         self._interaction_repo = interaction_repo
+        self._subscription_client = subscription_client
 
     async def create_customer(
         self,
@@ -135,6 +143,19 @@ class CustomerService:
                 message=f"Customer {customer_id} not found",
                 context={"customer_id": customer_id},
             )
+
+        # Policy: cannot deactivate a customer with active subscriptions
+        new_status = updates.get("status")
+        if (
+            new_status
+            and new_status != "active"
+            and cust.status == "active"
+            and self._subscription_client
+        ):
+            await customer_policies.check_no_active_subscriptions(
+                customer_id, self._subscription_client
+            )
+
         for k, v in updates.items():
             if hasattr(cust, k) and v is not None:
                 setattr(cust, k, v)

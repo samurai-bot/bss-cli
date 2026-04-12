@@ -5,6 +5,8 @@ in teardown. session.commit() is monkeypatched to flush() so writes are
 visible within the test but the outer transaction is never committed.
 """
 
+from unittest.mock import AsyncMock
+
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -87,6 +89,11 @@ async def client(settings: Settings, db_engine, db_session: AsyncSession):
             pass
 
     app.state.session_factory = _FakeSessionFactory()
+
+    # Mock subscription client — no active subscriptions by default
+    mock_sub_client = AsyncMock()
+    mock_sub_client.list_for_customer = AsyncMock(return_value=[])
+    app.state.subscription_client = mock_sub_client
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:

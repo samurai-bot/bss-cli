@@ -37,3 +37,13 @@ class CatalogClient(BSSClient):
             "/tmf-api/productCatalogManagement/v4/productOffering",
         )
         return resp.json()
+
+    async def get_vas(self, vas_id: str) -> dict[str, Any]:
+        """GET /vas/offering/{vas_id}."""
+        resp = await self._request("GET", f"/vas/offering/{vas_id}")
+        return resp.json()
+
+    async def list_vas(self) -> list[dict[str, Any]]:
+        """GET /vas/offering."""
+        resp = await self._request("GET", "/vas/offering")
+        return resp.json()

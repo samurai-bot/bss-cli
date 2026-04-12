@@ -6,14 +6,17 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 class Settings(BaseSettings):
-    service_name: str = "crm"
+    service_name: str = "subscription"
     version: str = "0.1.0"
     log_level: str = "INFO"
     db_url: str = ""
     mq_url: str = ""
     env: str = "development"
     tenant_default: str = "DEFAULT"
-    subscription_url: str = "http://subscription:8000"
+    crm_url: str = "http://crm:8000"
+    payment_url: str = "http://payment:8000"
+    catalog_url: str = "http://catalog:8000"
+    enable_test_endpoints: bool = False
 
     model_config = SettingsConfigDict(
         env_file=_REPO_ROOT / ".env",

@@ -315,6 +315,30 @@ RUN sed -i 's|workspace = true|path = "../../packages/bss-models"|' pyproject.to
 **Alternatives:** (a) Run lifespan in tests — `ASGITransport` doesn't support it. (b) Extract lifespan setup into a shared function called by both lifespan and fixtures — viable but adds indirection for a pattern that's fixture-local.
 **Consequences:** Every service's conftest.py and any standalone test fixtures (integration, failure simulation) are responsible for complete `app.state` setup. When a service adds a new cross-service client, every fixture must be updated. This is a known maintenance cost accepted in exchange for the simplicity of the ASGI test transport approach.
 
+### 2026-04-12 — Phase 6 — Subscription state machine
+
+| From | Trigger | To | Guard | Action |
+|---|---|---|---|---|
+| pending | activate | active | payment.charge succeeds | init_balance, set activated_at, set period_start/end, set next_renewal_at, emit `subscription.activated` |
+| pending | fail_activate | terminated | payment.charge fails | release_msisdn (InventoryClient), release_esim (InventoryClient), set terminated_at, emit `subscription.terminated` |
+| active | exhaust | blocked | primary allowance (data) remaining <= 0 | emit `subscription.exhausted`, emit `subscription.blocked` |
+| blocked | top_up | active | vas payment succeeds | add_allowance, record VasPurchase, emit `subscription.vas_purchased`, emit `subscription.unblocked` |
+| active | top_up | active | vas payment succeeds | add_allowance, record VasPurchase, emit `subscription.vas_purchased` |
+| active | renew | active | renewal payment succeeds | reset_balance to plan defaults, advance period, set next_renewal_at, emit `subscription.renewed` |
+| active | renew_fail | blocked | renewal payment fails | emit `subscription.renew_failed`, emit `subscription.blocked` |
+| active | terminate | terminated | — | release_msisdn, recycle_esim, cancel pending VAS, set terminated_at, emit `subscription.terminated` |
+| blocked | terminate | terminated | — | release_msisdn, recycle_esim, cancel pending VAS, set terminated_at, emit `subscription.terminated` |
+
+Terminal states: `terminated`.
+
+Forbidden transitions: any trigger from `terminated`, any undefined `(from_state, trigger)` pair → PolicyViolation.
+
+### 2026-04-12 — Phase 6 — Test endpoint `consume-for-test` is temporary scaffolding
+**Context:** Phase 6 needs a way to simulate rated usage arriving before the real `usage.rated` event consumer exists (Phase 8).
+**Decision:** `POST /subscription/{id}/consume-for-test` simulates balance decrement. Gated by `BSS_ENABLE_TEST_ENDPOINTS=true` env var. The router is not registered when the flag is false.
+**Alternatives:** Build the real event consumer early — too much Phase 8 scope creep.
+**Consequences:** **This endpoint must be removed in Phase 8** when the real `usage.rated` event consumer replaces it. If it ships to v0.1 without a gate, usage simulation can bypass Mediation's ingress rules and break the block-on-exhaust doctrine.
+
 ### 2026-04-11 — Phase 5 — Integration tests must use unique identifiers per run
 **Context:** `test_payment_crm_integration.py` hardcoded `integ-payment@test.com` as the test customer email. On second run, CRM returned 422 (`email_unique` policy), test silently skipped with "Could not create test customer: 422". This made it look like CRM was down when it was actually working.
 **Decision:** Integration tests that create real data in external services must use `uuid.uuid4().hex[:8]` or similar in any unique field (email, MSISDN, external refs). The test should still clean up after itself where possible, but uniqueness prevents silent failures on re-run.

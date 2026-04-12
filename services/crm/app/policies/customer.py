@@ -1,7 +1,14 @@
 """Customer policies."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from app.policies.base import PolicyViolation, policy
 from app.repositories.customer_repo import CustomerRepository
+
+if TYPE_CHECKING:
+    from bss_clients.subscription import SubscriptionClient
 
 
 @policy("customer.create.email_unique")
@@ -26,7 +33,15 @@ def check_requires_contact_medium(contact_mediums: list[dict]) -> None:
 
 
 @policy("customer.close.no_active_subscriptions")
-async def check_no_active_subscriptions(customer_id: str) -> None:
-    # Stub — real check wired in Phase 6 via bss-clients HTTP call
-    # to subscription service: GET /subscription-api/v1/subscription?customerId=...&state=active
-    pass
+async def check_no_active_subscriptions(
+    customer_id: str, subscription_client: SubscriptionClient
+) -> None:
+    subs = await subscription_client.list_for_customer(customer_id)
+    active = [s for s in subs if s.get("state") in ("active", "pending")]
+    if active:
+        active_ids = [s["id"] for s in active]
+        raise PolicyViolation(
+            rule="customer.close.no_active_subscriptions",
+            message=f"Customer {customer_id} has {len(active)} active subscription(s): {', '.join(active_ids)}. Terminate them first.",
+            context={"customer_id": customer_id, "active_subscriptions": active_ids},
+        )

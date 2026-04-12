@@ -1,0 +1,183 @@
+"""Test fixtures for Subscription service.
+
+Write isolation: every test runs inside a transaction that is rolled back
+in teardown. session.commit() is monkeypatched to flush() so writes are
+visible within the test but the outer transaction is never committed.
+"""
+
+from decimal import Decimal
+from unittest.mock import AsyncMock
+
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+
+from app.config import Settings
+from app.logging import configure_logging
+from app.main import create_app
+from bss_clients import CatalogClient, CRMClient, InventoryClient, PaymentClient
+
+
+@pytest.fixture(scope="session")
+def settings() -> Settings:
+    s = Settings()
+    if not s.db_url:
+        pytest.fail("BSS_DB_URL is not set. Export it or add to .env.")
+    return s
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _configure_logging(settings: Settings) -> None:
+    configure_logging(settings.log_level)
+
+
+@pytest_asyncio.fixture
+async def db_engine(settings: Settings):
+    engine = create_async_engine(settings.db_url, pool_size=2, max_overflow=2)
+    yield engine
+    await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def db_session(db_engine):
+    """Per-test session wrapped in a transaction that is always rolled back."""
+    conn = await db_engine.connect()
+    txn = await conn.begin()
+    session = AsyncSession(bind=conn, expire_on_commit=False)
+
+    _original_commit = session.commit
+
+    async def _fake_commit():
+        await session.flush()
+
+    session.commit = _fake_commit
+
+    yield session
+
+    await txn.rollback()
+    await conn.close()
+
+
+def _mock_crm() -> AsyncMock:
+    mock = AsyncMock(spec=CRMClient)
+    mock.get_customer = AsyncMock(return_value={
+        "id": "CUST-0001",
+        "status": "active",
+        "kycStatus": "verified",
+    })
+    mock.close = AsyncMock()
+    return mock
+
+
+def _mock_payment() -> AsyncMock:
+    mock = AsyncMock(spec=PaymentClient)
+    mock.charge = AsyncMock(return_value={
+        "id": "PAY-000001",
+        "status": "approved",
+        "gatewayRef": "mock_ref",
+    })
+    mock.list_methods = AsyncMock(return_value=[{
+        "id": "PM-0001",
+        "customerId": "CUST-0001",
+        "isDefault": True,
+        "status": "active",
+    }])
+    mock.close = AsyncMock()
+    return mock
+
+
+def _mock_catalog() -> AsyncMock:
+    mock = AsyncMock(spec=CatalogClient)
+    mock.get_offering = AsyncMock(return_value={
+        "id": "PLAN_M",
+        "name": "Standard",
+        "productOfferingPrice": [{
+            "priceType": "recurring",
+            "price": {
+                "taxIncludedAmount": {"value": "25.00", "unit": "SGD"},
+            },
+        }],
+        "bundleAllowance": [
+            {"allowanceType": "data", "quantity": 30720, "unit": "mb"},
+            {"allowanceType": "voice", "quantity": -1, "unit": "minutes"},
+            {"allowanceType": "sms", "quantity": -1, "unit": "count"},
+        ],
+    })
+    mock.get_vas = AsyncMock(return_value={
+        "id": "VAS_DATA_1GB",
+        "name": "Data Top-Up 1GB",
+        "priceAmount": "3.00",
+        "currency": "SGD",
+        "allowanceType": "data",
+        "allowanceQuantity": 1024,
+        "allowanceUnit": "mb",
+        "expiryHours": None,
+    })
+    mock.close = AsyncMock()
+    return mock
+
+
+def _mock_inventory() -> AsyncMock:
+    mock = AsyncMock(spec=InventoryClient)
+    mock.get_msisdn = AsyncMock(return_value={
+        "msisdn": "90000042",
+        "status": "reserved",
+    })
+    mock.get_esim = AsyncMock(return_value={
+        "iccid": "8910000000000042",
+        "profileState": "reserved",
+    })
+    mock.assign_msisdn = AsyncMock(return_value={"msisdn": "90000042", "status": "assigned"})
+    mock.assign_msisdn_to_esim = AsyncMock(return_value={"iccid": "8910000000000042"})
+    mock.release_msisdn = AsyncMock(return_value={"msisdn": "90000042", "status": "available"})
+    mock.recycle_esim = AsyncMock(return_value={"iccid": "8910000000000042", "profileState": "recycled"})
+    mock.close = AsyncMock()
+    return mock
+
+
+@pytest_asyncio.fixture
+async def client(settings: Settings, db_engine, db_session: AsyncSession):
+    """ASGI test client wired to the rolled-back session."""
+    test_settings = Settings(
+        db_url=settings.db_url,
+        enable_test_endpoints=True,
+    )
+    app = create_app(test_settings)
+    app.state.engine = db_engine
+
+    class _FakeSessionFactory:
+        def __call__(self):
+            return _FakeContextManager(db_session)
+
+    class _FakeContextManager:
+        def __init__(self, session):
+            self._session = session
+
+        async def __aenter__(self):
+            return self._session
+
+        async def __aexit__(self, *args):
+            pass
+
+    app.state.session_factory = _FakeSessionFactory()
+    app.state.crm_client = _mock_crm()
+    app.state.payment_client = _mock_payment()
+    app.state.catalog_client = _mock_catalog()
+    app.state.inventory_client = _mock_inventory()
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+
+
+@pytest_asyncio.fixture
+async def mock_clients(client):
+    """Return the mock clients for assertion in tests."""
+    app = client._transport.app
+    return {
+        "crm": app.state.crm_client,
+        "payment": app.state.payment_client,
+        "catalog": app.state.catalog_client,
+        "inventory": app.state.inventory_client,
+    }

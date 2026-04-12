@@ -31,7 +31,7 @@ build:
 
 test:
 	@failed=0; \
-	for dir in packages/bss-clients services/catalog services/crm services/payment; do \
+	for dir in packages/bss-clients services/catalog services/crm services/payment services/subscription; do \
 		printf "\n══ $$dir ══\n"; \
 		PYTHONPATH=$$dir:$$PYTHONPATH uv run pytest $$dir/tests/ -v || failed=1; \
 	done; \
