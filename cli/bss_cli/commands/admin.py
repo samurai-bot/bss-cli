@@ -5,9 +5,10 @@ endpoint, which is gated behind ``BSS_ALLOW_ADMIN_RESET=true`` on the target
 service. This is deliberately CLI-only — the LLM tool surface does NOT
 expose it, because scenario setup is an operator task, not a conversation.
 
-Catalog (reference data), rating (no schema owned), and billing (not yet
-implemented) are skipped. The CRM service owns both ``crm`` and
-``inventory`` schemas so a single call to CRM handles both.
+Catalog (reference data) and rating (no schema owned) are skipped. The
+CRM service owns both ``crm`` and ``inventory`` schemas so a single
+call to CRM handles both. (Billing — deferred to v0.2 — has no running
+service to reset in v0.1.)
 """
 
 from __future__ import annotations

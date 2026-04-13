@@ -39,7 +39,6 @@ class Settings(BaseSettings):
     subscription_url: str = "http://localhost:8006"
     mediation_url: str = "http://localhost:8007"
     rating_url: str = "http://localhost:8008"
-    billing_url: str = "http://localhost:8009"
     provisioning_url: str = "http://localhost:8010"
 
     # ── Misc ────────────────────────────────────────────────────────────

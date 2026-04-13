@@ -448,3 +448,61 @@ Notes: `feasibility_checked` state exists in the model but is skipped in v0.1. S
 **Decision:** Hero scenario 3 (and all future ship-gate LLM scenarios) is a three-phase structure: (1) deterministic setup — drive the stack into a known state via `action:` steps that bypass the LLM entirely; (2) single `ask:` step that hands the problem to the LLM; (3) deterministic verification — `assert:` steps that query the final state directly, NOT via the LLM's self-report. If phase (1) fails the stack is broken. If phase (3) fails the LLM didn't fix the thing, regardless of what it claims in its final message.
 **Alternatives:** Let the LLM drive everything — the setup becomes a correctness gate for the LLM's ability to drive happy-path flows, which is a separate test. Accept the LLM's self-report — models lie by omission when they run out of recursion; a confident "I fixed it" doesn't mean they did.
 **Consequences:** Three runs in a row pass before a release. If the stack is stable but run 1 fails, it's the model — rerun, or bump model/temperature. If all three fail identically at the same determinism step, it's the stack — investigate. Clear signal, fast triage.
+
+### 2026-04-13 — v0.1.1 — Billing service deferred to v0.2
+
+**Context:** Phase 0 planned a billing service as service #9 of 10 (TMF678,
+port 8009, `billing` schema with `billing_account` and `customer_bill` tables).
+The Phase 2 initial migration created the schema and tables. No phase 1-10
+implemented the service layer — the orchestrator shipped with NOT_IMPLEMENTED
+stub tools (`billing.get_account`, `billing.list_bills`, `billing.get_bill`,
+`billing.get_current_period`), an empty `services/billing/` directory with
+only a pyproject.toml, a `BillingClient` stub in bss-clients, and a running
+but functionally empty container. v0.1.0 shipped with this drift.
+
+**Decision:** Formally defer billing to v0.2 as a read-only view layer over
+`payment.payment_attempt`. Clean up v0.1.0 drift in v0.1.1: delete the
+orchestrator stubs, delete the bss-clients billing module, delete the
+empty services/billing/ directory, remove the container from docker-compose,
+preserve the migration and ORM models so v0.2 work is purely additive.
+
+**Alternatives:**
+- (A) Drop billing entirely from the v0.2 roadmap too — rejected because
+  TMF678 Customer Bill Management is core TMF surface and worth having
+  in v0.2 for credibility.
+- (B) Build minimal billing as v0.1.1 — rejected as scope creep on a
+  cleanup release. A billing service deserves its own phase budget with
+  proper scoping, policies, tests, and scenario coverage.
+- (C) Defer to v0.2 as a read-only view layer over payment.payment_attempt
+  — selected. Bundled prepaid doesn't generate formal invoices (charges
+  happen at activation/renewal/VAS purchase, recorded in payment.payment_attempt),
+  so v0.2 billing becomes a receipt aggregation and statement generation
+  layer rather than a full invoice/dunning/credit pipeline.
+
+**Consequences:**
+- v0.1 service count: 9, not 10. ARCHITECTURE.md, CLAUDE.md, README.md
+  updated accordingly.
+- The `billing` schema and its tables remain in Postgres from Phase 2
+  migrations. They are empty and dormant in v0.1. v0.2 will populate
+  them as a view layer.
+- `packages/bss-models/bss_models/billing.py` (ORM models) is preserved
+  because it mirrors the migration.
+- `packages/bss-clients/bss_clients/billing.py` (HTTP client stub),
+  `orchestrator/bss_orchestrator/tools/billing.py` (tool stubs), and
+  `services/billing/` (empty service directory) are deleted.
+- Port 8009 is reserved for v0.2 billing; docker-compose.yml has a
+  comment marking it as such.
+- v0.2 billing work is purely additive: build the service, implement
+  policies, wire endpoints — no schema work needed.
+
+**Important scope note — "billing" as CRM vocabulary is preserved.**
+CRM services (`services/crm/app/services/ticket.py`, `case.py`,
+`types.py`) reference "billing" as a customer-support category and
+ticket type (`billing_dispute`, `billing_issue`, `category="billing"`).
+This is CRM domain vocabulary, not billing-service coupling. Real
+telcos classify customer complaints as "billing issues" whether or
+not there is a dedicated billing microservice. These references remain
+unchanged in v0.1.1 and should not be targeted in any future cleanup.
+The cleanup rule is: remove references to the billing **service**
+(tools, clients, endpoints, docker-compose entries, ports), never
+remove billing as customer-support **vocabulary** in other domains.

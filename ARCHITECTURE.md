@@ -2,7 +2,7 @@
 
 ## Topology
 
-Two distinct planes connect the 10 services: **synchronous HTTP (TMF APIs)** for calls that need an immediate answer, and **asynchronous events (RabbitMQ topic exchange)** for reactions. Postgres is accessed directly by each service's own writes — the message broker is not a database pipe.
+Two distinct planes connect the 9 services: **synchronous HTTP (TMF APIs)** for calls that need an immediate answer, and **asynchronous events (RabbitMQ topic exchange)** for reactions. Postgres is accessed directly by each service's own writes — the message broker is not a database pipe.
 
 ```
                     ┌────────────────────────────────┐
@@ -10,13 +10,13 @@ Two distinct planes connect the 10 services: **synchronous HTTP (TMF APIs)** for
                     │   + LangGraph Orchestrator      │
                     └───────────────┬─────────────────┘
                                     │ HTTP (TMF APIs)
-        ┌──────┬────────┬───────────┼────────┬────────┬───────┐
-        ▼      ▼        ▼           ▼        ▼        ▼       ▼
-     ┌─────┐┌─────┐ ┌─────┐     ┌─────┐┌─────┐ ┌─────┐
-     │CRM* ││Pay  │ │Cat  │     │COM  ││Subs │ │Bill │
-     │8002 ││8003 │ │8001 │     │8004 ││8006 │ │8009 │
-     └──┬──┘└──┬──┘ └──┬──┘     └──┬──┘└──┬──┘ └──┬──┘
-        │      │       │           │      │       │
+        ┌──────┬────────┬───────────┼────────┬────────┐
+        ▼      ▼        ▼           ▼        ▼
+     ┌─────┐┌─────┐ ┌─────┐     ┌─────┐┌─────┐
+     │CRM* ││Pay  │ │Cat  │     │COM  ││Subs │
+     │8002 ││8003 │ │8001 │     │8004 ││8006 │
+     └──┬──┘└──┬──┘ └──┬──┘     └──┬──┘└──┬──┘
+        │      │       │           │      │
         │      └───HTTP (e.g. Pay→CRM "customer exists?")
         │                          │
         │      ┌───────────────────┼──────────────────────┐
@@ -30,7 +30,7 @@ Two distinct planes connect the 10 services: **synchronous HTTP (TMF APIs)** for
      ═══════════════════════════════════════════════════════════
      ║         RabbitMQ — topic exchange: bss.events            ║
      ║  order.* · service_order.* · service.* · provisioning.*  ║
-     ║  subscription.* · usage.* · crm.* · payment.* · billing.*║
+     ║  subscription.* · usage.* · crm.* · payment.*            ║
      ═══════════════════════════════════════════════════════════
 
      Each service writes directly to its own schema in ONE shared
@@ -104,7 +104,7 @@ Consequences for BSS-CLI:
 
 If strict ordering becomes essential for a future use case, the path forward is RabbitMQ routing by `subscription_id` (or another partition key), so all events for one subscription land on the same consumer queue. That's Phase 11+ territory; v0.1 does not need it.
 
-## Services (10 total)
+## Services (9 total)
 
 | # | Service | Port | TMF | State | Notes |
 |---|---|---|---|---|---|
@@ -116,18 +116,23 @@ If strict ordering becomes essential for a future use case, the path forward is 
 | 6 | subscription | 8006 | custom | stateful FSM | Bundle balance, VAS, renewal |
 | 7 | mediation | 8007 | TMF635 | stateful | **TMF635 online mediation.** Single-event ingest, block-at-edge, not batch. OCS is abstracted outside BSS-CLI — see "What's NOT in the architecture". |
 | 8 | rating | 8008 | — | stateless | Pure rating function + consumer. Bundled-prepaid quota decrement, not per-unit billing-rate CDR rating. |
-| 9 | billing | 8009 | TMF678 | stateful | Bill issuance |
-| 10 | provisioning-sim | 8010 | custom | stateful | Fake HLR/PCRF/OCS/SM-DP+, configurable failures |
+| 9 | provisioning-sim | 8010 | custom | stateful | Fake HLR/PCRF/OCS/SM-DP+, configurable failures |
+
+Port 8009 is reserved for the v0.2 billing service — see the "Note on billing in v0.1" subsection below and `DECISIONS.md` 2026-04-13.
 
 The **Inventory sub-domain** (MSISDN pool + eSIM profile pool) lives inside the CRM service on port 8002, mounted under `/inventory-api/v1/...`. It has its own schema (`inventory`), repositories, policies, and HTTP endpoints — just no separate container. SOM and Subscription call it via `bss-clients` as if it were a distinct service. If it outgrows CRM, extraction to an 11th container is mechanical because the boundary is already enforced.
 
-**Why 10 containers, not 11:** keeping inventory inside CRM for v0.1 reduces one network hop in the critical activation path and saves ~150MB of RAM. Domain boundary is still clean — inventory has its own schema, repositories, policies, and tool surface. See DECISIONS.md "Inventory domain hosted inside CRM service (v0.1)" for the rationale.
+**Why 9 containers, not 10:** keeping inventory inside CRM for v0.1 reduces one network hop in the critical activation path and saves ~150MB of RAM. Domain boundary is still clean — inventory has its own schema, repositories, policies, and tool surface. See DECISIONS.md "Inventory domain hosted inside CRM service (v0.1)" for the rationale.
+
+### Note on billing in v0.1
+
+v0.1 ships **without a billing service**. Phase 0 planned one as service #9 (TMF678, port 8009), and the Phase 2 initial migration created the `billing` schema with two tables (`billing_account`, `customer_bill`) — but no phase actually built the service layer. v0.1.1 formally defers billing to v0.2, where it will be reintroduced as a **read-only view layer over `payment.payment_attempt`**: receipt aggregation, statement generation, TMF678 `/customerBill` endpoints. No dunning, no credit extension, no formal invoice generation — bundled-prepaid doesn't need them, since charges happen synchronously at activation / renewal / VAS purchase and are already recorded on `payment.payment_attempt`. The `billing` schema and its tables remain in the migration so v0.2 is purely additive. Port 8009 is reserved. See `DECISIONS.md` 2026-04-13 for the deferral rationale and the scope note separating the billing **service** from "billing" as CRM customer-support **vocabulary**.
 
 ## Container structure
 
 ### Default deployment: BYOI (bring your own infrastructure)
 
-**BSS-CLI has been developed in BYOI mode from Phase 1 onwards.** The default `docker-compose.yml` contains only the 10 BSS services and assumes PostgreSQL 16 and RabbitMQ 3.13 are reachable via env-configured connection strings. Most operators already have managed Postgres (RDS, Cloud SQL) and managed MQ (Amazon MQ, CloudAMQP), so bundling an unused Postgres container would be wasteful.
+**BSS-CLI has been developed in BYOI mode from Phase 1 onwards.** The default `docker-compose.yml` contains only the 9 BSS services and assumes PostgreSQL 16 and RabbitMQ 3.13 are reachable via env-configured connection strings. Most operators already have managed Postgres (RDS, Cloud SQL) and managed MQ (Amazon MQ, CloudAMQP), so bundling an unused Postgres container would be wasteful.
 
 ```yaml
 # docker-compose.yml
@@ -140,7 +145,7 @@ services:
   subscription:     { build: ./services/subscription,    env_file: .env, ports: ["8006:8000"] }
   mediation:        { build: ./services/mediation,       env_file: .env, ports: ["8007:8000"] }
   rating:           { build: ./services/rating,          env_file: .env, ports: ["8008:8000"] }
-  billing:          { build: ./services/billing,         env_file: .env, ports: ["8009:8000"] }
+  # billing: port 8009 reserved for v0.2 (see DECISIONS.md 2026-04-13)
   provisioning-sim: { build: ./services/provisioning-sim, env_file: .env, ports: ["8010:8000"] }
 ```
 
@@ -198,7 +203,7 @@ For development on slow machines, profiles allow partial stacks:
 profiles:
   minimal:  [catalog, crm, payment]
   core:     [catalog, crm, payment, com, som, subscription, provisioning-sim]
-  full:     [catalog, crm, payment, com, som, subscription, mediation, rating, billing, provisioning-sim]
+  full:     [catalog, crm, payment, com, som, subscription, mediation, rating, provisioning-sim]
 ```
 
 ```bash
@@ -311,8 +316,8 @@ Both modes comfortably under the 4 GB motto limit. BYOI mode fits on a t3.small;
 │  VASPurchase                             │
 └──────────────────────────────────────────┘
 
-┌─ Usage → Rating → Billing ───────────────┐
-│  UsageEvent → RatedDecrement → Bill      │
+┌─ Usage → Rating ─────────────────────────┐
+│  UsageEvent → RatedDecrement             │
 └──────────────────────────────────────────┘
 
 ┌─ Audit domain ───────────────────────────┐
@@ -382,10 +387,9 @@ Target: development, UAT, proof-of-concept for an MVNO stakeholder.
 │     ├── /subscription-api/* → ECS: subscription    │
 │     ├── /usage*/*           → ECS: mediation       │
 │     ├── /rating-api/*       → ECS: rating          │
-│     ├── /customerBill*/*    → ECS: billing         │
 │     └── /provisioning-api/* → ECS: provisioning-sim│
 │                                                    │
-│   ECS Fargate cluster — 10 services, 1 task each   │
+│   ECS Fargate cluster — 9 services, 1 task each    │
 │                                                    │
 │   RDS PostgreSQL (db.t4g.medium)                   │
 │   Amazon MQ for RabbitMQ (mq.m5.large)             │

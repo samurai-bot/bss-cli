@@ -4,6 +4,7 @@ The MQ wiring is tested via the helper `_handle_usage_recorded` directly,
 with a mocked CatalogClient and an in-memory exchange stub.
 """
 
+import uuid
 from unittest.mock import AsyncMock
 
 import pytest
@@ -42,8 +43,11 @@ async def test_handle_usage_recorded_emits_usage_rated(db_session):
     catalog.get_offering = AsyncMock(return_value=PLAN_M_TARIFF)
     exchange = _ExchangeStub()
 
+    # Unique per-run id so audit-row assertions scope to this test's write,
+    # not rows left by prior runs against the shared DB.
+    usage_event_id = f"UE-TEST-{uuid.uuid4().hex[:8].upper()}"
     body = {
-        "usageEventId": "UE-000001",
+        "usageEventId": usage_event_id,
         "subscriptionId": "SUB-0001",
         "msisdn": "90000042",
         "eventType": "data",
@@ -68,14 +72,17 @@ async def test_handle_usage_recorded_emits_usage_rated(db_session):
     assert payload["consumedQuantity"] == 1000
     assert payload["chargeAmount"] == "0"
 
-    # Audit row written
+    # Audit row written — scope by aggregate_id so prior runs' rows don't bleed in.
     await db_session.flush()
     rows = await db_session.execute(
-        select(DomainEvent).where(DomainEvent.event_type == "usage.rated")
+        select(DomainEvent).where(
+            DomainEvent.event_type == "usage.rated",
+            DomainEvent.aggregate_id == usage_event_id,
+        )
     )
     audits = rows.scalars().all()
     assert len(audits) == 1
-    assert audits[0].aggregate_id == "UE-000001"
+    assert audits[0].aggregate_id == usage_event_id
     assert audits[0].payload["allowanceType"] == "data"
 
 

@@ -149,15 +149,6 @@ SOM writes are internally triggered by COM events — no direct-create tool for 
 | `usage.simulate` | create | Primary way for LLM/scenario to inject usage |
 | `usage.history` | read | |
 
-## Billing tools
-
-| Tool | Type | Description |
-|---|---|---|
-| `billing.get_account` | read | |
-| `billing.list_bills` | read | |
-| `billing.get_bill` | read | |
-| `billing.get_current_period` | read | Period summary |
-
 ## Operational / observability tools
 
 | Tool | Type | Description |
@@ -171,6 +162,17 @@ SOM writes are internally triggered by COM events — no direct-create tool for 
 | `trace.for_subscription` | read | |
 | `events.list` | read | Query `audit.domain_event` |
 | `agents.list` | read | |
+
+## Billing tools (v0.2 planned — not implemented in v0.1)
+
+| Tool | Type | Description |
+|---|---|---|
+| `billing.get_account` | read | v0.2 — receipt account summary |
+| `billing.list_bills` | read | v0.2 — statement history |
+| `billing.get_bill` | read | v0.2 — single statement |
+| `billing.get_current_period` | read | v0.2 — current-period receipt summary |
+
+Not in v0.1 but reserved in the tool namespace. v0.2 will implement these as a read-only view layer over `payment.payment_attempt` — see `DECISIONS.md` 2026-04-13.
 
 ## Knowledge tools (post-v0.1, Phase 11)
 
@@ -203,11 +205,11 @@ Not in v0.1 but reserved in the tool namespace.
 - Provisioning: **5**
 - Subscription: **7**
 - Usage: **2**
-- Billing: **4**
+- Billing: **0** (deferred to v0.2; 4 tools planned)
 - Ops/observability: **9**
 - Admin: **4** (not LLM-exposed)
 
-**Total LLM-exposed: ~65 tools.** Up from ~62 in v2 (+2 KYC, +4 inventory read, +1 eSIM activation getter).
+**Total LLM-exposed: ~61 tools.** Down from ~65 in the v0.1.0 plan; billing deferred to v0.2 (see `DECISIONS.md` 2026-04-13).
 
 ## Why this is still manageable
 

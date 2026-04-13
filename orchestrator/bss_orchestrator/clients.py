@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 from bss_clients import (
-    BillingClient,
     COMClient,
     CRMClient,
     CatalogClient,
@@ -41,7 +40,6 @@ class Clients:
     subscription: SubscriptionClient
     mediation: MediationClient
     provisioning: ProvisioningClient
-    billing: BillingClient
 
 
 @lru_cache(maxsize=1)
@@ -58,7 +56,6 @@ def get_clients() -> Clients:
         subscription=SubscriptionClient(base_url=settings.subscription_url),
         mediation=MediationClient(base_url=settings.mediation_url),
         provisioning=ProvisioningClient(base_url=settings.provisioning_url),
-        billing=BillingClient(base_url=settings.billing_url),
     )
 
 
@@ -77,7 +74,6 @@ async def close_clients() -> None:
         c.subscription,
         c.mediation,
         c.provisioning,
-        c.billing,
     ):
         await client.close()
     get_clients.cache_clear()

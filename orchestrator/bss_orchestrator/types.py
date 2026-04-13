@@ -77,10 +77,6 @@ ProvisioningTaskId = Annotated[
     "Provisioning task ID in PTK-NNN format, e.g. PTK-044. "
     "Get from provisioning.list_tasks.",
 ]
-BillId = Annotated[
-    str,
-    "Bill ID in BILL-NNN format, e.g. BILL-017. Get from billing.list_bills.",
-]
 AggregateId = Annotated[
     str,
     "Prefixed ID matching the aggregate_type, e.g. 'SUB-007' for subscription, "

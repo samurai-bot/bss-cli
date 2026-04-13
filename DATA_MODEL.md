@@ -497,7 +497,9 @@ Standard state history shape.
 
 ---
 
-## Schema: `billing`
+## Schema: `billing` (scaffolded — unused in v0.1)
+
+The `billing` schema and its tables (`billing_account`, `customer_bill`) are scaffolded in the Phase 2 initial migration but no service code reads or writes them in v0.1. v0.1.1 formally defers the billing service to v0.2, where it will be reintroduced as a read-only view layer over `payment.payment_attempt` (receipt aggregation, TMF678 `/customerBill` endpoints, statement generation — no dunning, no credit extension, no formal invoice generation). The table definitions below describe the Phase 2 migration shape and are left in place so v0.2 is purely additive. See `DECISIONS.md` 2026-04-13 for the deferral rationale.
 
 ### `billing.billing_account`
 | column | type | notes |

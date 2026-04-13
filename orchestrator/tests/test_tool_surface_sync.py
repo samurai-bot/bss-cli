@@ -24,7 +24,10 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _TOOL_SURFACE = _REPO_ROOT / "TOOL_SURFACE.md"
 
 # Namespaces documented but not v0.1 LLM-exposed.
-_EXCLUDED_NAMESPACES = ("admin.", "knowledge.")
+# - admin.*: CLI-only, not exposed to the LLM
+# - knowledge.*: post-v0.1 (Phase 11 pgvector RAG)
+# - billing.*: deferred to v0.2 (see DECISIONS.md 2026-04-13)
+_EXCLUDED_NAMESPACES = ("admin.", "knowledge.", "billing.")
 
 
 def _markdown_tools() -> set[str]:

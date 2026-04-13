@@ -93,13 +93,7 @@ services:
       BSS_CATALOG_URL: http://catalog:8000
     depends_on: [catalog]
 
-  billing:
-    <<: *bss-service
-    build:
-      <<: *bss-build
-      args: { SERVICE: billing }
-    ports: ["8009:8000"]
-    environment: { BSS_SERVICE_NAME: billing }
+  # port 8009 reserved for v0.2 billing service (deferred — see DECISIONS.md 2026-04-13)
 
   provisioning-sim:
     <<: *bss-service

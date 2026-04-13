@@ -1,5 +1,6 @@
 """Block-at-edge: rejected usage leaves zero usage_event rows but audits the attempt."""
 
+import uuid
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock
 
@@ -10,6 +11,13 @@ from bss_models.mediation import UsageEvent
 from sqlalchemy import select
 
 USAGE_PATH = "/tmf-api/usageManagement/v4/usage"
+
+
+def _unique_cdr_ref(prefix: str) -> str:
+    """CDR refs must be unique per test invocation so audit-row assertions can
+    scope to rows this test wrote, not counts contaminated by prior runs that
+    wrote to the same shared DB."""
+    return f"{prefix}-{uuid.uuid4().hex[:8].upper()}"
 
 
 def _payload(**overrides) -> dict:
@@ -38,19 +46,25 @@ async def test_blocked_subscription_rejected_no_usage_row(client, mock_clients, 
         }
     )
 
-    resp = await client.post(USAGE_PATH, json=_payload(rawCdrRef="CDR-BLOCKED"))
+    cdr_ref = _unique_cdr_ref("CDR-BLOCKED")
+    resp = await client.post(USAGE_PATH, json=_payload(rawCdrRef=cdr_ref))
     assert resp.status_code == 422
     assert resp.json()["reason"] == "usage.record.subscription_must_be_active"
 
     # No mediation.usage_event row for this CDR
     rows = await db_session.execute(
-        select(UsageEvent).where(UsageEvent.raw_cdr_ref == "CDR-BLOCKED")
+        select(UsageEvent).where(UsageEvent.raw_cdr_ref == cdr_ref)
     )
     assert rows.scalars().all() == []
 
-    # usage.rejected audit row was written
+    # usage.rejected audit row was written — scope to this test's SUB + reason
+    # to avoid counting rejections from prior runs that leaked past their rollback.
     audits = await db_session.execute(
-        select(DomainEvent).where(DomainEvent.event_type == "usage.rejected")
+        select(DomainEvent).where(
+            DomainEvent.event_type == "usage.rejected",
+            DomainEvent.aggregate_id == "SUB-0042",
+            DomainEvent.payload["rawCdrRef"].astext == cdr_ref,
+        )
     )
     rejected = audits.scalars().all()
     assert len(rejected) == 1
@@ -63,17 +77,21 @@ async def test_blocked_subscription_rejected_no_usage_row(client, mock_clients, 
 async def test_unknown_msisdn_rejected_no_usage_row(client, mock_clients, db_session):
     mock_clients["subscription"].get_by_msisdn = AsyncMock(side_effect=NotFound("no sub"))
 
-    resp = await client.post(USAGE_PATH, json=_payload(msisdn="90000999", rawCdrRef="CDR-UNK"))
+    cdr_ref = _unique_cdr_ref("CDR-UNK")
+    resp = await client.post(USAGE_PATH, json=_payload(msisdn="90000999", rawCdrRef=cdr_ref))
     assert resp.status_code == 422
     assert resp.json()["reason"] == "usage.record.subscription_must_exist"
 
     rows = await db_session.execute(
-        select(UsageEvent).where(UsageEvent.raw_cdr_ref == "CDR-UNK")
+        select(UsageEvent).where(UsageEvent.raw_cdr_ref == cdr_ref)
     )
     assert rows.scalars().all() == []
 
     audits = await db_session.execute(
-        select(DomainEvent).where(DomainEvent.event_type == "usage.rejected")
+        select(DomainEvent).where(
+            DomainEvent.event_type == "usage.rejected",
+            DomainEvent.payload["rawCdrRef"].astext == cdr_ref,
+        )
     )
     rejected = audits.scalars().all()
     assert len(rejected) == 1
@@ -82,11 +100,19 @@ async def test_unknown_msisdn_rejected_no_usage_row(client, mock_clients, db_ses
 
 @pytest.mark.asyncio
 async def test_happy_path_writes_usage_recorded_audit(client, db_session):
-    resp = await client.post(USAGE_PATH, json=_payload(rawCdrRef="CDR-OK"))
+    cdr_ref = _unique_cdr_ref("CDR-OK")
+    resp = await client.post(USAGE_PATH, json=_payload(rawCdrRef=cdr_ref))
     assert resp.status_code == 201
+    event_id = resp.json()["id"]
 
+    # Scope the audit query to the event this test just created. Prior runs
+    # have left usage.recorded rows in the shared DB, so a bare event_type
+    # filter counts them all.
     audits = await db_session.execute(
-        select(DomainEvent).where(DomainEvent.event_type == "usage.recorded")
+        select(DomainEvent).where(
+            DomainEvent.event_type == "usage.recorded",
+            DomainEvent.aggregate_id == event_id,
+        )
     )
     recorded = audits.scalars().all()
     assert len(recorded) == 1

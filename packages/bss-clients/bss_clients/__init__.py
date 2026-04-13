@@ -4,7 +4,6 @@ from .admin import AdminClient
 from .audit import AuditClient
 from .auth import AuthProvider, NoAuthProvider
 from .base import BSSClient, set_context
-from .billing import BillingClient
 from .catalog import CatalogClient
 from .com import COMClient
 from .crm import CRMClient
@@ -21,7 +20,6 @@ __all__ = [
     "AuditClient",
     "AuthProvider",
     "BSSClient",
-    "BillingClient",
     "COMClient",
     "CRMClient",
     "CatalogClient",

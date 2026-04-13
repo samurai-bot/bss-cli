@@ -6,7 +6,7 @@
 
 **BSS-CLI** is a complete, lightweight, SID-aligned, TMF-compliant Business Support System designed to run entirely from a terminal. It is LLM-native: every operation is exposed as a tool the LLM can call, and the primary UI is the CLI plus ASCII-rendered visualizations. Metabase is the only graphical surface and is reserved for analytical reporting.
 
-It is a **reference implementation** for engineers learning telco BSS/OSS, a **deployable MVP** for a small MVNO, and a **substrate** for agentic experiments against realistic telco operations. It covers CRM (with case/ticket management), Product Catalog, Commercial Order Management (COM), Service Order Management (SOM) with a provisioning simulator, eSIM profile management, Subscription & Bundle Balance, Mediation, Rating, Billing, and Payment.
+It is a **reference implementation** for engineers learning telco BSS/OSS, a **deployable MVP** for a small MVNO, and a **substrate** for agentic experiments against realistic telco operations. It covers CRM (with case/ticket management), Product Catalog, Commercial Order Management (COM), Service Order Management (SOM) with a provisioning simulator, eSIM profile management, Subscription & Bundle Balance, Mediation, Rating, and Payment.
 
 ## The seven motto principles (NEVER violate)
 

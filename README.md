@@ -2,7 +2,7 @@
 
 > The entire BSS, in a terminal. SID-aligned. TMF-compliant. LLM-native. eSIM-first.
 
-BSS-CLI is a lightweight, reference-implementation Business Support System for a mobile prepaid MVNO. It covers CRM (with case/ticket management), Product Catalog, Commercial Order Management, Service Order Management with a provisioning simulator, eSIM profile management, Subscription, Bundle Balance, Mediation, Rating, Billing, and Payment — all running in under 4GB RAM, all driven from a single `bss` command.
+BSS-CLI is a lightweight, reference-implementation Business Support System for a mobile prepaid MVNO. It covers CRM (with case/ticket management), Product Catalog, Commercial Order Management, Service Order Management with a provisioning simulator, eSIM profile management, Subscription, Bundle Balance, Mediation, Rating, and Payment — all running in under 4GB RAM, all driven from a single `bss` command.
 
 Every operation is a tool the LLM can call. The UI is the terminal plus ASCII visualizations. Metabase is the only graphical surface, reserved for analytics.
 
@@ -24,7 +24,7 @@ Assumes you already have PostgreSQL 16 and RabbitMQ 3.13 running.
 git clone <repo>
 cd bss-cli
 cp .env.example .env          # edit DB/MQ connection strings
-docker compose up -d          # brings up 10 BSS services only
+docker compose up -d          # brings up 9 BSS services only
 make migrate
 make seed
 bss scenario run scenarios/customer_signup_and_exhaust.yaml
@@ -32,7 +32,7 @@ bss scenario run scenarios/customer_signup_and_exhaust.yaml
 
 ## Quick start (all-in-one)
 
-Brings up the 10 services plus PostgreSQL, RabbitMQ, and Metabase.
+Brings up the 9 services plus PostgreSQL, RabbitMQ, and Metabase.
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.infra.yml up -d

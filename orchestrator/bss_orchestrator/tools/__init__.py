@@ -9,7 +9,6 @@ the full registry; downstream code should consume ``TOOL_REGISTRY`` /
 from __future__ import annotations
 
 from . import (  # noqa: F401  (imports for side-effect: @register population)
-    billing,
     case,
     catalog,
     customer,
