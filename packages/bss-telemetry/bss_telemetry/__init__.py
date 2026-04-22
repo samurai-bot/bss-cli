@@ -16,10 +16,11 @@ of phases/V0_2_0.md for the canonical 3 sites.
 
 from . import semconv
 from .bootstrap import configure_telemetry, tracer
-from .propagation import use_amqp_span
+from .propagation import current_trace_id, use_amqp_span
 
 __all__ = [
     "configure_telemetry",
+    "current_trace_id",
     "semconv",
     "tracer",
     "use_amqp_span",

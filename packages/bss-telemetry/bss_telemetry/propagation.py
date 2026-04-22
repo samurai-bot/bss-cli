@@ -15,6 +15,23 @@ from typing import Protocol
 
 from opentelemetry import context as ot_context
 from opentelemetry import propagate
+from opentelemetry import trace as ot_trace
+
+
+def current_trace_id() -> str | None:
+    """Return the current OTel trace ID as a 32-char hex string, or None.
+
+    Used by domain-event publishers to stamp ``audit.domain_event.trace_id``
+    so post-hoc trace lookups (``bss trace for-order ORD-014``) can join
+    business records back to their full distributed trace.
+    """
+    span = ot_trace.get_current_span()
+    if span is None:
+        return None
+    ctx = span.get_span_context()
+    if not ctx.is_valid:
+        return None
+    return f"{ctx.trace_id:032x}"
 
 
 class _AmqpMessage(Protocol):

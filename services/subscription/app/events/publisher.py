@@ -11,6 +11,7 @@ from uuid import uuid4
 import aio_pika
 import structlog
 from bss_clock import now as clock_now
+from bss_telemetry import current_trace_id
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import auth_context
@@ -35,6 +36,7 @@ async def publish(
         aggregate_type=aggregate_type,
         aggregate_id=aggregate_id,
         occurred_at=clock_now(),
+        trace_id=current_trace_id(),
         actor=ctx.actor,
         channel=ctx.channel,
         tenant_id=ctx.tenant,
