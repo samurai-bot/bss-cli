@@ -6,6 +6,7 @@ from fastapi import Depends, FastAPI, Request
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from bss_clients.subscription import SubscriptionClient
+from bss_telemetry import configure_telemetry
 
 from app.repositories.case_repo import CaseRepository
 from app.repositories.customer_repo import CustomerRepository
@@ -26,6 +27,7 @@ log = structlog.get_logger()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = app.state.settings
+    configure_telemetry(service_name="crm")
     engine = create_async_engine(settings.db_url, pool_size=5, max_overflow=5)
     app.state.engine = engine
     app.state.session_factory = async_sessionmaker(engine, expire_on_commit=False)
