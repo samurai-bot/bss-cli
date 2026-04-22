@@ -16,6 +16,7 @@ lifespan. Behavior:
 
 from __future__ import annotations
 
+import atexit
 from typing import TYPE_CHECKING
 
 import structlog
@@ -125,7 +126,17 @@ def configure_telemetry(  # noqa: ANN201 — return type lazy-imported
         AsyncPGInstrumentor().instrument()
         AioPikaInstrumentor().instrument()
 
-        log.info(
+        # Short-lived processes (CLI, scripts) won't see the
+        # BatchSpanProcessor's interval (~5s) before exit. Register an
+        # atexit hook to force-flush. Long-running processes (services)
+        # also benefit on graceful shutdown.
+        atexit.register(_safe_force_flush, provider)
+
+        # Service lifespans want this in their log stream; the CLI
+        # doesn't — it's a short-lived process and the user shouldn't
+        # see ops noise on every invocation. Demote to debug for cli.
+        _log = log.debug if service_name == "cli" else log.info
+        _log(
             "telemetry.configured",
             service=service_name,
             endpoint=settings.BSS_OTEL_EXPORTER_OTLP_ENDPOINT,
@@ -138,6 +149,14 @@ def configure_telemetry(  # noqa: ANN201 — return type lazy-imported
         log.warning("telemetry.setup_failed", error=str(exc), service=service_name)
         _INSTALLED = True
         return None
+
+
+def _safe_force_flush(provider) -> None:
+    """Atexit hook — flush queued spans without raising."""
+    try:
+        provider.force_flush(timeout_millis=2000)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def tracer(name: str) -> Tracer:

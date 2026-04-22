@@ -68,6 +68,7 @@ def _row(
         "aggregate_type": aggregate_type,
         "aggregate_id": aggregate_id,
         "occurred_at": occurred_at or datetime(2026, 4, 1, 10, 0, tzinfo=timezone.utc),
+        "trace_id": "4a8f9e2c0123456789abcdef01234567",
         "actor": "system",
         "channel": "cli",
         "tenant_id": "DEFAULT",
@@ -99,6 +100,7 @@ def test_get_events_returns_rows_shaped_to_camel_case() -> None:
     assert e["aggregateType"] == "Order"
     assert e["aggregateId"] == "ORD-001"
     assert e["occurredAt"].startswith("2026-04-01T10:00:00")
+    assert e["traceId"] == "4a8f9e2c0123456789abcdef01234567"
     assert e["payload"] == {"orderId": "ORD-001"}
     assert e["publishedToMq"] is False
 

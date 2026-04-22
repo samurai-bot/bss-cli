@@ -185,6 +185,7 @@ source = { editable = "cli" }
 dependencies = [
     { name = "bss-clients" },
     { name = "bss-orchestrator" },
+    { name = "bss-telemetry" },
     { name = "httpx" },
     { name = "jsonpath-ng" },
     { name = "pydantic" },
@@ -208,6 +209,7 @@ dev = [
 requires-dist = [
     { name = "bss-clients", editable = "packages/bss-clients" },
     { name = "bss-orchestrator", editable = "orchestrator" },
+    { name = "bss-telemetry", editable = "packages/bss-telemetry" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "jsonpath-ng", specifier = ">=1.6" },
     { name = "pydantic", specifier = ">=2.0" },
@@ -365,6 +367,7 @@ source = { editable = "orchestrator" }
 dependencies = [
     { name = "bss-clients" },
     { name = "bss-clock" },
+    { name = "bss-telemetry" },
     { name = "httpx" },
     { name = "langchain-core" },
     { name = "langchain-openai" },
@@ -386,6 +389,7 @@ dev = [
 requires-dist = [
     { name = "bss-clients", editable = "packages/bss-clients" },
     { name = "bss-clock", editable = "packages/bss-clock" },
+    { name = "bss-telemetry", editable = "packages/bss-telemetry" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "langchain-core", specifier = ">=0.3" },
     { name = "langchain-openai", specifier = ">=0.2" },
