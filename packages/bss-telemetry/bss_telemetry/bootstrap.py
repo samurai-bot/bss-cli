@@ -16,11 +16,16 @@ lifespan. Behavior:
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import structlog
 from opentelemetry import trace
 from opentelemetry.trace import Tracer
 
 from .config import Settings
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
 
 # Heavy instrumentation imports happen lazily inside configure_telemetry().
 # This keeps `import bss_telemetry` light enough that the semconv and
@@ -32,8 +37,20 @@ log = structlog.get_logger(__name__)
 _INSTALLED = False
 
 
-def configure_telemetry(service_name: str):  # noqa: ANN201 — return type lazy-imported
+def configure_telemetry(  # noqa: ANN201 — return type lazy-imported
+    service_name: str,
+    *,
+    app: "FastAPI | None" = None,
+):
     """Bootstrap OTel tracing for one service process.
+
+    Pass ``app`` (the running FastAPI instance) so the instrumentor
+    wraps the live app. ``FastAPIInstrumentor().instrument()`` only
+    patches the FastAPI class for *future* instances — services that
+    create their app at import time and call configure_telemetry from
+    lifespan would otherwise have an unwrapped server, leaving HTTP
+    request handlers without a span and ``current_trace_id()``
+    returning None.
 
     Returns the TracerProvider on success, ``None`` if telemetry is
     disabled or setup failed. Idempotent within a process.
@@ -54,6 +71,10 @@ def configure_telemetry(service_name: str):  # noqa: ANN201 — return type lazy
 
     if _INSTALLED:
         provider = trace.get_tracer_provider()
+        if app is not None and not getattr(app, "_bss_otel_instrumented", False):
+            FastAPIInstrumentor.instrument_app(app)
+            app.middleware_stack = None
+            app._bss_otel_instrumented = True  # type: ignore[attr-defined]
         return provider if isinstance(provider, TracerProvider) else None
 
     try:
@@ -85,7 +106,21 @@ def configure_telemetry(service_name: str):  # noqa: ANN201 — return type lazy
         provider.add_span_processor(BatchSpanProcessor(exporter))
         trace.set_tracer_provider(provider)
 
-        FastAPIInstrumentor().instrument()
+        # Wrap the live FastAPI instance if provided. Required because
+        # services create the app at import time, before this function
+        # runs, and the global instrument() only catches *future* instances.
+        # We must also invalidate the middleware stack cache — Starlette
+        # builds and caches it on the FIRST __call__, which is the lifespan
+        # invocation; by the time configure_telemetry runs in lifespan
+        # startup the stack is already built without OTel. Forcing the
+        # cache to None makes the next real request rebuild the stack
+        # with the OTel server-span middleware in place.
+        if app is not None:
+            FastAPIInstrumentor.instrument_app(app)
+            app.middleware_stack = None
+            app._bss_otel_instrumented = True  # type: ignore[attr-defined]
+        else:
+            FastAPIInstrumentor().instrument()
         HTTPXClientInstrumentor().instrument()
         AsyncPGInstrumentor().instrument()
         AioPikaInstrumentor().instrument()
@@ -95,6 +130,7 @@ def configure_telemetry(service_name: str):  # noqa: ANN201 — return type lazy
             service=service_name,
             endpoint=settings.BSS_OTEL_EXPORTER_OTLP_ENDPOINT,
             sampling_ratio=settings.BSS_OTEL_SAMPLING_RATIO,
+            fastapi_app_wrapped=app is not None,
         )
         _INSTALLED = True
         return provider

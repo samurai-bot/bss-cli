@@ -19,7 +19,7 @@ log = structlog.get_logger()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = app.state.settings
-    configure_telemetry(service_name="provisioning-sim")
+    configure_telemetry(service_name="provisioning-sim", app=app)
     engine = create_async_engine(settings.db_url, pool_size=5, max_overflow=5)
     app.state.engine = engine
     app.state.session_factory = async_sessionmaker(engine, expire_on_commit=False)
