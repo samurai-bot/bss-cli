@@ -1,9 +1,17 @@
+"""Request middleware — pure ASGI to preserve contextvar propagation.
+
+BaseHTTPMiddleware runs the inner app in a separate asyncio task,
+which breaks ContextVar propagation including OTel's current span
+context. With pure ASGI middleware the inner app runs in the same
+task, so bss-telemetry's current_trace_id() can read the active
+FastAPI server span from inside route handlers.
+"""
+
+import json
 import uuid
 
 import structlog
-from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
-from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app import auth_context
 from app.policies.base import PolicyViolation
@@ -11,14 +19,22 @@ from app.policies.base import PolicyViolation
 log = structlog.get_logger()
 
 
-class RequestIdMiddleware(BaseHTTPMiddleware):
-    async def dispatch(
-        self, request: Request, call_next: RequestResponseEndpoint
-    ) -> Response:
-        request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
-        actor = request.headers.get("x-bss-actor", "system")
-        channel = request.headers.get("x-bss-channel", "system")
-        tenant = request.headers.get("x-bss-tenant", "DEFAULT")
+class RequestIdMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        headers = {
+            k.decode().lower(): v.decode() for k, v in scope.get("headers", [])
+        }
+        request_id = headers.get("x-request-id") or str(uuid.uuid4())
+        actor = headers.get("x-bss-actor", "system")
+        channel = headers.get("x-bss-channel", "system")
+        tenant = headers.get("x-bss-tenant", "DEFAULT")
 
         auth_context.set_for_request(actor=actor, tenant=tenant, channel=channel)
 
@@ -27,13 +43,23 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
             request_id=request_id,
             actor=actor,
             channel=channel,
-            method=request.method,
-            path=request.url.path,
+            method=scope.get("method", "?"),
+            path=scope.get("path", "?"),
         )
+
+        status_holder = {"status": 0}
+
+        async def send_wrapper(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                status_holder["status"] = message.get("status", 0)
+                headers_list = list(message.get("headers", []))
+                headers_list.append((b"x-request-id", request_id.encode()))
+                message = {**message, "headers": headers_list}
+            await send(message)
 
         log.info("request.start")
         try:
-            response = await call_next(request)
+            await self.app(scope, receive, send_wrapper)
         except PolicyViolation as exc:
             log.warning(
                 "policy.violation",
@@ -41,16 +67,26 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
                 message=exc.message,
                 context=exc.context,
             )
-            return JSONResponse(
-                status_code=422,
-                content={
+            body = json.dumps(
+                {
                     "code": "POLICY_VIOLATION",
                     "reason": exc.rule,
                     "message": exc.message,
                     "referenceError": f"https://docs.bss-cli.dev/policies/{exc.rule}",
                     "context": exc.context,
-                },
+                }
+            ).encode()
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 422,
+                    "headers": [
+                        (b"content-type", b"application/json"),
+                        (b"content-length", str(len(body)).encode()),
+                        (b"x-request-id", request_id.encode()),
+                    ],
+                }
             )
-        response.headers["x-request-id"] = request_id
-        log.info("request.end", status=response.status_code)
-        return response
+            await send({"type": "http.response.body", "body": body})
+            return
+        log.info("request.end", status=status_holder["status"])

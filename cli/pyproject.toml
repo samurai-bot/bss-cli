@@ -6,6 +6,7 @@ description = "BSS-CLI command-line interface — direct verbs + LLM REPL"
 dependencies = [
     "bss-clients",
     "bss-orchestrator",
+    "bss-telemetry",
     "typer>=0.12",
     "rich>=13.7",
     "qrcode>=7.4",
@@ -31,6 +32,7 @@ dev = [
 [tool.uv.sources]
 bss-clients = { workspace = true }
 bss-orchestrator = { workspace = true }
+bss-telemetry = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

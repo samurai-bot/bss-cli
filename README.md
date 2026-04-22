@@ -32,7 +32,7 @@ bss scenario run scenarios/customer_signup_and_exhaust.yaml
 
 ## Quick start (all-in-one)
 
-Brings up the 9 services plus PostgreSQL, RabbitMQ, and Metabase.
+Brings up the 9 services plus PostgreSQL, RabbitMQ, Metabase, **and Jaeger**.
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.infra.yml up -d
@@ -40,6 +40,24 @@ make migrate
 make seed
 bss scenario run scenarios/customer_signup_and_exhaust.yaml
 ```
+
+## Tracing (v0.2)
+
+Every service exports OpenTelemetry traces to Jaeger. After a scenario run, see the full distributed trace in three ways:
+
+```bash
+# ASCII swimlane in the terminal
+bss trace for-order ORD-014
+
+# By trace ID directly
+bss trace get 4a8f9e2c0123456789abcdef01234567
+
+# Open Jaeger UI
+open http://localhost:16686/         # all-in-one
+open http://tech-vm:16686/           # BYOI
+```
+
+For BYOI installs (Jaeger on a separate host like `tech-vm`), see [`docs/runbooks/jaeger-byoi.md`](docs/runbooks/jaeger-byoi.md). Set `BSS_OTEL_EXPORTER_OTLP_ENDPOINT` in `.env` to point services at the right Jaeger.
 
 ## Documentation
 
@@ -63,12 +81,14 @@ make scenarios                                # every scenario in ./scenarios
 make scenarios-hero                           # just the three ship-gate scenarios
 ```
 
-Scenarios in `scenarios/*.yaml` are the living regression suite. Three
-are tagged `hero` and gate v0.1 — two are fully deterministic (signup
+Scenarios in `scenarios/*.yaml` are the living regression suite. Four
+are tagged `hero`. Three gate v0.1 — two are fully deterministic (signup
 → exhaustion, fault-injected provisioning with retry), the third hands
 a blocked subscription to the LLM supervisor in plain English and
 asserts the model diagnoses, tops up, and logs the interaction without
-touching destructive tools.
+touching destructive tools. The fourth (`trace_customer_signup_swimlane`)
+gates v0.2 — drives a signup, then asserts the resulting OTel trace
+has the expected span fan-out and zero errors.
 
 ## License
 

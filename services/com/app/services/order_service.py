@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 import structlog
 from bss_clock import now as clock_now
+from bss_telemetry import semconv, tracer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bss_models.order_mgmt import OrderItem, ProductOrder
@@ -186,50 +187,59 @@ class OrderService:
         cfs_service_id: str,
     ) -> None:
         """Called from MQ consumer when service_order.completed."""
-        order = await self._repo.get(commercial_order_id)
-        if not order or order.state != "in_progress":
-            log.warning(
-                "order.service_order_completed.skipped",
-                commercial_order_id=commercial_order_id,
-                reason="order not found or not in_progress",
+        with tracer("bss-com").start_as_current_span(
+            "com.order.complete_to_subscription"
+        ) as span:
+            span.set_attribute(semconv.BSS_ORDER_ID, commercial_order_id)
+            span.set_attribute(semconv.BSS_CUSTOMER_ID, customer_id)
+            span.set_attribute(semconv.BSS_OFFERING_ID, offering_id)
+
+            order = await self._repo.get(commercial_order_id)
+            if not order or order.state != "in_progress":
+                log.warning(
+                    "order.service_order_completed.skipped",
+                    commercial_order_id=commercial_order_id,
+                    reason="order not found or not in_progress",
+                )
+                return
+
+            # Create subscription
+            sub_result = await self._subscription.create(
+                customer_id=customer_id,
+                offering_id=offering_id,
+                msisdn=msisdn,
+                iccid=iccid,
+                payment_method_id=payment_method_id,
             )
-            return
+            if sub_result.get("id"):
+                span.set_attribute(semconv.BSS_SUBSCRIPTION_ID, sub_result["id"])
 
-        # Create subscription
-        sub_result = await self._subscription.create(
-            customer_id=customer_id,
-            offering_id=offering_id,
-            msisdn=msisdn,
-            iccid=iccid,
-            payment_method_id=payment_method_id,
-        )
+            # Update order item
+            if order.items:
+                order.items[0].target_subscription_id = sub_result.get("id")
+                order.items[0].state = "completed"
 
-        # Update order item
-        if order.items:
-            order.items[0].target_subscription_id = sub_result.get("id")
-            order.items[0].state = "completed"
+            check_order_transition(order.state, "completed")
+            order.state = "completed"
+            order.completed_date = clock_now()
+            await self._repo.add_state_history(
+                order.id, "in_progress", "completed", reason="service order completed"
+            )
 
-        check_order_transition(order.state, "completed")
-        order.state = "completed"
-        order.completed_date = clock_now()
-        await self._repo.add_state_history(
-            order.id, "in_progress", "completed", reason="service order completed"
-        )
-
-        await publish(
-            self._session,
-            event_type="order.completed",
-            aggregate_type="ProductOrder",
-            aggregate_id=order.id,
-            payload={
-                "commercialOrderId": order.id,
-                "customerId": order.customer_id,
-                "subscriptionId": sub_result.get("id"),
-                "cfsServiceId": cfs_service_id,
-            },
-            exchange=self._exchange,
-        )
-        # NOTE: session.commit() is done by the consumer
+            await publish(
+                self._session,
+                event_type="order.completed",
+                aggregate_type="ProductOrder",
+                aggregate_id=order.id,
+                payload={
+                    "commercialOrderId": order.id,
+                    "customerId": order.customer_id,
+                    "subscriptionId": sub_result.get("id"),
+                    "cfsServiceId": cfs_service_id,
+                },
+                exchange=self._exchange,
+            )
+            # NOTE: session.commit() is done by the consumer
 
     async def handle_service_order_failed(
         self,

@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from bss_telemetry import semconv, tracer
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
 from .context import use_llm_context
@@ -67,11 +68,14 @@ class Session:
         only the final natural-language answer. Full traces are available
         via ``self.history`` for debugging.
         """
-        use_llm_context()
-        self.history.append(HumanMessage(content=text))
-        state = await self._graph.ainvoke({"messages": self.history})
-        self.history = list(state["messages"])
-        return _last_ai_text(self.history)
+        with tracer("bss-orchestrator").start_as_current_span("bss.ask") as span:
+            span.set_attribute(semconv.BSS_CHANNEL, "llm")
+            span.set_attribute("bss.ask.turn", len(self.history) // 2 + 1)
+            use_llm_context()
+            self.history.append(HumanMessage(content=text))
+            state = await self._graph.ainvoke({"messages": self.history})
+            self.history = list(state["messages"])
+            return _last_ai_text(self.history)
 
     def reset(self) -> None:
         """Clear conversation history — next ``ask`` starts fresh."""
@@ -83,7 +87,10 @@ async def ask_once(text: str, *, allow_destructive: bool = False) -> str:
 
     Equivalent to ``Session(...).ask(text)`` but skips the dataclass.
     """
-    use_llm_context()
-    graph = build_graph(allow_destructive=allow_destructive)
-    state = await graph.ainvoke({"messages": [HumanMessage(content=text)]})
-    return _last_ai_text(state["messages"])
+    with tracer("bss-orchestrator").start_as_current_span("bss.ask") as span:
+        span.set_attribute(semconv.BSS_CHANNEL, "llm")
+        span.set_attribute("bss.ask.allow_destructive", allow_destructive)
+        use_llm_context()
+        graph = build_graph(allow_destructive=allow_destructive)
+        state = await graph.ainvoke({"messages": [HumanMessage(content=text)]})
+        return _last_ai_text(state["messages"])

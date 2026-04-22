@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Annotated
 
 import typer
+from bss_telemetry import configure_telemetry
 from rich import print as rprint
 
 from .commands import (
@@ -71,6 +72,11 @@ def _default(
         bool, typer.Option("--allow-destructive")
     ] = False,
 ) -> None:
+    # CLI is the root span for every `bss <cmd>` invocation. Without
+    # this, traces would start at the first BSS service that the CLI
+    # touches, hiding the CLI's own latency and breaking the
+    # `audit.domain_event.trace_id` story for CLI-originated writes.
+    configure_telemetry(service_name="cli")
     if ctx.invoked_subcommand is not None:
         return
     try:

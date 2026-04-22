@@ -157,9 +157,9 @@ SOM writes are internally triggered by COM events — no direct-create tool for 
 | `clock.advance` | update | Advance by duration |
 | `clock.freeze` | update | |
 | `clock.unfreeze` | update | |
-| `trace.get` | read | ASCII swimlane (Phase 11+) |
-| `trace.for_order` | read | |
-| `trace.for_subscription` | read | |
+| `trace.get` | read | `(trace_id)` — fetch a Jaeger trace by 32-char hex ID. Returns summary `{traceId, spanCount, serviceCount, services, errorSpanCount, totalMs}`. Human-readable swimlane is `bss trace get <id>` on the CLI. |
+| `trace.for_order` | read | `(order_id)` — resolve trace via `audit.domain_event` for an order, then fetch + summarize. Returns the same summary dict + `orderId`. |
+| `trace.for_subscription` | read | `(subscription_id)` — same for subscriptions; returns summary + `subscriptionId`. |
 | `events.list` | read | Query `audit.domain_event` |
 | `agents.list` | read | |
 

@@ -80,7 +80,7 @@ def audit_events_router() -> APIRouter:
             f"""
             SELECT
                 event_id, event_type, aggregate_type, aggregate_id,
-                occurred_at, actor, channel, tenant_id, payload,
+                occurred_at, trace_id, actor, channel, tenant_id, payload,
                 schema_version, published_to_mq
             FROM audit.domain_event
             {clause}
@@ -100,6 +100,7 @@ def audit_events_router() -> APIRouter:
                 "aggregateType": r["aggregate_type"],
                 "aggregateId": r["aggregate_id"],
                 "occurredAt": r["occurred_at"].isoformat(),
+                "traceId": r["trace_id"],
                 "actor": r["actor"],
                 "channel": r["channel"],
                 "tenantId": r["tenant_id"],
