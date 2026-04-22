@@ -138,17 +138,18 @@ def configure_telemetry(  # noqa: ANN201 — return type lazy-imported
         # also benefit on graceful shutdown.
         atexit.register(_safe_force_flush, provider)
 
-        # Service lifespans want this in their log stream; the CLI
-        # doesn't — it's a short-lived process and the user shouldn't
-        # see ops noise on every invocation. Demote to debug for cli.
-        _log = log.debug if service_name == "cli" else log.info
-        _log(
-            "telemetry.configured",
-            service=service_name,
-            endpoint=settings.BSS_OTEL_EXPORTER_OTLP_ENDPOINT,
-            sampling_ratio=settings.BSS_OTEL_SAMPLING_RATIO,
-            fastapi_app_wrapped=app is not None,
-        )
+        # Service lifespans want this in their log stream; CLI does
+        # NOT — short-lived process, the user shouldn't see ops noise
+        # on every invocation, and structlog default is stdout which
+        # would corrupt --json pipes.
+        if service_name != "cli":
+            log.info(
+                "telemetry.configured",
+                service=service_name,
+                endpoint=settings.BSS_OTEL_EXPORTER_OTLP_ENDPOINT,
+                sampling_ratio=settings.BSS_OTEL_SAMPLING_RATIO,
+                fastapi_app_wrapped=app is not None,
+            )
         _INSTALLED = True
         return provider
     except Exception as exc:  # noqa: BLE001
