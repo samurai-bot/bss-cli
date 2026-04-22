@@ -1,0 +1,84 @@
+name: trace_customer_signup_swimlane
+description: |
+  v0.2 hero scenario: drives a customer signup through the order pipeline,
+  then asserts the resulting OpenTelemetry trace looks right via
+  trace.for_order — span fan-out, services touched, no errors.
+
+  This is the v0.2 ship gate. If the OTel export pipe is broken, services
+  are missing instrumentation, the BatchSpanProcessor isn't flushing, or
+  Jaeger isn't reachable, this scenario fails. Pairs with the offline
+  swimlane snapshot test (cli/tests/v0_2_0/test_swimlane_snapshot.py)
+  which locks the renderer's visual shape against a frozen fixture.
+
+  Requires Jaeger reachable at $BSS_OTEL_EXPORTER_OTLP_ENDPOINT (services
+  export here) AND $BSS_JAEGER_UI_URL (CLI / orchestrator reads here).
+  Default both: http://tech-vm:4318 + http://tech-vm:16686.
+
+tags: [hero, observability, regression, deterministic]
+
+setup:
+  reset_operational_data: true
+  freeze_clock_at: "2026-04-23T09:00:00+00:00"
+
+variables:
+  customer_email: "trace-{{ run_id }}@bss-cli.local"
+  customer_phone: "+6590004242"
+  plan: PLAN_M
+
+steps:
+  - name: create customer
+    action: customer.create
+    args:
+      name: "Trace Demo"
+      email: "{{ customer_email }}"
+      phone: "{{ customer_phone }}"
+    capture:
+      customer_id: "$.id"
+
+  - name: attest KYC
+    action: customer.attest_kyc
+    args:
+      customer_id: "{{ customer_id }}"
+      provider: myinfo
+      attestation_token: "stub-signed-jwt-{{ run_id }}"
+
+  - name: add card on file
+    action: payment.add_card
+    args:
+      customer_id: "{{ customer_id }}"
+      card_number: "4242424242424242"
+
+  - name: place order
+    action: order.create
+    args:
+      customer_id: "{{ customer_id }}"
+      offering_id: "{{ plan }}"
+    capture:
+      order_id: "$.id"
+
+  - name: wait for order to complete
+    action: order.wait_until
+    args:
+      order_id: "{{ order_id }}"
+      target_state: completed
+      timeout_s: 30
+
+  # The hero assertion. Resolves the trace via audit.domain_event.trace_id,
+  # fetches it from Jaeger, and checks structural fields. The
+  # BatchSpanProcessor flushes every ~5s — we poll for up to 12s so the
+  # spans have time to land in Jaeger.
+  - name: verify the order's trace is shaped correctly
+    assert:
+      tool: trace.for_order
+      args: { order_id: "{{ order_id }}" }
+      expect:
+        spanCount: { gte: 30 }
+        serviceCount: { gte: 5 }
+        errorSpanCount: 0
+        traceId: { not_null: true }
+      poll:
+        interval_ms: 1000
+        timeout_seconds: 12
+
+teardown:
+  unfreeze_clock: true

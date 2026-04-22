@@ -16,9 +16,12 @@ of phases/V0_2_0.md for the canonical 3 sites.
 
 from . import semconv
 from .bootstrap import configure_telemetry, tracer
+from .jaeger import JaegerClient, JaegerError
 from .propagation import current_trace_id, use_amqp_span
 
 __all__ = [
+    "JaegerClient",
+    "JaegerError",
     "configure_telemetry",
     "current_trace_id",
     "semconv",

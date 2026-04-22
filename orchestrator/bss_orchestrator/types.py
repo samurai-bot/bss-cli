@@ -189,3 +189,9 @@ AggregateType = Literal[
     "payment_method",
     "provisioning_task",
 ]
+TraceId = Annotated[
+    str,
+    "32-char hex W3C trace ID, e.g. 4a8f9e2c0123456789abcdef01234567. "
+    "Get from trace.for_order or trace.for_subscription, or from "
+    "audit.domain_event.trace_id (post-v0.2 events).",
+]
