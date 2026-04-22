@@ -37,6 +37,12 @@ log = structlog.get_logger(__name__)
 
 _INSTALLED = False
 
+# URLs the FastAPI instrumentor must NOT create server spans for.
+# Docker healthcheck hits /health every 10s on every service — left
+# unfiltered, the Jaeger UI is 99% noise. Comma-separated regex per
+# OTel spec: https://opentelemetry-python-contrib.readthedocs.io/.../fastapi/
+_EXCLUDED_URLS = "/health,/health/.*,/metrics"
+
 
 def configure_telemetry(  # noqa: ANN201 — return type lazy-imported
     service_name: str,
@@ -73,7 +79,7 @@ def configure_telemetry(  # noqa: ANN201 — return type lazy-imported
     if _INSTALLED:
         provider = trace.get_tracer_provider()
         if app is not None and not getattr(app, "_bss_otel_instrumented", False):
-            FastAPIInstrumentor.instrument_app(app)
+            FastAPIInstrumentor.instrument_app(app, excluded_urls=_EXCLUDED_URLS)
             app.middleware_stack = None
             app._bss_otel_instrumented = True  # type: ignore[attr-defined]
         return provider if isinstance(provider, TracerProvider) else None
@@ -117,11 +123,11 @@ def configure_telemetry(  # noqa: ANN201 — return type lazy-imported
         # cache to None makes the next real request rebuild the stack
         # with the OTel server-span middleware in place.
         if app is not None:
-            FastAPIInstrumentor.instrument_app(app)
+            FastAPIInstrumentor.instrument_app(app, excluded_urls=_EXCLUDED_URLS)
             app.middleware_stack = None
             app._bss_otel_instrumented = True  # type: ignore[attr-defined]
         else:
-            FastAPIInstrumentor().instrument()
+            FastAPIInstrumentor().instrument(excluded_urls=_EXCLUDED_URLS)
         HTTPXClientInstrumentor().instrument()
         AsyncPGInstrumentor().instrument()
         AioPikaInstrumentor().instrument()

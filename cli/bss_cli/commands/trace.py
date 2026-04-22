@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 from bss_clients import AuditClient
@@ -33,10 +33,7 @@ def get_trace_cmd(
             except JaegerError as exc:
                 rprint(f"[red]{exc}[/]")
                 raise typer.Exit(code=2)
-        if as_json:
-            print(json.dumps(trace, indent=2))
-            return
-        print(render_swimlane(trace, width=width, show_sql=show_sql, only_service=only_service))
+        _emit(trace, as_json=as_json, width=width, show_sql=show_sql, only_service=only_service)
 
     run_async(_run())
 
@@ -46,6 +43,7 @@ def for_order_cmd(
     order_id: Annotated[str, typer.Argument(help="Commercial order ID, e.g. ORD-014.")],
     width: Annotated[int | None, typer.Option("--width")] = None,
     show_sql: Annotated[bool, typer.Option("--show-sql")] = False,
+    as_json: Annotated[bool, typer.Option("--json", help="Emit raw Jaeger JSON.")] = False,
 ) -> None:
     """Resolve trace_id from audit events for an order, then render."""
     async def _run() -> None:
@@ -68,7 +66,7 @@ def for_order_cmd(
             except JaegerError as exc:
                 rprint(f"[red]{exc}[/]")
                 raise typer.Exit(code=2)
-        print(render_swimlane(trace, width=width, show_sql=show_sql))
+        _emit(trace, as_json=as_json, width=width, show_sql=show_sql)
 
     run_async(_run())
 
@@ -78,6 +76,7 @@ def for_subscription_cmd(
     subscription_id: Annotated[str, typer.Argument(help="Subscription ID, e.g. SUB-007.")],
     width: Annotated[int | None, typer.Option("--width")] = None,
     show_sql: Annotated[bool, typer.Option("--show-sql")] = False,
+    as_json: Annotated[bool, typer.Option("--json", help="Emit raw Jaeger JSON.")] = False,
 ) -> None:
     """Resolve trace_id from audit events for a subscription, then render."""
     async def _run() -> None:
@@ -100,7 +99,7 @@ def for_subscription_cmd(
             except JaegerError as exc:
                 rprint(f"[red]{exc}[/]")
                 raise typer.Exit(code=2)
-        print(render_swimlane(trace, width=width, show_sql=show_sql))
+        _emit(trace, as_json=as_json, width=width, show_sql=show_sql)
 
     run_async(_run())
 
@@ -109,6 +108,7 @@ def for_subscription_cmd(
 def for_ask_cmd(
     width: Annotated[int | None, typer.Option("--width")] = None,
     show_sql: Annotated[bool, typer.Option("--show-sql")] = False,
+    as_json: Annotated[bool, typer.Option("--json", help="Emit raw Jaeger JSON.")] = False,
 ) -> None:
     """Render the most-recent ``bss ask`` trace."""
     async def _run() -> None:
@@ -122,7 +122,7 @@ def for_ask_cmd(
             except JaegerError as exc:
                 rprint(f"[red]{exc}[/]")
                 raise typer.Exit(code=2)
-        print(render_swimlane(trace, width=width, show_sql=show_sql))
+        _emit(trace, as_json=as_json, width=width, show_sql=show_sql)
 
     run_async(_run())
 
@@ -141,6 +141,21 @@ def services_cmd() -> None:
             print(name)
 
     run_async(_run())
+
+
+def _emit(
+    trace: dict[str, Any],
+    *,
+    as_json: bool,
+    width: int | None = None,
+    show_sql: bool = False,
+    only_service: str | None = None,
+) -> None:
+    """Print either the raw Jaeger JSON or the rendered swimlane."""
+    if as_json:
+        print(json.dumps(trace, indent=2))
+        return
+    print(render_swimlane(trace, width=width, show_sql=show_sql, only_service=only_service))
 
 
 def _latest_trace_id(events: list[dict]) -> str | None:
