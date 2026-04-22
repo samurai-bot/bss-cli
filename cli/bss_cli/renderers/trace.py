@@ -157,7 +157,7 @@ def render_swimlane(
     max_depth = max((r.depth for r in visible), default=0)
     label_col_w = 14 + indent_per_level * max(max_depth, 1)
     duration_col_w = 8
-    op_col_w = 32
+    op_col_w = 40  # wide enough for the longest manual-span name (`com.order.complete_to_subscription` = 34) + asterisk
     bar_w = max(20, term_width - label_col_w - duration_col_w - op_col_w - 4)
 
     trace_id = trace.get("traceID") or (
