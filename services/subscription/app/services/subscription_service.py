@@ -11,6 +11,7 @@ import aio_pika
 import structlog
 from bss_clients import CatalogClient, CRMClient, InventoryClient, PaymentClient
 from bss_clock import now as clock_now
+from bss_telemetry import semconv, tracer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.bundle import (
@@ -297,115 +298,123 @@ class SubscriptionService:
     async def purchase_vas(
         self, sub_id: str, vas_offering_id: str
     ) -> Subscription:
-        sub = await self._repo.get(sub_id)
-        if not sub:
-            raise PolicyViolation(
-                rule="subscription.not_found",
-                message=f"Subscription {sub_id} not found",
-                context={"subscription_id": sub_id},
+        with tracer("bss-subscription").start_as_current_span(
+            "subscription.purchase_vas"
+        ) as span:
+            span.set_attribute(semconv.BSS_SUBSCRIPTION_ID, sub_id)
+            span.set_attribute(semconv.BSS_VAS_OFFERING_ID, vas_offering_id)
+
+            sub = await self._repo.get(sub_id)
+            if not sub:
+                raise PolicyViolation(
+                    rule="subscription.not_found",
+                    message=f"Subscription {sub_id} not found",
+                    context={"subscription_id": sub_id},
+                )
+            span.set_attribute(semconv.BSS_CUSTOMER_ID, sub.customer_id)
+            span.set_attribute(semconv.BSS_SUBSCRIPTION_STATE, sub.state)
+
+            # Policies
+            check_not_terminated(sub.state)
+
+            vas = await check_vas_offering_sellable(vas_offering_id, self._catalog)
+
+            # Charge payment
+            # Find default payment method for customer
+            methods = await self._payment.list_methods(sub.customer_id)
+            default_method = next((m for m in methods if m.get("isDefault")), None)
+            if not default_method:
+                default_method = methods[0] if methods else None
+            if not default_method:
+                raise PolicyViolation(
+                    rule="subscription.vas_purchase.requires_active_cof",
+                    message="No active payment method found",
+                    context={"customer_id": sub.customer_id},
+                )
+
+            amount = Decimal(str(vas.get("priceAmount", 0)))
+            payment_result = await self._payment.charge(
+                customer_id=sub.customer_id,
+                payment_method_id=default_method["id"],
+                amount=amount,
+                currency=vas.get("currency", "SGD"),
+                purpose="vas",
             )
+            if payment_result.get("status") != "approved":
+                raise PolicyViolation(
+                    rule="subscription.vas_purchase.requires_active_cof",
+                    message="VAS payment was declined",
+                    context={
+                        "payment_status": payment_result.get("status"),
+                        "decline_reason": payment_result.get("declineReason"),
+                    },
+                )
 
-        # Policies
-        check_not_terminated(sub.state)
+            # Record VAS purchase
+            vas_id = f"{sub_id}-VAS-{uuid4().hex[:8].upper()}"
+            now = clock_now()
+            expiry_hours = vas.get("expiryHours")
+            expires_at = now + timedelta(hours=expiry_hours) if expiry_hours else None
+            allowance_qty = vas.get("allowanceQuantity", 0)
+            allowance_type = vas.get("allowanceType", "data")
 
-        vas = await check_vas_offering_sellable(vas_offering_id, self._catalog)
-
-        # Charge payment
-        # Find default payment method for customer
-        methods = await self._payment.list_methods(sub.customer_id)
-        default_method = next((m for m in methods if m.get("isDefault")), None)
-        if not default_method:
-            default_method = methods[0] if methods else None
-        if not default_method:
-            raise PolicyViolation(
-                rule="subscription.vas_purchase.requires_active_cof",
-                message="No active payment method found",
-                context={"customer_id": sub.customer_id},
+            purchase = VasPurchase(
+                id=vas_id,
+                subscription_id=sub_id,
+                vas_offering_id=vas_offering_id,
+                payment_attempt_id=payment_result.get("id"),
+                applied_at=now,
+                expires_at=expires_at,
+                allowance_added=allowance_qty,
+                allowance_type=allowance_type,
             )
+            await self._vas_repo.create(purchase)
 
-        amount = Decimal(str(vas.get("priceAmount", 0)))
-        payment_result = await self._payment.charge(
-            customer_id=sub.customer_id,
-            payment_method_id=default_method["id"],
-            amount=amount,
-            currency=vas.get("currency", "SGD"),
-            purpose="vas",
-        )
-        if payment_result.get("status") != "approved":
-            raise PolicyViolation(
-                rule="subscription.vas_purchase.requires_active_cof",
-                message="VAS payment was declined",
-                context={
-                    "payment_status": payment_result.get("status"),
-                    "decline_reason": payment_result.get("declineReason"),
+            # Add to balance
+            balances = await self._repo.get_balances(sub_id)
+            target = next((b for b in balances if b.allowance_type == allowance_type), None)
+            if target and allowance_qty > 0 and target.total != -1:
+                snap = BalanceSnapshot(
+                    allowance_type=target.allowance_type,
+                    total=target.total, consumed=target.consumed, unit=target.unit,
+                )
+                result = add_allowance(snap, allowance_qty)
+                target.total = result.total
+                await self._repo.update_balance(target)
+
+            previous_state = sub.state
+
+            await publisher.publish(
+                self._session,
+                event_type="subscription.vas_purchased",
+                aggregate_type="subscription",
+                aggregate_id=sub_id,
+                payload={
+                    "subscriptionId": sub_id,
+                    "vasOfferingId": vas_offering_id,
+                    "paymentAttemptId": payment_result.get("id", ""),
+                    "allowanceType": allowance_type,
+                    "allowanceAdded": allowance_qty,
+                    "previousState": previous_state,
                 },
             )
 
-        # Record VAS purchase
-        vas_id = f"{sub_id}-VAS-{uuid4().hex[:8].upper()}"
-        now = clock_now()
-        expiry_hours = vas.get("expiryHours")
-        expires_at = now + timedelta(hours=expiry_hours) if expiry_hours else None
-        allowance_qty = vas.get("allowanceQuantity", 0)
-        allowance_type = vas.get("allowanceType", "data")
+            # If blocked and top-up adds data → unblock
+            if sub.state == "blocked":
+                await self._transition(sub, "top_up", reason="vas_top_up")
+                await publisher.publish(
+                    self._session,
+                    event_type="subscription.unblocked",
+                    aggregate_type="subscription",
+                    aggregate_id=sub_id,
+                    payload={"subscriptionId": sub_id, "reason": "vas_top_up"},
+                )
+            elif sub.state == "active":
+                # top_up on active → still active (self-transition)
+                await self._transition(sub, "top_up", reason="vas_top_up")
 
-        purchase = VasPurchase(
-            id=vas_id,
-            subscription_id=sub_id,
-            vas_offering_id=vas_offering_id,
-            payment_attempt_id=payment_result.get("id"),
-            applied_at=now,
-            expires_at=expires_at,
-            allowance_added=allowance_qty,
-            allowance_type=allowance_type,
-        )
-        await self._vas_repo.create(purchase)
-
-        # Add to balance
-        balances = await self._repo.get_balances(sub_id)
-        target = next((b for b in balances if b.allowance_type == allowance_type), None)
-        if target and allowance_qty > 0 and target.total != -1:
-            snap = BalanceSnapshot(
-                allowance_type=target.allowance_type,
-                total=target.total, consumed=target.consumed, unit=target.unit,
-            )
-            result = add_allowance(snap, allowance_qty)
-            target.total = result.total
-            await self._repo.update_balance(target)
-
-        previous_state = sub.state
-
-        await publisher.publish(
-            self._session,
-            event_type="subscription.vas_purchased",
-            aggregate_type="subscription",
-            aggregate_id=sub_id,
-            payload={
-                "subscriptionId": sub_id,
-                "vasOfferingId": vas_offering_id,
-                "paymentAttemptId": payment_result.get("id", ""),
-                "allowanceType": allowance_type,
-                "allowanceAdded": allowance_qty,
-                "previousState": previous_state,
-            },
-        )
-
-        # If blocked and top-up adds data → unblock
-        if sub.state == "blocked":
-            await self._transition(sub, "top_up", reason="vas_top_up")
-            await publisher.publish(
-                self._session,
-                event_type="subscription.unblocked",
-                aggregate_type="subscription",
-                aggregate_id=sub_id,
-                payload={"subscriptionId": sub_id, "reason": "vas_top_up"},
-            )
-        elif sub.state == "active":
-            # top_up on active → still active (self-transition)
-            await self._transition(sub, "top_up", reason="vas_top_up")
-
-        await self._session.commit()
-        return await self._repo.get(sub_id)
+            await self._session.commit()
+            return await self._repo.get(sub_id)
 
     async def renew(self, sub_id: str) -> Subscription:
         sub = await self._repo.get(sub_id)
