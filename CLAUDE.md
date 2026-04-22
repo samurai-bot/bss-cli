@@ -171,18 +171,19 @@ Two distinct planes:
 - **Messaging:** RabbitMQ via `aio-pika`
 - **CLI:** Typer + Rich
 - **LLM orchestrator:** LangGraph
-- **LLM gateway:** LiteLLM → MiMo v2 Flash
+- **LLM gateway:** OpenRouter via the openai SDK (no LiteLLM hop) → MiMo v2 Flash
 - **Database:** PostgreSQL 16, **single instance**, schema-per-domain (see ARCHITECTURE.md for future split path)
 - **Vector DB (post-v0.1):** pgvector extension on the same Postgres instance (schema `knowledge`)
 - **Reporting:** Metabase
 - **Logging:** structlog (JSON)
+- **Tracing (v0.2):** OpenTelemetry SDK + auto-instrumentors (FastAPI, HTTPX, AsyncPG, AioPika); OTLP/HTTP export to Jaeger
 - **Testing:** pytest + pytest-asyncio + httpx AsyncClient
 - **Linting:** ruff + black + mypy
 - **Container:** multi-stage Dockerfiles, non-root users, distroless final stage where practical
 
 ## Deployment model
 
-BSS-CLI ships as **10 service containers** plus three optional infrastructure containers. Deployers with existing Postgres/RabbitMQ bring their own infra; the all-in-one profile brings up everything for development and demo.
+BSS-CLI ships as **9 service containers** plus four optional infrastructure containers (Postgres, RabbitMQ, Metabase, Jaeger). Billing was deferred to v0.2 — port 8009 reserved (`DECISIONS.md` 2026-04-13). Deployers with existing Postgres/RabbitMQ/Jaeger bring their own infra; the all-in-one profile brings up everything for development and demo.
 
 See `ARCHITECTURE.md` for the full container topology, compose profiles, and the AWS deployment path (ECS Fargate → small MVNO production → scaled MVNO).
 

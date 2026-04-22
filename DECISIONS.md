@@ -506,3 +506,121 @@ unchanged in v0.1.1 and should not be targeted in any future cleanup.
 The cleanup rule is: remove references to the billing **service**
 (tools, clients, endpoints, docker-compose entries, ports), never
 remove billing as customer-support **vocabulary** in other domains.
+
+### 2026-04-23 — v0.2.0 — Jaeger all-in-one as the trace backend (not Tempo)
+**Context:** OTel exports need a backend. Two viable choices: Jaeger
+(mature, simpler) and Tempo (newer, cloud-native, object-storage-backed).
+**Decision:** Jaeger all-in-one (`jaegertracing/all-in-one:1.65.0`).
+Single container, no object-storage dependency, built-in UI on `:16686`,
+native OTLP/HTTP (`:4318`) and OTLP/gRPC (`:4317`) ingress via
+`COLLECTOR_OTLP_ENABLED=true`. ~200 MB RAM. The `bss trace` CLI reads
+via Jaeger's stable HTTP JSON API (`/api/traces/<id>`).
+**Alternatives rejected:** Tempo — needs S3/MinIO/filesystem storage,
+Grafana for the UI, and per-deployment credentials. v0.2 is "ship a
+screenshot", not "operate a production observability stack".
+**Consequences:** Memory storage by default, lost on restart — fine
+for demo. Persistence via badger volume documented in
+`docs/runbooks/jaeger-byoi.md` for long-running BYOI hosts. If
+production scale ever lands here, migration to a storage-backed
+trace tier is independent of how services emit (services just point
+at a different OTLP endpoint).
+
+### 2026-04-23 — v0.2.0 — FastAPI middleware-stack cache invalidation after instrument_app
+**Context:** Smoke-testing v0.2 found events written from FastAPI HTTP
+handlers (`payment.charged`, `customer.created`, `order.acknowledged`)
+had NULL `trace_id` in `audit.domain_event`, even though events from
+MQ consumers and from inside manual spans had trace_ids. Confirmed
+via Jaeger: no FastAPI server spans for any HTTP request — only
+auto-instrumented SQL spans showed up as orphaned root spans.
+**Root cause:** Starlette caches `app.middleware_stack` on the FIRST
+`app.__call__`. The very first call IS the lifespan invocation. By the
+time `configure_telemetry(service_name=..., app=app)` runs in lifespan
+startup, the stack is already built (without OTel). All subsequent
+real requests use the cached, un-instrumented stack.
+**Decision:** After `FastAPIInstrumentor.instrument_app(app)`, set
+`app.middleware_stack = None` to force a rebuild on the next request.
+The rebuild picks up the OTel-patched `build_middleware_stack` and
+the server span wraps every request properly.
+**Alternatives rejected:** Move `configure_telemetry` to import time
+before `app = FastAPI(...)` — splits config across import vs. lifespan,
+surfaces the env-vars-not-yet-loaded race. Subclass FastAPI to
+invalidate on `instrument_app` — same effect, more indirection.
+**Consequences:** One extra line in `bss_telemetry.bootstrap`. trace_id
+coverage on `audit.domain_event` jumped from ~50% to ~95% after this
+fix. Documented in `bootstrap.py` with the full why so future readers
+don't accidentally drop the line during refactors.
+
+### 2026-04-23 — v0.2.0 — RequestIdMiddleware rewritten as pure ASGI (was BaseHTTPMiddleware)
+**Context:** While diagnosing the trace_id-NULL bug above, the first
+hypothesis was Starlette's `BaseHTTPMiddleware` running the inner app
+in a separate asyncio task and breaking ContextVar propagation
+(documented OTel + Starlette interaction issue). My
+`RequestIdMiddleware` in all 9 services extended `BaseHTTPMiddleware`.
+The cache fix above turned out to be the actual root cause, but the
+ASGI rewrite landed as defense-in-depth and removes a known fragility.
+**Decision:** Rewrite each service's `RequestIdMiddleware` as pure ASGI
+(callable taking `scope, receive, send`). Same behavior — extract
+context headers, populate auth_context + structlog contextvars,
+inject `x-request-id` on response, catch PolicyViolation /
+ServerError / RatingError into structured 422/500 JSON responses.
+Per-service quirks preserved: rating handles `RatingError` not
+`PolicyViolation`; catalog has no exception handling.
+**Alternatives rejected:** Keep `BaseHTTPMiddleware` and rely on the
+cache fix alone — works in current OTel, but `BaseHTTPMiddleware` is
+documented as fragile around contextvars. Extract a shared
+`RequestIdMiddleware` into `bss-middleware` — the right shape, but
+v0.3 spec already creates `packages/bss-middleware/` for the API
+token middleware; v0.3 will collapse the duplication.
+**Consequences:** Nine `services/*/app/middleware.py` files rewritten,
+~80 lines each. All v0.1 hero scenarios still pass. v0.3 will
+consolidate into a shared package.
+
+### 2026-04-23 — v0.2.0 — /health excluded from FastAPI auto-instrumentation
+**Context:** Docker `HEALTHCHECK --interval=10s` hits each service's
+`/health` six times a minute. Without exclusion, the Jaeger UI's
+"most recent traces" view for any service is 99% healthcheck noise
+and the actual business activity is buried.
+**Decision:** Pass `excluded_urls="/health,/health/.*,/metrics"` to
+both `FastAPIInstrumentor.instrument_app(app)` and the global
+`FastAPIInstrumentor().instrument()` paths. OTel's `parse_excluded_urls`
+splits on comma and `re.search`-matches each pattern against the full
+request URL.
+**Consequences:** Jaeger UI is immediately useful — pick `bss-com` and
+the recent trace is the actual signup, not the last six healthchecks.
+`/metrics` excluded preemptively for a possible Prometheus scrape later.
+
+### 2026-04-23 — v0.2.0 — Step 2 of the spec was a no-op: aio-pika auto-instrumentation handles consume
+**Context:** The v0.2.0 spec called out a Step 2 task to add a consumer
+wrapper in `bss-events` so MQ consumers activated the upstream
+traceparent context for span propagation across the MQ boundary.
+The `bss_telemetry.use_amqp_span` helper was written for this purpose.
+**Discovery:** Reading the OTel `aio-pika` instrumentor source revealed
+that `Queue.consume` is patched at instrument time so the consumer
+callback is wrapped in a `CallbackDecorator` that handles context
+extraction + span creation automatically. No manual wrapping needed.
+**Decision:** Skip the Step 2 wrapping entirely. `use_amqp_span` stays
+in `bss_telemetry.propagation` as a typed escape hatch for any future
+case where auto-instrumentation isn't enough, but isn't called from
+anywhere in v0.2.
+**Verification:** Smoke test confirmed cross-service traces span the
+MQ boundary cleanly: a signup produced one trace covering com → MQ →
+som → MQ → provisioning-sim (×4 parallel) → MQ → som → MQ → com →
+subscription. 125 spans, 8 services, single trace_id throughout.
+**Consequences:** `bss-events` package didn't actually have any
+consumer code (consumer code lives per-service in
+`services/<svc>/app/events/consumer.py`); my spec was wrong about
+where the wrapping would have lived.
+
+### 2026-04-23 — v0.2.0 — Trace tools return summaries, not raw Jaeger payloads
+**Context:** `trace.get` / `trace.for_order` / `trace.for_subscription`
+are in TOOL_REGISTRY (LLM-callable). Jaeger returns the full trace
+JSON which is 8000+ lines for a 125-span signup trace. Putting that
+in the LLM context every call would burn tokens and degrade reasoning.
+**Decision:** Tools return a summary dict — `{traceId, spanCount,
+serviceCount, services, errorSpanCount, totalMs}` plus an aggregate-id
+field on the `for-*` variants. Humans wanting the full swimlane use
+the `bss trace get <id>` CLI command (which fetches the full Jaeger
+payload and renders ASCII via `cli/bss_cli/renderers/trace.py`).
+**Consequences:** LLM's `trace.for_order` response is ~150 bytes
+instead of ~250 KB. Human inspection is one extra command (CLI
+swimlane) but gives the better presentation.

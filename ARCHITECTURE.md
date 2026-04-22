@@ -449,17 +449,22 @@ Cost estimate: **~$4,000-8,000/month**.
 | TLS termination | ➖ | Expected at ALB / ingress layer, not per-service |
 | Auth between services | ❌ | Phase 12. `auth_context.py` seam is already in place. |
 | Rate limiting per principal | ❌ | Phase 12 |
-| Distributed tracing | ❌ | Phase 11 (OpenTelemetry) |
+| Distributed tracing | ✅ | OpenTelemetry to Jaeger (v0.2). W3C traceparent through HTTP / MQ / SQL. `bss trace` renders ASCII swimlanes. |
 | uv workspace builds in CI | ⚠️ | Per-service Dockerfile with `sed` rewrite workaround (Phase 4 expedient). Native workspace-aware build tracked in Phase 11 backlog. See DECISIONS.md. |
 | Schema boundary enforcement | ✅ | Each service only references its own schema; verified by grep. Co-tenant with Campaign OS in dev proves this. |
 
-## Observability (Phase 11+)
+## Observability (v0.2)
 
-- **OpenTelemetry** traces propagated via W3C trace context across all services
-- **Jaeger or Tempo** for trace storage (single container)
-- **`bss trace <id>`** queries OTel backend and renders ASCII swimlanes
-- **structlog** includes `trace_id` in every log line (v0.1 includes this even though OTel isn't wired — forward compatibility)
-- **Metabase** reads from `audit.domain_event` for business dashboards (not OTel)
+- **OpenTelemetry SDK** in every service via `bss-telemetry`. Auto-instrumentors hook FastAPI (server spans), HTTPX (outbound), AsyncPG (SQL via SQLAlchemy), and aio-pika (MQ publish/consume). W3C `traceparent` propagates through HTTP, MQ messages, and SQL spans automatically.
+- **Three manual span sites** add business semantics that auto can't infer: `com.order.complete_to_subscription`, `som.decompose`, `subscription.purchase_vas`. Verified via grep guard.
+- **Jaeger all-in-one** as the trace backend. OTLP/HTTP ingress on `:4318`, UI on `:16686`. Memory storage by default; swap to badger for persistence (see `docs/runbooks/jaeger-byoi.md`). Two deploy paths:
+  - **Bundled:** `docker-compose.infra.yml` includes the `jaeger` service alongside postgres + rabbitmq + metabase.
+  - **BYOI:** install Jaeger once on the same host that already runs Postgres/RabbitMQ (typically tech-vm). Same image, same ports.
+- **`bss trace <id>`** queries Jaeger's HTTP API and renders an ASCII swimlane (services as columns, parent-child indented, manual spans starred). Supplements `for-order` / `for-subscription` / `for-ask` resolvers that join through `audit.domain_event.trace_id`.
+- **`audit.domain_event.trace_id`** populated on every write by the per-service publishers via `bss_telemetry.current_trace_id()`. Enables post-hoc lookups from a business ID to the full distributed trace.
+- **`/health` excluded** from instrumentation (OTel `excluded_urls`). Without this the Jaeger UI is 99% docker-healthcheck noise.
+- **structlog** continues to JSON-log; `trace_id` correlation in log lines is present from v0.1 forward-compat work.
+- **Metabase** reads from `audit.domain_event` for business dashboards (separate from OTel — different consumer of the same audit substrate).
 
 ## What's NOT in the architecture
 
