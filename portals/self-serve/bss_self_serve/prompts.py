@@ -7,12 +7,19 @@ flow — signup. v0.5+ adds more (CSR-triggered plan change, etc.) here.
 
 from __future__ import annotations
 
-# Hardcoded pre-baked Myinfo attestation signature. The CRM's attest_kyc
-# policy accepts any payload with a ``signature`` field in dev mode
-# (see DECISIONS.md 2026-04-23 — v0.4 ships without a dedicated seed
-# file because the existing stub already permits it).
+# Pre-baked Myinfo attestation — simulated "✓ Identity verified" badge.
+# The displayed attestation ID is stable (KYC-PREBAKED-001) so the
+# signup form reads consistently, but the actual signature passed to
+# ``customer.attest_kyc`` is derived per customer because the CRM's
+# ``customer.attest_kyc.document_hash_unique_per_tenant`` policy
+# rejects duplicate documents (one Myinfo identity = one customer).
+# See DECISIONS.md 2026-04-23 for the rationale.
 KYC_PREBAKED_ATTESTATION_ID = "KYC-PREBAKED-001"
-KYC_PREBAKED_SIGNATURE = "myinfo-simulated-prebaked-attestation-v1"
+KYC_PREBAKED_SIGNATURE_TEMPLATE = "myinfo-simulated-prebaked-v1::{email}"
+
+
+def _signature_for(email: str) -> str:
+    return KYC_PREBAKED_SIGNATURE_TEMPLATE.format(email=email)
 
 
 def signup_prompt(
@@ -30,12 +37,13 @@ def signup_prompt(
     chain from this; we do not enumerate tool names (that would be
     back-channel imperative programming in prose).
     """
+    signature = _signature_for(email)
     return (
         f"A new customer just completed the self-serve signup form. "
         f"Please: "
         f"(1) create a customer named '{name}' with email '{email}' and phone '{phone}'; "
         f"(2) attest their KYC using the pre-verified Myinfo attestation "
-        f"with signature '{KYC_PREBAKED_SIGNATURE}' "
+        f"with signature '{signature}' "
         f"and attestation id '{KYC_PREBAKED_ATTESTATION_ID}'; "
         f"(3) add card {card_pan} as their payment method on file; "
         f"(4) place an order for offering '{plan}'; "

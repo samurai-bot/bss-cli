@@ -27,14 +27,23 @@ from time import monotonic
 
 @dataclass
 class SignupSession:
-    """All state for one in-flight signup."""
+    """All state for one in-flight signup.
+
+    ``card_pan`` is held in memory for the short window between form
+    submission and ``payment.add_card`` running through the mock
+    tokenizer. We never persist it to disk — TTL-bounded RAM only —
+    and the redacted ``card_pan_last4`` is what any log line or
+    template ever sees. Production would tokenize at the edge and
+    never hand the raw PAN to the portal process at all.
+    """
 
     session_id: str
     plan: str
     name: str
     email: str
     phone: str
-    card_pan_last4: str  # never store full PAN — tokenized via mock_tokenizer
+    card_pan: str  # in-memory only, cleared once the agent finishes
+    card_pan_last4: str
     created_at: float = field(default_factory=monotonic)
 
     # Populated as the agent streams:
@@ -71,6 +80,7 @@ class SessionStore:
             name=name,
             email=email,
             phone=phone,
+            card_pan=card_pan,
             card_pan_last4=card_pan[-4:],
         )
         async with self._lock:

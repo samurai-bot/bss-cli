@@ -22,7 +22,6 @@ from bss_orchestrator.session import (
 from bss_self_serve import agent_bridge
 from bss_self_serve.prompts import (
     KYC_PREBAKED_ATTESTATION_ID,
-    KYC_PREBAKED_SIGNATURE,
     signup_prompt,
 )
 
@@ -106,5 +105,6 @@ def test_signup_prompt_contains_all_form_fields_and_kyc_attestation() -> None:
     assert "+6590001234" in prompt
     assert "PLAN_M" in prompt
     assert "4242424242424242" in prompt
-    assert KYC_PREBAKED_SIGNATURE in prompt
+    # Per-customer signature — policy requires unique document hashes.
+    assert "myinfo-simulated-prebaked-v1::ada@bss-cli.local" in prompt
     assert KYC_PREBAKED_ATTESTATION_ID in prompt

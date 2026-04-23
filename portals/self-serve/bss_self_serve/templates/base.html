@@ -8,7 +8,12 @@
   <script src="/static/js/htmx.min.js" defer></script>
   <script src="/static/js/htmx-sse.js" defer></script>
 </head>
-<body>
+<body
+  {% if session_id %}
+  hx-ext="sse"
+  sse-connect="/agent/events/{{ session_id }}"
+  {% endif %}
+>
   <header class="portal-header">
     <div class="brand">
       <span class="brand-mark">$</span>
@@ -28,6 +33,21 @@
       {% include "partials/agent_log.html" %}
     </aside>
   </main>
+
+  {% if session_id %}
+  {# Redirect sink: the SSE stream fires a ``redirect`` event whose
+     payload is a single <a href="…"> fragment; the listener navigates
+     the whole page to that href. #}
+  <div id="portal-redirect-sink" sse-swap="redirect" hx-target="this" hx-swap="innerHTML" hidden></div>
+  <script>
+    document.body.addEventListener("htmx:sseMessage", function (e) {
+      if (e.detail.type !== "redirect") return;
+      var frag = new DOMParser().parseFromString(e.detail.data, "text/html");
+      var anchor = frag.querySelector("a[href]");
+      if (anchor) window.location.href = anchor.getAttribute("href");
+    });
+  </script>
+  {% endif %}
 
   <footer class="portal-footer">
     <span>demo only · unauthenticated · writes routed via LLM orchestrator</span>

@@ -21,8 +21,8 @@ async def test_create_returns_session_and_redacts_pan() -> None:
     )
     assert s.session_id and len(s.session_id) == 32
     assert s.plan == "PLAN_S"
+    assert s.card_pan == "4242424242424242"  # in-memory only, TTL-bounded
     assert s.card_pan_last4 == "4242"
-    assert not hasattr(s, "card_pan")
 
 
 @pytest.mark.asyncio

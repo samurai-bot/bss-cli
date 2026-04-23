@@ -1,21 +1,18 @@
-<section
-  class="agent-log"
-  {% if session_id %}
-  hx-ext="sse"
-  sse-connect="/agent/events/{{ session_id }}"
-  sse-swap="message"
-  hx-target="#agent-log-stream"
-  hx-swap="beforeend"
-  {% endif %}
->
+{# Agent log widget. Rendered on every page. The SSE connection
+   itself is declared at <body> in base.html when a session_id is
+   present — this partial only binds the sse-swap attributes that
+   tell HTMX which events fill which targets. #}
+<section class="agent-log">
   <header class="agent-log-header">
     <span class="agent-log-title">Agent Activity</span>
     <span class="agent-log-status"
+      {% if session_id %}sse-swap="status" hx-swap="innerHTML"{% endif %}>
       {% if session_id %}
-      sse-swap="status"
-      hx-swap="innerHTML"
+        <span class="dot live"></span> live
+      {% else %}
+        <span class="dot idle"></span> idle
       {% endif %}
-    >{% if session_id %}<span class="dot live"></span> live{% else %}<span class="dot idle"></span> idle{% endif %}</span>
+    </span>
   </header>
 
   <div class="agent-log-intro">
@@ -24,7 +21,11 @@
     {% if not session_id %}Submit the form to watch it work.{% endif %}
   </div>
 
-  <ol class="agent-log-events" id="agent-log-stream">
+  <ol
+    class="agent-log-events"
+    id="agent-log-stream"
+    {% if session_id %}sse-swap="message" hx-swap="beforeend"{% endif %}
+  >
     {% for event in events or [] %}
       {% include "partials/agent_event.html" %}
     {% endfor %}
