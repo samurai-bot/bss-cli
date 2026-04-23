@@ -401,6 +401,7 @@ source = { editable = "orchestrator" }
 dependencies = [
     { name = "bss-clients" },
     { name = "bss-clock" },
+    { name = "bss-middleware" },
     { name = "bss-telemetry" },
     { name = "httpx" },
     { name = "langchain-core" },
@@ -423,6 +424,7 @@ dev = [
 requires-dist = [
     { name = "bss-clients", editable = "packages/bss-clients" },
     { name = "bss-clock", editable = "packages/bss-clock" },
+    { name = "bss-middleware", editable = "packages/bss-middleware" },
     { name = "bss-telemetry", editable = "packages/bss-telemetry" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "langchain-core", specifier = ">=0.3" },
