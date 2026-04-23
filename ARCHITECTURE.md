@@ -120,6 +120,24 @@ If strict ordering becomes essential for a future use case, the path forward is 
 
 Port 8009 is reserved for the v0.2 billing service — see the "Note on billing in v0.1" subsection below and `DECISIONS.md` 2026-04-13.
 
+## Portals (channel layer, v0.4+)
+
+A portal is a **channel** onto the BSS — a thin HTTP surface that translates a specific audience's actions (self-serve customers, CSRs, retail partners) into tool calls the LLM orchestrator runs against the 9 core services. Portals live under `portals/` in the repo, not under `services/`; each one ships as its own container on the **9xxx port range**. v0.4 ships the first portal; v0.5 adds `portals/csr/` on 9002.
+
+| # | Portal | Port | Audience | Writes go through… |
+|---|---|---|---|---|
+| 1 | self-serve | 9001 | Prospect browsing / signing up | `agent_bridge.drive_signup` → `bss_orchestrator.session.astream_once` |
+| 2 | csr | 9002 | CSR agents (v0.5) | `agent_bridge.*` → orchestrator |
+
+The defining property of a portal is that **every write routes through the LLM orchestrator**. The route handler never imports `CustomerClient.create`, `OrderClient.create`, or any other mutating bss-clients method. It builds a natural-language instruction, passes it to `astream_once`, and streams the resulting events (tool call started, tool call completed, final message) back to the browser via Server-Sent Events.
+
+- **Reads go direct.** Listing offerings on a landing page, fetching a subscription on the confirmation page, polling order state — all direct `bss-clients` calls. LLM-mediating a pass-through read is pointless latency.
+- **`X-BSS-Channel` attribution.** Every outbound call carries `portal-self-serve` so CRM's interaction auto-log attributes the write to the right surface. The hero scenario asserts this.
+- **`BSS_API_TOKEN` on outbound only.** The portal's inbound HTTP surface is public (no `BSSApiTokenMiddleware`); its outbound calls through `TokenAuthProvider` are authenticated like any other v0.3+ caller.
+- **Pure server-rendered HTML + HTMX.** No React/Vue/Svelte, no bundler, no npm. One vendored `htmx.min.js` + `htmx-sse.js`, one CSS file.
+
+The hero artifact on every portal page is the **Agent Activity** log widget — a side panel streaming the LLM's tool-call sequence live. Strip it out and the portal looks like any CRUD frontend; keep it in and the viewer can see the LLM is doing the work, tool by tool. Details in `phases/V0_4_0.md` and `DECISIONS.md` 2026-04-23.
+
 The **Inventory sub-domain** (MSISDN pool + eSIM profile pool) lives inside the CRM service on port 8002, mounted under `/inventory-api/v1/...`. It has its own schema (`inventory`), repositories, policies, and HTTP endpoints — just no separate container. SOM and Subscription call it via `bss-clients` as if it were a distinct service. If it outgrows CRM, extraction to an 11th container is mechanical because the boundary is already enforced.
 
 **Why 9 containers, not 10:** keeping inventory inside CRM for v0.1 reduces one network hop in the critical activation path and saves ~150MB of RAM. Domain boundary is still clean — inventory has its own schema, repositories, policies, and tool surface. See DECISIONS.md "Inventory domain hosted inside CRM service (v0.1)" for the rationale.

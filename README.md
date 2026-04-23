@@ -77,6 +77,19 @@ open http://tech-vm:16686/           # BYOI
 
 For BYOI installs (Jaeger on a separate host like `tech-vm`), see [`docs/runbooks/jaeger-byoi.md`](docs/runbooks/jaeger-byoi.md). Set `BSS_OTEL_EXPORTER_OTLP_ENDPOINT` in `.env` to point services at the right Jaeger.
 
+## Self-serve portal (v0.4)
+
+A small FastAPI + Jinja + HTMX portal that runs alongside the 9 services on port **9001**. It is a channel, not a service — the user browses plans, submits a form, and every *write* flows through the LLM orchestrator via `bss_orchestrator.session.astream_once`, with the resulting tool calls streamed live into an **Agent Activity** side-panel.
+
+```bash
+docker compose up -d portal-self-serve
+open http://localhost:9001/           # pick a plan → signup → eSIM QR
+```
+
+The log widget is the v0.4 demo artifact. Strip it away and the portal looks like any CRUD app. Keep it on and the viewer watches the LLM chain `customer.create → attest_kyc → payment.add_card → order.create → order.wait_until → get_esim_activation` in real time. Portal writes are policy-gated via the same chokepoint as the CLI — there is no parallel write path.
+
+Constraints by design: no auth (public signup surface), desktop-only, pre-baked Myinfo KYC (simulated), mock payment tokenizer (`4242 4242 4242 4242`), one-shot signup with no account management afterward. See `phases/V0_4_0.md` §Security model before exposing port 9001 anywhere beyond localhost / Tailscale.
+
 ## Documentation
 
 - `CLAUDE.md` — Project doctrine (read this first)
@@ -99,14 +112,17 @@ make scenarios                                # every scenario in ./scenarios
 make scenarios-hero                           # just the three ship-gate scenarios
 ```
 
-Scenarios in `scenarios/*.yaml` are the living regression suite. Four
-are tagged `hero`. Three gate v0.1 — two are fully deterministic (signup
-→ exhaustion, fault-injected provisioning with retry), the third hands
+Scenarios in `scenarios/*.yaml` are the living regression suite. Five
+are tagged `hero`. Three gate v0.1 — two deterministic (signup →
+exhaustion, fault-injected provisioning with retry), the third hands
 a blocked subscription to the LLM supervisor in plain English and
 asserts the model diagnoses, tops up, and logs the interaction without
-touching destructive tools. The fourth (`trace_customer_signup_swimlane`)
-gates v0.2 — drives a signup, then asserts the resulting OTel trace
-has the expected span fan-out and zero errors.
+touching destructive tools. `trace_customer_signup_swimlane` gates v0.2
+by asserting the resulting OTel trace has the expected span fan-out.
+`portal_self_serve_signup` gates v0.4 — drives the portal via HTTP
+steps (a new step type in v0.4), including the SSE endpoint that runs
+the agent, then verifies subscription state and `channel=portal-self-serve`
+attribution on the interaction log.
 
 ## License
 
