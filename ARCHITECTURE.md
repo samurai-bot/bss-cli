@@ -2,24 +2,31 @@
 
 ## Topology
 
-Two distinct planes connect the 9 services: **synchronous HTTP (TMF APIs)** for calls that need an immediate answer, and **asynchronous events (RabbitMQ topic exchange)** for reactions. Postgres is accessed directly by each service's own writes — the message broker is not a database pipe.
+Three callers — **CLI** (terminal-native), **self-serve portal** (public signup, port 9001), and **CSR console** (operator workbench, port 9002) — converge on the LangGraph orchestrator's tool registry. Inside, two planes connect the 9 services: **synchronous HTTP (TMF APIs)** for calls that need an immediate answer, and **asynchronous events (RabbitMQ topic exchange)** for reactions. Postgres is accessed directly by each service's own writes — the message broker is not a database pipe.
 
 ```
-                    ┌────────────────────────────────┐
-                    │        bss (CLI + REPL)         │
-                    │   + LangGraph Orchestrator      │
-                    └───────────────┬─────────────────┘
-                                    │ HTTP (TMF APIs)
-        ┌──────┬────────┬───────────┼────────┬────────┐
-        ▼      ▼        ▼           ▼        ▼
-     ┌─────┐┌─────┐ ┌─────┐     ┌─────┐┌─────┐
-     │CRM* ││Pay  │ │Cat  │     │COM  ││Subs │
-     │8002 ││8003 │ │8001 │     │8004 ││8006 │
-     └──┬──┘└──┬──┘ └──┬──┘     └──┬──┘└──┬──┘
-        │      │       │           │      │
+   ┌──────────────────┐  ┌──────────────────┐  ┌─────────────────────────┐
+   │  Self-serve UI   │  │  CSR console UI  │  │  bss (CLI + REPL)        │
+   │  port 9001 (v0.4)│  │  port 9002 (v0.5)│  │  + LangGraph Orchestrator│
+   └────────┬─────────┘  └─────────┬────────┘  └────────────┬────────────┘
+            │                      │                        │
+            │  agent_bridge.*      │  agent_bridge.*        │
+            ▼                      ▼                        ▼
+   ┌──────────────────────────────────────────────────────────────────┐
+   │   bss_orchestrator.session.astream_once(channel, actor=…)        │
+   │   ReAct agent over the tool registry · pin allow_destructive=False│
+   └──────────────────────────────────┬───────────────────────────────┘
+                                      │ HTTP (TMF APIs) + bss-clients
+        ┌──────┬────────┬─────────────┼────────┬────────┐
+        ▼      ▼        ▼             ▼        ▼
+     ┌─────┐┌─────┐ ┌─────┐       ┌─────┐┌─────┐
+     │CRM* ││Pay  │ │Cat  │       │COM  ││Subs │
+     │8002 ││8003 │ │8001 │       │8004 ││8006 │
+     └──┬──┘└──┬──┘ └──┬──┘       └──┬──┘└──┬──┘
+        │      │       │             │      │
         │      └───HTTP (e.g. Pay→CRM "customer exists?")
-        │                          │
-        │      ┌───────────────────┼──────────────────────┐
+        │                            │
+        │      ┌─────────────────────┼──────────────────────┐
         │      │         ┌─────┐┌─────┐ ┌─────┐ ┌─────┐
         │      │         │SOM  ││Med  │ │Rate ││Prov │
         │      │         │8005 ││8007 │ │8008 ││Sim  │
@@ -36,14 +43,15 @@ Two distinct planes connect the 9 services: **synchronous HTTP (TMF APIs)** for 
      Each service writes directly to its own schema in ONE shared
      Postgres instance. audit.domain_event is written in the same
      transaction as the domain write; RabbitMQ publish happens
-     after commit (simplified outbox).
+     after commit (simplified outbox). Every service exports OTel
+     spans to Jaeger (v0.2+).
 
-     ┌──────────────────────────────────────────────────┐
-     │             PostgreSQL 16 (single instance)       │
-     │                                                    │
-     │  crm · catalog · inventory · payment · order_mgmt │
-     │  service_inventory · provisioning · subscription  │
-     │  mediation · billing · audit · (knowledge post-v0.1) │
+     ┌──────────────────────────────────────────────────┐  ┌──────────────┐
+     │             PostgreSQL 16 (single instance)       │  │   Jaeger     │
+     │                                                    │  │  (v0.2+)     │
+     │  crm · catalog · inventory · payment · order_mgmt │  │  OTLP/HTTP   │
+     │  service_inventory · provisioning · subscription  │  │  → traces UI │
+     │  mediation · billing · audit · knowledge          │  └──────────────┘
      └─────────────────────────┬────────────────────────┘
                                │ read-only
                                ▼
@@ -290,16 +298,20 @@ Migration tracked as a Phase 11 backlog item. See DECISIONS.md "Per-service Dock
 
 ### Footprint budget (motto #6)
 
-| Component | RAM |
-|---|---|
-| 10 × BSS service (~150MB each) | ~1.5 GB |
-| Postgres (dev config) | ~400 MB |
-| RabbitMQ | ~350 MB |
-| Metabase | ~600 MB |
-| **Total (all-in-one)** | **~2.85 GB** |
-| **Total (BYOI, services only)** | **~1.5 GB** |
+Re-measured during v0.6 against the post-v0.5 stack (9 services + 2 portals + OTel SDK + middleware). BYOI numbers from `docker stats --no-stream` after 5 minutes idle; bundled numbers added to all-in-one infra (Postgres + RabbitMQ + Metabase + Jaeger). v0.1 numbers retained for reference.
 
-Both modes comfortably under the 4 GB motto limit. BYOI mode fits on a t3.small; all-in-one fits on a t3.medium.
+| Component | v0.1 RAM | v0.6 RAM | Notes |
+|---|---|---|---|
+| 9 × BSS service | ~1.2 GB | ~830 MB | OTel SDK + middleware ~5-10 MB per service |
+| 2 × portal (self-serve + csr) | — | ~270 MB | New v0.4 / v0.5 |
+| Postgres (dev config) | ~400 MB | ~400 MB | Unchanged |
+| RabbitMQ | ~350 MB | ~350 MB | Unchanged |
+| Metabase | ~600 MB | ~600 MB | Unchanged |
+| Jaeger (all-in-one image) | — | ~200 MB | New v0.2 |
+| **Total (BYOI, services + portals only)** | **~1.5 GB** | **~1.1 GB** | Comfortably under 2 GB |
+| **Total (all-in-one, +infra +Jaeger)** | **~2.85 GB** | **~2.65 GB** | Under the 4 GB motto |
+
+BYOI mode fits on a t3.small; all-in-one fits on a t3.medium. The motto-#6 4 GB ceiling holds with headroom.
 
 ## Domain boundaries
 
@@ -464,20 +476,23 @@ Cost estimate: **~$4,000-8,000/month**.
 
 ### Deployability matrix
 
-| Capability | v0.1 ready? | Notes |
+| Capability | v0.6 status | Notes |
 |---|---|---|
 | Docker Compose bring-up | ✅ | BYOI is the default shape; all-in-one compose exists for quickstart |
 | ECS Fargate | ✅ | Each service is a task definition |
-| EKS | ✅ | Same containers, need K8s manifests (not in v0.1) |
+| EKS | ✅ | Same containers, need K8s manifests (not in v0.6) |
 | Horizontal scale stateless services | ✅ | Catalog, rating, provisioning-sim scale trivially |
 | Horizontal scale stateful services | ⚠️ | Requires consistent-hash routing by customer_id (Phase 13) |
 | Multi-AZ database | ✅ | Postgres connection URL is env-driven |
 | Zero-downtime deploys | ⚠️ | Needs graceful SIGTERM handler (wired in Phase 3 reference slice) |
 | TLS termination | ➖ | Expected at ALB / ingress layer, not per-service |
 | Auth between services | ⚠️ | Shared API token (v0.3) via `BSSApiTokenMiddleware` + `TokenAuthProvider`. Per-principal OAuth2 + JWT is Phase 12. `auth_context.py` seam unchanged — Phase 12 fills the principal from JWT claims. |
+| Operator-facing portal | ⚠️ | CSR console (v0.5) on port 9002 ships with stub login (NOT real auth). Real OAuth Phase 12. Trusted-network deploy only. |
+| Customer-facing portal | ⚠️ | Self-serve signup (v0.4) on port 9001 ships with no inbound auth (it's a public signup surface by design). Network exposure control required. |
 | Rate limiting per principal | ❌ | Phase 12 |
 | Distributed tracing | ✅ | OpenTelemetry to Jaeger (v0.2). W3C traceparent through HTTP / MQ / SQL. `bss trace` renders ASCII swimlanes. |
-| uv workspace builds in CI | ⚠️ | Per-service Dockerfile with `sed` rewrite workaround (Phase 4 expedient). Native workspace-aware build tracked in Phase 11 backlog. See DECISIONS.md. |
+| Metrics export | ❌ | Counters/histograms go to structlog only. OTel metrics export decision pending — see ROADMAP.md "Near-term". |
+| uv workspace builds in CI | ⚠️ | Per-service Dockerfile with `sed` rewrite workaround (Phase 4 expedient). v0.6 re-evaluated; outcome documented in DECISIONS.md. |
 | Schema boundary enforcement | ✅ | Each service only references its own schema; verified by grep. Co-tenant with Campaign OS in dev proves this. |
 
 ## Observability (v0.2)

@@ -184,13 +184,16 @@ Two distinct planes:
 - **Reporting:** Metabase
 - **Logging:** structlog (JSON)
 - **Tracing (v0.2):** OpenTelemetry SDK + auto-instrumentors (FastAPI, HTTPX, AsyncPG, AioPika); OTLP/HTTP export to Jaeger
+- **Auth (v0.3):** Shared `BSS_API_TOKEN` middleware (`packages/bss-middleware`) on every BSS service; `TokenAuthProvider` on every outbound client. Per-principal OAuth2 / JWT is Phase 12.
+- **Portals (v0.4-v0.5):** FastAPI + Jinja + HTMX, server-rendered HTML, vendored `htmx.min.js` + `htmx-sse.js`. No React/Vue/Svelte, no bundler, no npm. Shared widgets in `packages/bss-portal-ui`.
+- **Internal packages:** `bss-clients`, `bss-clock`, `bss-events`, `bss-middleware`, `bss-telemetry`, `bss-portal-ui`, `bss-admin`, `bss-models`, `bss-seed` — all under `packages/` as `uv` workspace members.
 - **Testing:** pytest + pytest-asyncio + httpx AsyncClient
 - **Linting:** ruff + black + mypy
 - **Container:** multi-stage Dockerfiles, non-root users, distroless final stage where practical
 
 ## Deployment model
 
-BSS-CLI ships as **9 service containers** plus four optional infrastructure containers (Postgres, RabbitMQ, Metabase, Jaeger). Billing was deferred to v0.2 — port 8009 reserved (`DECISIONS.md` 2026-04-13). Deployers with existing Postgres/RabbitMQ/Jaeger bring their own infra; the all-in-one profile brings up everything for development and demo.
+BSS-CLI ships as **9 service containers + 2 portal containers** plus four optional infrastructure containers (Postgres, RabbitMQ, Metabase, Jaeger). Billing was deferred to v0.2 — port 8009 reserved (`DECISIONS.md` 2026-04-13). Self-serve portal on 9001 (v0.4); CSR console on 9002 (v0.5). Deployers with existing Postgres/RabbitMQ/Jaeger bring their own infra; the all-in-one profile brings up everything for development and demo.
 
 See `ARCHITECTURE.md` for the full container topology, compose profiles, and the AWS deployment path (ECS Fargate → small MVNO production → scaled MVNO).
 
@@ -219,6 +222,10 @@ See `ARCHITECTURE.md` for the full container topology, compose profiles, and the
 - Don't commit mid-phase. Verify first, commit after.
 - Don't let Claude Code modify `CLAUDE.md`, `DATA_MODEL.md`, `ARCHITECTURE.md`, or `TOOL_SURFACE.md` without an explicit Phase 0 amendment.
 - Don't bypass the policy layer. If you need to, the policy is wrong and needs amending.
+- **(v0.4+) Don't write to bss-clients from a portal route handler.** Every portal write goes through the LLM orchestrator via `agent_bridge.*` → `astream_once`. Reads can go direct.
+- **(v0.5+) Don't attribute agent actions to `channel=llm` when the operator is human.** Pass `actor=<operator_id>` to `astream_once` so the interaction log answers "who asked", not "what executed". Forensic per-model attribution lives in `audit.domain_event`.
+- **(v0.4+) Don't reach for React/Vue/Svelte to make a portal page snappier.** HTMX + SSE handles streaming-tool-call-log + auto-refresh patterns with less code, no bundler, no npm.
+- **(v0.5+) Don't call `datetime.now()` / `datetime.utcnow()` in business-logic paths.** Use `bss_clock.now()`. The grep guard (`make doctrine-check`) added in v0.6 enforces it.
 
 ## Project meta
 
