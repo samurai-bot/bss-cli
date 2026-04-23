@@ -24,6 +24,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import Settings
+from .session import SessionStore
 
 log = structlog.get_logger(__name__)
 
@@ -36,6 +37,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # doesn't require the token inbound; outbound calls read it lazily
     # when constructing bss-clients via the orchestrator factory.
     configure_telemetry(service_name="portal-self-serve", app=app)
+    app.state.session_store = SessionStore(
+        ttl_seconds=settings.bss_portal_self_serve_session_ttl,
+    )
     log.info("portal.starting", service=settings.service_name)
     yield
     log.info("portal.stopping", service=settings.service_name)
