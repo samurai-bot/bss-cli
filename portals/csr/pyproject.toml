@@ -1,15 +1,13 @@
 [project]
-name = "portal-self-serve"
+name = "portal-csr"
 version = "0.1.0"
 requires-python = ">=3.12"
-description = "BSS-CLI self-serve customer portal — browse plans, sign up, activate. Every write routes through the LLM orchestrator via agent_bridge."
+description = "BSS-CLI CSR (customer service rep) console — find a customer, open the 360 view, ask the LLM agent. Every write routes through the orchestrator via agent_bridge."
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.34",
     "jinja2>=3.1",
     "python-multipart>=0.0.9",
-    "qrcode>=7.4",
-    "pillow>=10.0",
     "httpx>=0.27",
     "structlog>=24.4",
     "pydantic-settings>=2.0",
@@ -32,10 +30,11 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["bss_self_serve"]
+packages = ["bss_csr"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"bss_self_serve/static" = "bss_self_serve/static"
+"bss_csr/static" = "bss_csr/static"
+"bss_csr/templates" = "bss_csr/templates"
 
 [tool.uv.sources]
 bss-clients = { workspace = true }

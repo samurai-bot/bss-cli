@@ -24,11 +24,14 @@ from bss_orchestrator.session import (
     AgentEventFinalMessage,
     AgentEventToolCallCompleted,
 )
+from bss_portal_ui.agent_log import project, render_html
+from bss_portal_ui.sse import format_frame as _sse_frame
+from bss_portal_ui.sse import status_html as _status_html
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from ..agent_bridge import drive_signup
-from ..agent_render import harvest_ids, project, render_html
+from ..agent_render import harvest_ids
 
 log = structlog.get_logger(__name__)
 router = APIRouter()
@@ -110,21 +113,6 @@ async def agent_events(request: Request, session_id: str) -> StreamingResponse:
 # ─────────────────────────────────────────────────────────────────────────────
 # Frame helpers
 # ─────────────────────────────────────────────────────────────────────────────
-
-
-def _sse_frame(event_name: str, html_line: str) -> bytes:
-    """Encode one SSE frame. HTML must be single-line (agent_render collapses it)."""
-    return f"event: {event_name}\ndata: {html_line}\n\n".encode("utf-8")
-
-
-def _status_html(status: str) -> str:
-    dot_class = {
-        "live": "dot live",
-        "done": "dot done",
-        "error": "dot error",
-        "idle": "dot idle",
-    }.get(status, "dot idle")
-    return f'<span class="{dot_class}"></span> {status}'
 
 
 def _redirect_html(sig) -> str:  # type: ignore[no-untyped-def]

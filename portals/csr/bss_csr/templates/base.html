@@ -2,10 +2,10 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>{% block title %}BSS-CLI Self-Serve{% endblock %}</title>
-  <meta name="viewport" content="width=1200" />
+  <title>{% block title %}BSS-CLI CSR Console{% endblock %}</title>
+  <meta name="viewport" content="width=1280" />
   <link rel="stylesheet" href="/portal-ui/static/css/portal_base.css" />
-  <link rel="stylesheet" href="/static/css/portal.css" />
+  <link rel="stylesheet" href="/static/css/csr.css" />
   <script src="/portal-ui/static/js/htmx.min.js" defer></script>
   <script src="/portal-ui/static/js/htmx-sse.js" defer></script>
 </head>
@@ -19,10 +19,16 @@
     <div class="brand">
       <span class="brand-mark">$</span>
       <span class="brand-name">bss-cli</span>
-      <span class="brand-tag">/ self-serve / v0.4</span>
+      <span class="brand-tag">/ csr console / v0.5</span>
     </div>
     <nav>
-      <a href="/">plans</a>
+      {% if operator %}
+        <a href="/search">search</a>
+        <span class="nav-actor">@{{ operator.operator_id }}</span>
+        <form method="post" action="/logout" style="display:inline">
+          <button type="submit" class="nav-link-btn">logout</button>
+        </form>
+      {% endif %}
     </nav>
   </header>
 
@@ -30,28 +36,26 @@
     <section class="portal-main">
       {% block main %}{% endblock %}
     </section>
+    {% if not hide_aside %}
     <aside class="portal-aside">
       {% include "partials/agent_log.html" %}
     </aside>
+    {% endif %}
   </main>
 
   {% if stream_live and session_id %}
-  {# Redirect sink: the SSE stream fires a ``redirect`` event whose
-     payload is a single <a href="…"> fragment; the listener navigates
-     the whole page to that href. #}
-  <div id="portal-redirect-sink" sse-swap="redirect" hx-target="this" hx-swap="innerHTML" hidden></div>
   <script>
     document.body.addEventListener("htmx:sseMessage", function (e) {
-      if (e.detail.type !== "redirect") return;
-      var frag = new DOMParser().parseFromString(e.detail.data, "text/html");
-      var anchor = frag.querySelector("a[href]");
-      if (anchor) window.location.href = anchor.getAttribute("href");
+      // Auto-refresh: when the agent finishes, server sends a frame
+      // with empty body on the ``agent-complete`` event channel; the
+      // page-side hx-trigger="sse:agent-complete" elements re-fetch
+      // their content. Nothing to do here — HTMX handles the dispatch.
     });
   </script>
   {% endif %}
 
   <footer class="portal-footer">
-    <span>demo only · unauthenticated · writes routed via LLM orchestrator</span>
+    <span>internal demo console · stub auth · writes routed via LLM orchestrator</span>
   </footer>
 </body>
 </html>

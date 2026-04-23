@@ -1,0 +1,87 @@
+/* CSR portal — page-specific styles.
+   Palette + layout + agent log widget come from
+   bss_portal_ui/static/css/portal_base.css (loaded first via base.html). */
+
+/* ─── Login ──────────────────────────────────────────────── */
+
+.login-shell {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  padding: 48px 16px;
+}
+.login-form {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 32px 36px;
+  width: 100%;
+  max-width: 420px;
+  display: flex; flex-direction: column; gap: 18px;
+}
+.login-form h1 { margin: 0; font-size: 22px; }
+.login-note { color: var(--fg-muted); font-size: 13px; margin: 0; }
+.login-form label {
+  display: flex; flex-direction: column; gap: 4px;
+  color: var(--fg-muted); font-size: 13px;
+}
+.login-form input {
+  background: var(--bg-code); border: 1px solid var(--border);
+  color: var(--fg); font-family: var(--mono);
+  padding: 10px 12px; border-radius: 4px; outline: none;
+  font-size: 14px;
+}
+.login-form input:focus { border-color: var(--accent); }
+.login-form button {
+  background: var(--accent); color: var(--bg);
+  border: none; padding: 10px 14px;
+  font-family: var(--mono); font-weight: 600;
+  border-radius: 4px; cursor: pointer; font-size: 14px;
+}
+.login-form button:hover { background: #b5ff80; }
+
+/* Header logout button styled like a nav link */
+.nav-link-btn {
+  background: transparent; border: none;
+  color: var(--fg-muted); font-size: 13px;
+  padding: 4px 8px; cursor: pointer;
+  font-family: var(--mono);
+}
+.nav-link-btn:hover { color: var(--accent-error); }
+
+/* ─── Search ─────────────────────────────────────────────── */
+
+.search-form {
+  display: flex; gap: 12px;
+  margin-bottom: 24px;
+}
+.search-form input {
+  flex: 1;
+  background: var(--bg-code); border: 1px solid var(--border);
+  color: var(--fg); font-family: var(--mono);
+  padding: 10px 14px; border-radius: 4px; outline: none;
+  font-size: 14px;
+}
+.search-form input:focus { border-color: var(--accent); }
+.search-form button {
+  background: var(--accent); color: var(--bg);
+  border: none; padding: 10px 18px;
+  font-family: var(--mono); font-weight: 600;
+  border-radius: 4px; cursor: pointer;
+}
+
+.search-results {
+  width: 100%; border-collapse: collapse;
+  font-size: 14px;
+}
+.search-results th, .search-results td {
+  text-align: left; padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.search-results th {
+  color: var(--fg-muted); font-weight: 500;
+  font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;
+}
+.search-results tr:hover td { background: var(--bg-inset); }
+.search-results a { color: var(--fg); text-decoration: none; }
+.search-results a:hover { color: var(--accent); }

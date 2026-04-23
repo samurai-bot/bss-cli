@@ -4,7 +4,7 @@ RUN pip install --no-cache-dir uv
 
 COPY packages/ packages/
 COPY orchestrator/ orchestrator/
-COPY portals/self-serve/ portals/self-serve/
+COPY portals/csr/ portals/csr/
 
 # Rewrite workspace refs in packages/*/pyproject.toml. Two passes:
 # 1) bss-orchestrator lives at /build/orchestrator, NOT under packages/.
@@ -18,7 +18,7 @@ RUN for p in packages/*/pyproject.toml; do \
 # Orchestrator has workspace deps too — rewrite before portal install.
 RUN sed -i -E 's|(bss-[a-z][a-z-]*) = \{ workspace = true \}|\1 = { path = "../packages/\1" }|g' orchestrator/pyproject.toml
 
-WORKDIR /build/portals/self-serve
+WORKDIR /build/portals/csr
 # Portal references ../../packages/* and ../../orchestrator — rewrite both.
 RUN sed -i -E 's|(bss-[a-z][a-z-]*) = \{ workspace = true \}|\1 = { path = "../../packages/\1" }|g' pyproject.toml \
     && sed -i 's|bss-orchestrator = { path = "../../packages/bss-orchestrator" }|bss-orchestrator = { path = "../../orchestrator" }|' pyproject.toml \
@@ -36,4 +36,4 @@ ENV PATH="/app/.venv/bin:$PATH"
 EXPOSE 8000
 HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
   CMD curl -f http://localhost:8000/health || exit 1
-CMD ["uvicorn", "bss_self_serve.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "bss_csr.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]

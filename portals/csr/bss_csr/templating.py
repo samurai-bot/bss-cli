@@ -1,11 +1,10 @@
-"""Shared Jinja2Templates instance + Response helper.
+"""Shared Jinja2Templates instance for the CSR portal.
 
-Routes import ``templates`` from here rather than constructing their
-own Jinja environments. The loader chain is:
-1. portal's own ``templates/`` (per-page templates, plus any local
-   override of a shared partial)
-2. ``bss_portal_ui``'s ``templates/`` (the agent log widget +
-   ``agent_event.html`` partial — shared with portals/csr)
+Loader chain:
+1. portal's own ``templates/`` (per-page layouts, partials, plus
+   any local override of a shared partial)
+2. ``bss_portal_ui``'s ``templates/`` (agent log widget +
+   ``agent_event.html`` partial — shared with portals/self-serve)
 """
 
 from __future__ import annotations
