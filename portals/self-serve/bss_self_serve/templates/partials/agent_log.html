@@ -1,0 +1,32 @@
+<section
+  class="agent-log"
+  {% if session_id %}
+  hx-ext="sse"
+  sse-connect="/agent/events/{{ session_id }}"
+  sse-swap="message"
+  hx-target="#agent-log-stream"
+  hx-swap="beforeend"
+  {% endif %}
+>
+  <header class="agent-log-header">
+    <span class="agent-log-title">Agent Activity</span>
+    <span class="agent-log-status"
+      {% if session_id %}
+      sse-swap="status"
+      hx-swap="innerHTML"
+      {% endif %}
+    >{% if session_id %}<span class="dot live"></span> live{% else %}<span class="dot idle"></span> idle{% endif %}</span>
+  </header>
+
+  <div class="agent-log-intro">
+    The portal doesn't call the backend directly. It sends natural
+    language to an LLM agent that plans and executes tool calls.
+    {% if not session_id %}Submit the form to watch it work.{% endif %}
+  </div>
+
+  <ol class="agent-log-events" id="agent-log-stream">
+    {% for event in events or [] %}
+      {% include "partials/agent_event.html" %}
+    {% endfor %}
+  </ol>
+</section>

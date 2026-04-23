@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Sign up for {{ plan.id }} · bss-cli self-serve{% endblock %}
+
+{% block main %}
+<h1 class="page-title">Sign up for <span class="accent">{{ plan.id }}</span></h1>
+<p class="page-subtitle">{{ plan.name }} · SGD {{ plan.price }}/mo · {{ plan.data }} data · {{ plan.voice }} voice</p>
+
+<form class="signup-form" method="post" action="/signup">
+  <input type="hidden" name="plan" value="{{ plan.id }}" />
+
+  <fieldset>
+    <legend>About you</legend>
+    <label>Name
+      <input type="text" name="name" required autocomplete="name" placeholder="Ada Lovelace" />
+    </label>
+    <label>Email
+      <input type="email" name="email" required autocomplete="email" placeholder="ada@example.sg" />
+    </label>
+    <label>Phone
+      <input type="tel" name="phone" required autocomplete="tel" placeholder="+65 9000 0000" value="+65" />
+    </label>
+  </fieldset>
+
+  <fieldset>
+    <legend>Identity verification</legend>
+    <div class="kyc-badge">
+      <span class="kyc-badge-check">✓</span>
+      <div class="kyc-badge-body">
+        <div class="kyc-badge-title">Identity verified via Myinfo (simulated)</div>
+        <div class="kyc-badge-meta">
+          Attestation ID: <code>{{ kyc_attestation_id }}</code> · Status: valid · Expires: 2027-04-20
+        </div>
+      </div>
+      <button class="kyc-badge-edit" type="button" disabled>Edit</button>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Payment</legend>
+    <label>Card number
+      <input type="text" name="card_pan" required inputmode="numeric" placeholder="4242 4242 4242 4242" value="4242424242424242" />
+    </label>
+    <p class="form-hint">Mock tokenizer — any Luhn-valid PAN approves. <code>4242 4242 4242 4242</code> is the test card.</p>
+  </fieldset>
+
+  <button class="form-submit" type="submit">Activate {{ plan.id }}</button>
+</form>
+{% endblock %}

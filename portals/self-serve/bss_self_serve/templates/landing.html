@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Pick a plan · bss-cli self-serve{% endblock %}
+
+{% block main %}
+<h1 class="page-title">Pick a plan</h1>
+<p class="page-subtitle">Prepaid bundles. Card on file. Cancel by exhausting.</p>
+
+<div class="plan-grid">
+  {% for plan in plans %}
+    {% include "partials/plan_card.html" %}
+  {% else %}
+    <p class="empty-state">No plans available — check catalog service.</p>
+  {% endfor %}
+</div>
+{% endblock %}

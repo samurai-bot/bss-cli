@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>{% block title %}BSS-CLI Self-Serve{% endblock %}</title>
+  <meta name="viewport" content="width=1200" />
+  <link rel="stylesheet" href="/static/css/portal.css" />
+  <script src="/static/js/htmx.min.js" defer></script>
+  <script src="/static/js/htmx-sse.js" defer></script>
+</head>
+<body>
+  <header class="portal-header">
+    <div class="brand">
+      <span class="brand-mark">$</span>
+      <span class="brand-name">bss-cli</span>
+      <span class="brand-tag">/ self-serve / v0.4</span>
+    </div>
+    <nav>
+      <a href="/">plans</a>
+    </nav>
+  </header>
+
+  <main class="portal-layout">
+    <section class="portal-main">
+      {% block main %}{% endblock %}
+    </section>
+    <aside class="portal-aside">
+      {% include "partials/agent_log.html" %}
+    </aside>
+  </main>
+
+  <footer class="portal-footer">
+    <span>demo only · unauthenticated · writes routed via LLM orchestrator</span>
+  </footer>
+</body>
+</html>
