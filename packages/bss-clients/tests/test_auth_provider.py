@@ -1,10 +1,10 @@
-"""Tests for AuthProvider protocol and NoAuthProvider."""
+"""Tests for AuthProvider protocol, NoAuthProvider, TokenAuthProvider."""
 
 import pytest
 import respx
 from httpx import Response
 
-from bss_clients import AuthProvider, BSSClient, NoAuthProvider
+from bss_clients import AuthProvider, BSSClient, NoAuthProvider, TokenAuthProvider
 
 
 BASE_URL = "http://test-service:8000"
@@ -63,3 +63,45 @@ class TestCustomAuthProvider:
         await client._request("GET", "/thing")
 
         assert call_count == 2
+
+
+class TestTokenAuthProvider:
+    @pytest.mark.asyncio
+    async def test_returns_x_bss_api_token_header(self):
+        provider = TokenAuthProvider("test-token-32-chars-aaaaaaaaaaaaaa")
+        headers = await provider.get_headers()
+        assert headers == {"X-BSS-API-Token": "test-token-32-chars-aaaaaaaaaaaaaa"}
+
+    def test_implements_protocol(self):
+        assert isinstance(
+            TokenAuthProvider("test-token-32-chars-aaaaaaaaaaaaaa"),
+            AuthProvider,
+        )
+
+    def test_empty_token_rejected_at_construction(self):
+        with pytest.raises(ValueError, match="non-empty"):
+            TokenAuthProvider("")
+
+    @pytest.mark.asyncio
+    async def test_returns_a_copy_each_call(self):
+        """Mutation of one returned dict must not poison subsequent calls."""
+        provider = TokenAuthProvider("test-token-32-chars-aaaaaaaaaaaaaa")
+        first = await provider.get_headers()
+        first["X-BSS-API-Token"] = "tampered"
+        second = await provider.get_headers()
+        assert second["X-BSS-API-Token"] == "test-token-32-chars-aaaaaaaaaaaaaa"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_token_injected_on_outgoing_request(self):
+        provider = TokenAuthProvider("test-token-32-chars-aaaaaaaaaaaaaa")
+        client = BSSClient(base_url=BASE_URL, auth_provider=provider)
+        route = respx.get(f"{BASE_URL}/protected").mock(
+            return_value=Response(200, json={"ok": True})
+        )
+
+        await client._request("GET", "/protected")
+
+        assert route.called
+        request = route.calls[0].request
+        assert request.headers["x-bss-api-token"] == "test-token-32-chars-aaaaaaaaaaaaaa"
