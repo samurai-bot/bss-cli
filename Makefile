@@ -34,9 +34,9 @@ build:
 
 test:
 	@failed=0; \
-	for dir in packages/bss-clients packages/bss-admin packages/bss-clock packages/bss-events packages/bss-telemetry packages/bss-middleware services/catalog services/crm services/payment services/subscription services/com services/som services/provisioning-sim services/mediation services/rating orchestrator cli portals/self-serve; do \
+	for dir in packages/bss-clients packages/bss-admin packages/bss-clock packages/bss-events packages/bss-telemetry packages/bss-middleware packages/bss-portal-ui services/catalog services/crm services/payment services/subscription services/com services/som services/provisioning-sim services/mediation services/rating orchestrator cli portals/self-serve portals/csr; do \
 		printf "\n══ $$dir ══\n"; \
-		PYTHONPATH=$$dir:$$PYTHONPATH uv run pytest $$dir/tests/ -v -m "not integration" || failed=1; \
+		PYTHONPATH=$$dir/tests:$$dir:$$PYTHONPATH uv run pytest $$dir/tests/ -v -m "not integration" || failed=1; \
 	done; \
 	if [ $$failed -eq 1 ]; then printf "\n✗ Some suites failed\n"; exit 1; \
 	else printf "\n✓ All suites passed\n"; fi

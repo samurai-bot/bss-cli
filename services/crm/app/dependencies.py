@@ -106,6 +106,7 @@ async def get_customer_service(
         customer_repo=CustomerRepository(session),
         interaction_repo=InteractionRepository(session),
         subscription_client=request.app.state.subscription_client,
+        msisdn_repo=MsisdnRepository(session),
     )
 
 

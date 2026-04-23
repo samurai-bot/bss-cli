@@ -17,6 +17,7 @@ dependencies = [
     "bss-orchestrator",
     "bss-telemetry",
     "bss-middleware",
+    "bss-portal-ui",
 ]
 
 [dependency-groups]
@@ -41,6 +42,7 @@ bss-clients = { workspace = true }
 bss-orchestrator = { workspace = true }
 bss-telemetry = { workspace = true }
 bss-middleware = { workspace = true }
+bss-portal-ui = { workspace = true }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

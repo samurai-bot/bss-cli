@@ -45,6 +45,21 @@ async def list_customers(
     return [to_tmf629_customer(c) for c in custs]
 
 
+@router.get("/customer/by-msisdn/{msisdn}", response_model=Tmf629Customer, response_model_by_alias=True)
+async def find_customer_by_msisdn(
+    msisdn: str,
+    svc: CustomerService = Depends(get_customer_service),
+) -> Tmf629Customer:
+    """Resolve MSISDN → subscription → customer (added v0.5 for CSR portal search)."""
+    cust = await svc.find_by_msisdn(msisdn)
+    if not cust:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No customer owns MSISDN {msisdn}",
+        )
+    return to_tmf629_customer(cust)
+
+
 @router.get("/customer/{customer_id}", response_model=Tmf629Customer, response_model_by_alias=True)
 async def get_customer(
     customer_id: str,

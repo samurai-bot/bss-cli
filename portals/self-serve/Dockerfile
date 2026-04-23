@@ -6,15 +6,21 @@ COPY packages/ packages/
 COPY orchestrator/ orchestrator/
 COPY portals/self-serve/ portals/self-serve/
 
-# Rewrite workspace refs in packages/*/pyproject.toml (intra-package deps)
-RUN for p in packages/*/pyproject.toml; do sed -i -E 's|(bss-[a-z]+) = \{ workspace = true \}|\1 = { path = "../\1" }|g' "$p"; done
+# Rewrite workspace refs in packages/*/pyproject.toml. Two passes:
+# 1) bss-orchestrator lives at /build/orchestrator, NOT under packages/.
+# 2) every other bss-* lives in a sibling dir under packages/.
+# Regex allows hyphenated names (bss-portal-ui).
+RUN for p in packages/*/pyproject.toml; do \
+      sed -i -E 's|bss-orchestrator = \{ workspace = true \}|bss-orchestrator = { path = "../../orchestrator" }|g' "$p"; \
+      sed -i -E 's|(bss-[a-z][a-z-]*) = \{ workspace = true \}|\1 = { path = "../\1" }|g' "$p"; \
+    done
 
 # Orchestrator has workspace deps too — rewrite before portal install.
-RUN sed -i -E 's|(bss-[a-z]+) = \{ workspace = true \}|\1 = { path = "../packages/\1" }|g' orchestrator/pyproject.toml
+RUN sed -i -E 's|(bss-[a-z][a-z-]*) = \{ workspace = true \}|\1 = { path = "../packages/\1" }|g' orchestrator/pyproject.toml
 
 WORKDIR /build/portals/self-serve
 # Portal references ../../packages/* and ../../orchestrator — rewrite both.
-RUN sed -i -E 's|(bss-[a-z]+) = \{ workspace = true \}|\1 = { path = "../../packages/\1" }|g' pyproject.toml \
+RUN sed -i -E 's|(bss-[a-z][a-z-]*) = \{ workspace = true \}|\1 = { path = "../../packages/\1" }|g' pyproject.toml \
     && sed -i 's|bss-orchestrator = { path = "../../packages/bss-orchestrator" }|bss-orchestrator = { path = "../../orchestrator" }|' pyproject.toml \
     && uv venv /app/.venv \
     && uv pip install --python /app/.venv/bin/python .

@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>{% block title %}BSS-CLI CSR Console{% endblock %}</title>
+  <meta name="viewport" content="width=1280" />
+  <link rel="stylesheet" href="/portal-ui/static/css/portal_base.css" />
+  <link rel="stylesheet" href="/static/css/csr.css" />
+  <script src="/portal-ui/static/js/htmx.min.js" defer></script>
+  <script src="/portal-ui/static/js/htmx-sse.js" defer></script>
+</head>
+<body
+  {% if stream_live and session_id %}
+  hx-ext="sse"
+  sse-connect="/agent/events/{{ session_id }}"
+  {% endif %}
+>
+  <header class="portal-header">
+    <div class="brand">
+      <span class="brand-mark">$</span>
+      <span class="brand-name">bss-cli</span>
+      <span class="brand-tag">/ csr console / v0.5</span>
+    </div>
+    <nav>
+      {% if operator %}
+        <a href="/search">search</a>
+        <span class="nav-actor">@{{ operator.operator_id }}</span>
+        <form method="post" action="/logout" style="display:inline">
+          <button type="submit" class="nav-link-btn">logout</button>
+        </form>
+      {% endif %}
+    </nav>
+  </header>
+
+  <main class="portal-layout">
+    <section class="portal-main">
+      {% block main %}{% endblock %}
+    </section>
+    {% if not hide_aside %}
+    <aside class="portal-aside">
+      {% include "partials/agent_log.html" %}
+    </aside>
+    {% endif %}
+  </main>
+
+  {% if stream_live and session_id %}
+  <script>
+    document.body.addEventListener("htmx:sseMessage", function (e) {
+      // Auto-refresh: when the agent finishes, server sends a frame
+      // with empty body on the ``agent-complete`` event channel; the
+      // page-side hx-trigger="sse:agent-complete" elements re-fetch
+      // their content. Nothing to do here — HTMX handles the dispatch.
+    });
+  </script>
+  {% endif %}
+
+  <footer class="portal-footer">
+    <span>internal demo console · stub auth · writes routed via LLM orchestrator</span>
+  </footer>
+</body>
+</html>

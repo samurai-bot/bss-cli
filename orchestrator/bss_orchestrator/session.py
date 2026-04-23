@@ -174,13 +174,21 @@ async def astream_once(
     *,
     allow_destructive: bool = False,
     channel: str = "llm",
+    actor: str | None = None,
 ) -> AsyncIterator[AgentEvent]:
     """Streaming variant of ``ask_once``. Yields ``AgentEvent`` as the graph runs.
 
     The ``channel`` parameter overrides the X-BSS-Channel header on every
     outbound bss-clients call so CRM's interaction log can attribute the
     resulting actions to the right surface (v0.4 portal uses
-    ``channel="portal-self-serve"``).
+    ``channel="portal-self-serve"``; v0.5 CSR uses ``channel="portal-csr"``).
+
+    The ``actor`` parameter (v0.5+) sets X-BSS-Actor on outbound calls.
+    The CSR portal passes the operator's id (``actor=<operator_id>``)
+    so the interaction log attributes actions to the human who asked
+    rather than to ``llm-<model-slug>``. Per-model attribution still
+    lives in ``audit.domain_event.actor``. Defaults to ``settings.llm_actor``
+    when ``channel != "llm"`` and no actor is given (preserves v0.4 behaviour).
 
     Event sequence:
     1. One ``AgentEventPromptReceived`` at the start.
@@ -200,11 +208,13 @@ async def astream_once(
         span.set_attribute(semconv.BSS_CHANNEL, channel)
         span.set_attribute("bss.ask.allow_destructive", allow_destructive)
         span.set_attribute("bss.ask.streaming", True)
+        if actor:
+            span.set_attribute("bss.actor", actor)
 
         if channel == "llm":
             use_llm_context()
         else:
-            use_channel_context(channel=channel)
+            use_channel_context(channel=channel, actor=actor)
 
         yield AgentEventPromptReceived(prompt=prompt)
 

@@ -90,6 +90,20 @@ The log widget is the v0.4 demo artifact. Strip it away and the portal looks lik
 
 Constraints by design: no auth (public signup surface), desktop-only, pre-baked Myinfo KYC (simulated), mock payment tokenizer (`4242 4242 4242 4242`), one-shot signup with no account management afterward. See `phases/V0_4_0.md` §Security model before exposing port 9001 anywhere beyond localhost / Tailscale.
 
+## CSR agent console (v0.5)
+
+A second portal — same stack, different audience — on port **9002**. Operators log in (stub auth, accepts any credentials), find a customer by name fragment or full MSISDN, open a 360 view (subscriptions with balances, cases, payment methods, recent interactions), and **ask the LLM** to investigate or act on the customer's behalf. The agent receives the question + a snapshot of the customer's state, plans a tool chain, executes it, and the 360 sections auto-refresh on completion.
+
+```bash
+docker compose up -d portal-csr
+open http://localhost:9002/login        # any username, any password
+# → search → customer 360 → "Why is their data not working? Fix it."
+```
+
+Same agent log widget as v0.4 (extracted into `packages/bss-portal-ui` so both portals share it). Same write doctrine: **every CSR-initiated change goes through the orchestrator** — route handlers never call mutating bss-clients methods. The interaction log attributes agent-driven actions to the operator (`channel=portal-csr, actor=<operator_id>`), not to the LLM. Per-model attribution still lives in `audit.domain_event`.
+
+Stricter security model than v0.4: the CSR portal can act on *any* customer in the database via the agent. **Do not publish port 9002 on a public IP.** Tailscale / VPN / ops LAN only. Real CSR auth (Keycloak / Cognito) is Phase 12.
+
 ## Documentation
 
 - `CLAUDE.md` — Project doctrine (read this first)
@@ -112,7 +126,7 @@ make scenarios                                # every scenario in ./scenarios
 make scenarios-hero                           # just the three ship-gate scenarios
 ```
 
-Scenarios in `scenarios/*.yaml` are the living regression suite. Five
+Scenarios in `scenarios/*.yaml` are the living regression suite. Six
 are tagged `hero`. Three gate v0.1 — two deterministic (signup →
 exhaustion, fault-injected provisioning with retry), the third hands
 a blocked subscription to the LLM supervisor in plain English and
@@ -122,7 +136,10 @@ by asserting the resulting OTel trace has the expected span fan-out.
 `portal_self_serve_signup` gates v0.4 — drives the portal via HTTP
 steps (a new step type in v0.4), including the SSE endpoint that runs
 the agent, then verifies subscription state and `channel=portal-self-serve`
-attribution on the interaction log.
+attribution. `portal_csr_blocked_diagnosis` gates v0.5 — wraps the v0.1
+hero-3 in the CSR UI: operator logs in, opens the blocked customer's
+360, asks the LLM to fix it, and the assertion verifies subscription
+unblock + `channel=portal-csr, actor=<operator>` on the interaction log.
 
 ## License
 

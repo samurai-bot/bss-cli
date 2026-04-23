@@ -18,6 +18,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import structlog
+from bss_portal_ui import STATIC_DIR as SHARED_STATIC_DIR
 from bss_telemetry import configure_telemetry
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -57,6 +58,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     static_dir = Path(__file__).resolve().parent / "static"
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    # Shared UI assets (vendored HTMX + base CSS) live in bss-portal-ui.
+    app.mount(
+        "/portal-ui/static",
+        StaticFiles(directory=SHARED_STATIC_DIR),
+        name="portal-ui-static",
+    )
 
     @app.get("/health")
     async def health() -> JSONResponse:

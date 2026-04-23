@@ -832,3 +832,105 @@ the public HTTP surface, not bypass it.
 http_step.py (~200 lines). The existing action/assert/ask path is
 untouched. Future portals (v0.5 CSR console) reuse this step type
 without extension.
+
+## 2026-04-23 — v0.5.0 — Extracted `bss-portal-ui` shared package
+**Context:** v0.4 put the agent log widget, SSE plumbing, base CSS,
+and vendored HTMX inside `portals/self-serve/`. v0.5 needs them all
+again for `portals/csr/`. Two paths: (a) copy-paste the templates +
+helpers + assets into the new portal; (b) extract a shared package
+*before* writing the second portal.
+**Decision:** Extract `packages/bss-portal-ui/` as Step 1 of v0.5.
+The package owns `partials/agent_log.html` + `partials/agent_event.html`,
+the `project()` + `render_html()` event projection, the SSE frame
+helpers (`format_frame`, `status_html`), the base CSS (palette,
+layout primitives, agent log styling), and vendored HTMX. Each portal
+loads templates via Jinja `ChoiceLoader` (portal-local first, then
+shared fallback) and mounts the package's static at `/portal-ui/static/`.
+Self-serve was refactored to consume the shared package as part of
+the same v0.5 commit — no transitional state where one portal
+duplicates and the other shares.
+**Alternatives:** Copy-paste — rejected; guaranteed to drift the
+moment one portal needs an agent-log fix the other doesn't get.
+Extract after CSR is built — rejected; twice the work, twice the
+merge conflicts. Keep agent_render in self-serve and have CSR import
+it directly — rejected; couples the two portals at the source level
+and breaks if self-serve is removed.
+**Consequences:** Clean dependency graph (portals → bss-portal-ui →
+bss-orchestrator for AgentEvent types). 51/51 self-serve tests still
+pass after refactor; the v0.4 hero scenario still passes. Adding a
+third portal in v0.6+ is mostly empty-shell scaffolding. Wheel build
+needs a small `force-include` for the templates + static directories
+so they ship inside the installed package.
+
+## 2026-04-23 — v0.5.0 — Agent actions attributed to the operator, not the LLM, in interaction logs
+**Context:** When a CSR types *"top up 5GB to their plan"* and the
+LLM agent calls `subscription.purchase_vas`, what should the
+`channel` and `actor` columns on the resulting `crm.interaction` row
+say? Two natural choices: (a) `channel=llm, actor=llm-<model-slug>`
+(matches the v0.1 pattern for CLI-driven `bss ask` calls); (b)
+`channel=portal-csr, actor=<operator_id>` (matches *who asked*).
+**Decision:** Option (b). The CSR portal sets `actor=<operator_id>`
+on `astream_once(...)` so the orchestrator's `use_channel_context()`
+populates the outbound `X-BSS-Actor` header with the human's id.
+The interaction log answers *"who caused this to happen"*, and the
+human is the cause; the LLM is the execution mechanism. Forensic
+*"which model executed this"* still lives in `audit.domain_event.actor`
+(`llm-<model-slug>`) — that's the right place for it.
+**Alternatives:** `channel=llm` always — rejected; collapses two
+distinct questions ("who asked" vs "what executed") into one column
+and makes the CSR view less useful. A new column for the model —
+rejected; `audit.domain_event` already has it, no need to duplicate.
+**Consequences:** `astream_once` gains an `actor` parameter
+(backwards compatible — defaults to `None`, preserving v0.4
+self-serve behaviour). The v0.5 hero scenario asserts
+`channel=portal-csr` on the interaction list. CSR view filters by
+`actor=<op>` show what each operator did regardless of which model
+ran their requests; LLM-comparison studies join `audit.domain_event`
+on the same correlation id.
+
+## 2026-04-23 — v0.5.0 — Stub login is NOT a security control
+**Context:** The CSR portal needs an operator id on every outbound
+call so the interaction log attributes agent-driven actions to a
+human. Real auth (OAuth via Keycloak / Cognito / Entra) is a Phase 12
+project. v0.5 needs *something* now to populate `X-BSS-Actor`.
+**Decision:** Ship a stub login that accepts any credentials. POST
+/login creates a UUID session token, stores `operator_id=<whatever
+username was typed>` in the in-memory session store, and sets a
+`bss_csr_session` cookie. Every authenticated route resolves the
+cookie via a FastAPI dependency that 303s to /login if missing or
+expired. The login is a **UX mechanism, not a lock** — it exists to
+populate `X-BSS-Actor`, not to gate access.
+**Alternatives:** No login at all — rejected; we need *some*
+operator id. Hardcode `operator_id="csr-default"` — rejected; loses
+multi-operator distinction in audit logs. Build real auth now —
+out of scope for v0.5.
+**Consequences:** Per V0_5_0.md §Security model, the CSR portal must
+NOT be exposed beyond a trusted network (Tailscale / VPN / ops LAN).
+Anyone who can reach port 9002 can act on any customer in the
+database via the agent. The `BSS_API_TOKEN` (v0.3) is irrelevant
+because the agent carries it on the attacker's behalf. Phase 12
+swaps the stub login for OAuth + role-based tool gating; the
+`auth_context` plumbing has been ready for it since v0.1.
+
+## 2026-04-23 — v0.5.0 — CSR prompts inject customer + subscription snapshot
+**Context:** A small model like MiMo v2 Flash given a bare CSR
+question (*"why is their data not working?"*) without context
+typically starts with `customer.list(name_contains="")` and tries
+to rediscover state the operator already has on screen. That wastes
+3-5 tool calls before the model lands on the right tree.
+**Decision:** `agent_bridge.ask_about_customer` pre-fetches the
+customer + subscription snapshots and injects them into the prompt
+ahead of the operator's question. The prompt also includes
+KNOWN_LEADS — three few-shot examples for the most common ask
+patterns (blocked-subscription, top-up, open-ticket) — and a
+constraint footer pinning the agent off destructive tools.
+**Alternatives:** Bare prompt — rejected; small models drift.
+Inject the entire customer 360 (cases, payment methods,
+interactions) — rejected; payload bloat for marginal benefit;
+the agent can call those tools when needed. RAG over a runbook
+corpus — Phase 11 (`knowledge.search`); not v0.5.
+**Consequences:** Agent reliably lands on `subscription.get_balance`
+for data questions, `case.list` for ticket questions, etc.
+The hero scenario passes 3 runs in a row at 12-17s each on MiMo
+v2 Flash. Without the snapshot, the same model wandered for ~30s
+and sometimes hit the timeout.

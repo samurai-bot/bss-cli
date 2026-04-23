@@ -73,6 +73,18 @@ class CRMClient(BSSClient):
         )
         return resp.json()
 
+    async def find_customer_by_msisdn(self, msisdn: str) -> dict[str, Any]:
+        """GET /tmf-api/customerManagement/v4/customer/by-msisdn/{msisdn} (v0.5+).
+
+        Resolves MSISDN → subscription → customer in one hop. 404s when
+        the number is unassigned or the owning customer was deleted.
+        """
+        resp = await self._request(
+            "GET",
+            f"/tmf-api/customerManagement/v4/customer/by-msisdn/{msisdn}",
+        )
+        return resp.json()
+
     async def list_customers(
         self,
         *,

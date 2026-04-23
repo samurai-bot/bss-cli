@@ -13,6 +13,7 @@ members = [
     "bss-middleware",
     "bss-models",
     "bss-orchestrator",
+    "bss-portal-ui",
     "bss-seed",
     "bss-telemetry",
     "catalog",
@@ -20,6 +21,7 @@ members = [
     "crm",
     "mediation",
     "payment",
+    "portal-csr",
     "portal-self-serve",
     "provisioning-sim",
     "rating",
@@ -444,6 +446,33 @@ dev = [
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-asyncio", specifier = ">=0.23" },
     { name = "respx", specifier = ">=0.21" },
+]
+
+[[package]]
+name = "bss-portal-ui"
+version = "0.1.0"
+source = { editable = "packages/bss-portal-ui" }
+dependencies = [
+    { name = "bss-orchestrator" },
+    { name = "jinja2" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "bss-orchestrator", editable = "orchestrator" },
+    { name = "jinja2", specifier = ">=3.1" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=0.23" },
 ]
 
 [[package]]
@@ -1958,6 +1987,55 @@ wheels = [
 ]
 
 [[package]]
+name = "portal-csr"
+version = "0.1.0"
+source = { editable = "portals/csr" }
+dependencies = [
+    { name = "bss-clients" },
+    { name = "bss-middleware" },
+    { name = "bss-orchestrator" },
+    { name = "bss-portal-ui" },
+    { name = "bss-telemetry" },
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "jinja2" },
+    { name = "pydantic-settings" },
+    { name = "python-multipart" },
+    { name = "structlog" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "httpx" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "bss-clients", editable = "packages/bss-clients" },
+    { name = "bss-middleware", editable = "packages/bss-middleware" },
+    { name = "bss-orchestrator", editable = "orchestrator" },
+    { name = "bss-portal-ui", editable = "packages/bss-portal-ui" },
+    { name = "bss-telemetry", editable = "packages/bss-telemetry" },
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "jinja2", specifier = ">=3.1" },
+    { name = "pydantic-settings", specifier = ">=2.0" },
+    { name = "python-multipart", specifier = ">=0.0.9" },
+    { name = "structlog", specifier = ">=24.4" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=0.23" },
+]
+
+[[package]]
 name = "portal-self-serve"
 version = "0.1.0"
 source = { editable = "portals/self-serve" }
@@ -1965,6 +2043,7 @@ dependencies = [
     { name = "bss-clients" },
     { name = "bss-middleware" },
     { name = "bss-orchestrator" },
+    { name = "bss-portal-ui" },
     { name = "bss-telemetry" },
     { name = "fastapi" },
     { name = "httpx" },
@@ -1989,6 +2068,7 @@ requires-dist = [
     { name = "bss-clients", editable = "packages/bss-clients" },
     { name = "bss-middleware", editable = "packages/bss-middleware" },
     { name = "bss-orchestrator", editable = "orchestrator" },
+    { name = "bss-portal-ui", editable = "packages/bss-portal-ui" },
     { name = "bss-telemetry", editable = "packages/bss-telemetry" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },

@@ -1,0 +1,13 @@
+<section class="customer-summary">
+  <div class="customer-summary-row">
+    <h1 class="page-title">{{ customer.name }}</h1>
+    <code class="customer-id">{{ customer.id }}</code>
+  </div>
+  <dl class="customer-summary-meta">
+    <div><dt>Email</dt><dd>{{ customer.email or "—" }}</dd></div>
+    <div><dt>Phone</dt><dd>{{ customer.phone or "—" }}</dd></div>
+    <div><dt>Status</dt><dd class="status-{{ customer.status }}">{{ customer.status }}</dd></div>
+    <div><dt>KYC</dt><dd>{{ customer.kyc_status }}</dd></div>
+    <div><dt>Customer since</dt><dd>{{ customer.customer_since[:10] if customer.customer_since else "—" }}</dd></div>
+  </dl>
+</section>

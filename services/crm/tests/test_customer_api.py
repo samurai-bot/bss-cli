@@ -82,6 +82,80 @@ class TestGetCustomer:
         assert r2.json()["id"] == cust_id
 
 
+class TestFindCustomerByMsisdn:
+    async def test_unassigned_msisdn_returns_404(self, client: AsyncClient):
+        r = await client.get(f"{PREFIX}/customer/by-msisdn/99999999")
+        assert r.status_code == 404
+
+    async def test_resolves_msisdn_via_subscription_to_customer(
+        self, client: AsyncClient, db_session
+    ):
+        from unittest.mock import AsyncMock
+
+        # Create a customer.
+        r = await client.post(
+            f"{PREFIX}/customer",
+            json={
+                "givenName": "Phone",
+                "familyName": "Owner",
+                "contactMedium": [
+                    {"medium_type": "email", "value": "phone.owner@example.com"}
+                ],
+            },
+        )
+        customer_id = r.json()["id"]
+
+        # Seed an MSISDN row pointing to a synthetic subscription id.
+        from bss_models.inventory import MsisdnPool
+        msisdn = "90008888"
+        sub_id = "SUB-MOCK"
+        db_session.add(
+            MsisdnPool(
+                msisdn=msisdn,
+                status="assigned",
+                assigned_to_subscription_id=sub_id,
+                tenant_id="DEFAULT",
+            )
+        )
+        await db_session.flush()
+
+        # Patch the subscription_client this CRM app holds so the lookup
+        # short-circuits to our customer.
+        client._transport.app.state.subscription_client = AsyncMock()
+        client._transport.app.state.subscription_client.get = AsyncMock(
+            return_value={"id": sub_id, "customerId": customer_id}
+        )
+
+        r2 = await client.get(f"{PREFIX}/customer/by-msisdn/{msisdn}")
+        assert r2.status_code == 200, r2.text
+        assert r2.json()["id"] == customer_id
+
+    async def test_subscription_lookup_failure_returns_404(
+        self, client: AsyncClient, db_session
+    ):
+        from unittest.mock import AsyncMock
+
+        from bss_models.inventory import MsisdnPool
+        msisdn = "90007777"
+        db_session.add(
+            MsisdnPool(
+                msisdn=msisdn,
+                status="assigned",
+                assigned_to_subscription_id="SUB-GHOST",
+                tenant_id="DEFAULT",
+            )
+        )
+        await db_session.flush()
+
+        client._transport.app.state.subscription_client = AsyncMock()
+        client._transport.app.state.subscription_client.get = AsyncMock(
+            side_effect=RuntimeError("subscription service unreachable")
+        )
+
+        r = await client.get(f"{PREFIX}/customer/by-msisdn/{msisdn}")
+        assert r.status_code == 404
+
+
 class TestListCustomers:
     async def test_list_returns_populated_individual(self, client: AsyncClient):
         await client.post(

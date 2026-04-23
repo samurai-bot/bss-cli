@@ -4,9 +4,10 @@
   <meta charset="utf-8" />
   <title>{% block title %}BSS-CLI Self-Serve{% endblock %}</title>
   <meta name="viewport" content="width=1200" />
+  <link rel="stylesheet" href="/portal-ui/static/css/portal_base.css" />
   <link rel="stylesheet" href="/static/css/portal.css" />
-  <script src="/static/js/htmx.min.js" defer></script>
-  <script src="/static/js/htmx-sse.js" defer></script>
+  <script src="/portal-ui/static/js/htmx.min.js" defer></script>
+  <script src="/portal-ui/static/js/htmx-sse.js" defer></script>
 </head>
 <body
   {% if stream_live and session_id %}
