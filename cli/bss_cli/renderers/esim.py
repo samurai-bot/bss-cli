@@ -86,10 +86,10 @@ def render_esim_activation(
     (CSR screens, demo screenshots) and the identifiers should not
     leak past last-4 in those contexts.
     """
-    iccid = activation.get("iccid", "—")
-    imsi = activation.get("imsi", "—")
+    iccid = activation.get("iccid") or "—"
+    imsi = activation.get("imsi") or "—"
     msisdn = activation.get("msisdn") or ""
-    code = activation.get("activationCode", "")
+    code = activation.get("activationCode") or ""
     status = activation.get("status") or "prepared"
 
     lpa = code if code.startswith("LPA:") else f"LPA:1${code}" if code else ""

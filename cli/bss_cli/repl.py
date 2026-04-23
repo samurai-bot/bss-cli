@@ -127,6 +127,13 @@ def _render_subscription(payload: dict) -> str:
     return render_subscription(payload)
 
 
+def _render_subscription_list(payload: list) -> str:
+    """Subscription list — stack one card per sub. ``[]`` → empty state."""
+    if not payload:
+        return "(no subscriptions)"
+    return "\n".join(render_subscription(s) for s in payload)
+
+
 def _render_customer(payload: dict) -> str:
     # The 360 renderer accepts subscriptions/cases/interactions but
     # works fine with just the customer dict — empty sections render
@@ -136,8 +143,66 @@ def _render_customer(payload: dict) -> str:
     return render_customer_360(payload)
 
 
+def _render_customer_list(payload: list) -> str:
+    """Compact table for ``customer.list`` results — id / name / email."""
+    if not payload:
+        return "(no customers)"
+    rows: list[str] = ["── Customers " + "─" * 50, ""]
+    rows.append(f"  {'ID':<15}  {'Name':<24}  {'Status':<10}  Email")
+    rows.append(f"  {'─' * 15}  {'─' * 24}  {'─' * 10}  {'─' * 30}")
+    for c in payload[:25]:
+        ind = c.get("individual") or {}
+        name = " ".join(
+            s for s in [ind.get("givenName"), ind.get("familyName")] if s
+        ).strip() or c.get("name", "—")
+        email = ""
+        for cm in c.get("contactMedium") or []:
+            if cm.get("mediumType") == "email":
+                email = cm.get("value", "")
+                break
+        rows.append(
+            f"  {c.get('id', '?'):<15}  {name[:24]:<24}  "
+            f"{c.get('status', '?'):<10}  {email[:30]}"
+        )
+    if len(payload) > 25:
+        rows.append(f"  (+ {len(payload) - 25} more)")
+    return "\n".join(rows)
+
+
 def _render_order(payload: dict) -> str:
     return render_order(payload)
+
+
+def _render_order_list(payload: list) -> str:
+    """Compact table for ``order.list`` — id / state / customer / placed."""
+    if not payload:
+        return "(no orders)"
+    rows: list[str] = ["── Orders " + "─" * 50, ""]
+    rows.append(f"  {'ID':<14}  {'State':<14}  {'Customer':<16}  Placed")
+    rows.append(f"  {'─' * 14}  {'─' * 14}  {'─' * 16}  {'─' * 19}")
+    for o in payload[:25]:
+        rows.append(
+            f"  {o.get('id', '?'):<14}  {o.get('state', '?'):<14}  "
+            f"{o.get('customerId', '—'):<16}  {(o.get('orderDate') or '')[:19]}"
+        )
+    if len(payload) > 25:
+        rows.append(f"  (+ {len(payload) - 25} more)")
+    return "\n".join(rows)
+
+
+def _render_balance(payload: dict) -> str:
+    """``subscription.get_balance`` — compact bundle bars only.
+
+    Wraps the relevant fields in a tiny synthetic subscription dict so
+    the existing renderer's bundle section does the work.
+    """
+    sub_id = payload.get("subscriptionId", "—")
+    fake = {
+        "id": sub_id,
+        "state": payload.get("state", "?"),
+        "balances": payload.get("balances") or [],
+    }
+    return render_subscription(fake)
 
 
 def _render_catalog_list(payload: list) -> str:
@@ -153,14 +218,21 @@ def _render_esim(payload: dict) -> str:
 
 
 _RENDERER_DISPATCH: dict[str, Callable[[Any], str]] = {
+    # Single-entity get
     "subscription.get": _render_subscription,
     "customer.get": _render_customer,
     "customer.find_by_msisdn": _render_customer,
     "order.get": _render_order,
-    "catalog.list_offerings": _render_catalog_list,
     "catalog.get_offering": _render_catalog_show,
     "inventory.esim.get_activation": _render_esim,
     "subscription.get_esim_activation": _render_esim,
+    # Lists / queries
+    "subscription.list_for_customer": _render_subscription_list,
+    "customer.list": _render_customer_list,
+    "order.list": _render_order_list,
+    "catalog.list_offerings": _render_catalog_list,
+    # Balance — fold into the subscription card shape
+    "subscription.get_balance": _render_balance,
 }
 
 

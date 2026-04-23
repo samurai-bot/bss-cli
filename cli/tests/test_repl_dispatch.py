@@ -13,22 +13,119 @@ import json
 from bss_cli.repl import _RENDERER_DISPATCH, _maybe_render_tool_result
 
 
-def test_dispatch_covers_all_show_shaped_tools() -> None:
+def test_dispatch_covers_show_shaped_and_list_shaped_tools() -> None:
     expected = {
+        # Single-entity get
         "subscription.get",
         "customer.get",
         "customer.find_by_msisdn",
         "order.get",
-        "catalog.list_offerings",
         "catalog.get_offering",
         "inventory.esim.get_activation",
         "subscription.get_esim_activation",
+        # Lists
+        "subscription.list_for_customer",
+        "customer.list",
+        "order.list",
+        "catalog.list_offerings",
+        # Balance
+        "subscription.get_balance",
     }
     assert set(_RENDERER_DISPATCH.keys()) == expected
 
 
 def test_unknown_tool_returns_none() -> None:
     assert _maybe_render_tool_result("payment.add_card", '{"id": "PM-1"}') is None
+
+
+def test_subscription_list_for_customer_renders_one_card_per_sub() -> None:
+    payload = [
+        {
+            "id": "SUB-100",
+            "customerId": "CUST-1",
+            "msisdn": "90000001",
+            "offeringId": "PLAN_M",
+            "state": "active",
+            "balances": [{"allowanceType": "data", "total": 30720, "remaining": 30000, "unit": "mb"}],
+        },
+        {
+            "id": "SUB-101",
+            "customerId": "CUST-1",
+            "msisdn": "90000002",
+            "offeringId": "PLAN_S",
+            "state": "blocked",
+            "balances": [{"allowanceType": "data", "total": 5120, "remaining": 0, "unit": "mb"}],
+        },
+    ]
+    import json
+    out = _maybe_render_tool_result("subscription.list_for_customer", json.dumps(payload))
+    assert out is not None
+    assert "SUB-100" in out and "SUB-101" in out
+    # Blocked sub gets the double-rule frame.
+    assert "╔" in out
+
+
+def test_customer_list_renders_compact_table() -> None:
+    import json
+    payload = [
+        {
+            "id": "CUST-001",
+            "individual": {"givenName": "Ada", "familyName": "Lovelace"},
+            "status": "active",
+            "contactMedium": [{"mediumType": "email", "value": "ada@example.com"}],
+        }
+    ]
+    out = _maybe_render_tool_result("customer.list", json.dumps(payload))
+    assert out is not None
+    assert "Customers" in out
+    assert "CUST-001" in out
+    assert "Ada Lovelace" in out
+    assert "ada@example.com" in out
+
+
+def test_order_list_renders_compact_table() -> None:
+    import json
+    payload = [
+        {"id": "ORD-001", "state": "completed", "customerId": "CUST-1", "orderDate": "2026-04-23T09:00:00Z"},
+        {"id": "ORD-002", "state": "in_progress", "customerId": "CUST-2", "orderDate": "2026-04-23T10:00:00Z"},
+    ]
+    out = _maybe_render_tool_result("order.list", json.dumps(payload))
+    assert out is not None
+    assert "Orders" in out
+    assert "ORD-001" in out and "ORD-002" in out
+    assert "completed" in out and "in_progress" in out
+
+
+def test_balance_renders_via_subscription_card() -> None:
+    import json
+    payload = {
+        "subscriptionId": "SUB-007",
+        "state": "active",
+        "balances": [
+            {"allowanceType": "data", "total": 5120, "remaining": 1024, "unit": "mb"},
+        ],
+    }
+    out = _maybe_render_tool_result("subscription.get_balance", json.dumps(payload))
+    assert out is not None
+    assert "SUB-007" in out
+    assert "Bundle" in out
+    assert "Data" in out
+
+
+def test_esim_with_null_fields_does_not_crash() -> None:
+    """Reproduces the bug where activationCode=null + imsi=null raised
+    AttributeError inside the renderer (silently swallowed → no card)."""
+    import json
+    payload = {
+        "iccid": "8910101000000000000",
+        "imsi": None,
+        "msisdn": "90000000",
+        "activationCode": None,
+    }
+    out = _maybe_render_tool_result("subscription.get_esim_activation", json.dumps(payload))
+    assert out is not None
+    assert "ICCID" in out
+    # Card renders even with no activation code (uses placeholder LPA).
 
 
 def test_invalid_json_returns_none() -> None:
