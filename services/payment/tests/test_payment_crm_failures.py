@@ -7,6 +7,7 @@ Also tests actor chain propagation across service boundaries.
 import pytest
 import pytest_asyncio
 import respx
+from bss_middleware import TEST_TOKEN
 from httpx import ASGITransport, AsyncClient, Response
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
@@ -62,7 +63,11 @@ async def respx_client():
     app.state.session_factory = _FakeSessionFactory()
 
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as c:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"X-BSS-API-Token": TEST_TOKEN},
+    ) as c:
         yield c
 
     await txn.rollback()

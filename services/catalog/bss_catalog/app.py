@@ -4,6 +4,7 @@ from bss_catalog.config import Settings
 from bss_catalog.deps import lifespan
 from bss_catalog.logging import configure_logging
 from bss_catalog.middleware import RequestIdMiddleware
+from bss_middleware import BSSApiTokenMiddleware
 from bss_catalog.routes import health, product_offering, product_specification, vas
 
 
@@ -19,6 +20,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
 
     app.add_middleware(RequestIdMiddleware)
+    app.add_middleware(BSSApiTokenMiddleware)  # last added = outermost; auth runs first
 
     app.include_router(health.router)
     app.include_router(

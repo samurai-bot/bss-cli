@@ -11,7 +11,9 @@ from bss_clients import (
     PaymentClient,
     SOMClient,
     SubscriptionClient,
+    TokenAuthProvider,
 )
+from bss_middleware import api_token, validate_api_token_present
 from bss_telemetry import configure_telemetry
 from fastapi import Depends, FastAPI, Request
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -25,6 +27,7 @@ log = structlog.get_logger()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    validate_api_token_present()  # fail-fast on misconfig
     settings = app.state.settings
     configure_telemetry(service_name="com", app=app)
     engine = create_async_engine(settings.db_url, pool_size=5, max_overflow=5)
@@ -36,23 +39,23 @@ async def lifespan(app: FastAPI):
     # Service-to-service clients
     crm_client = CRMClient(
         base_url=settings.crm_url,
-        auth_provider=NoAuthProvider(),
+        auth_provider=TokenAuthProvider(api_token()),
     )
     catalog_client = CatalogClient(
         base_url=settings.catalog_url,
-        auth_provider=NoAuthProvider(),
+        auth_provider=TokenAuthProvider(api_token()),
     )
     payment_client = PaymentClient(
         base_url=settings.payment_url,
-        auth_provider=NoAuthProvider(),
+        auth_provider=TokenAuthProvider(api_token()),
     )
     som_client = SOMClient(
         base_url=settings.som_url,
-        auth_provider=NoAuthProvider(),
+        auth_provider=TokenAuthProvider(api_token()),
     )
     subscription_client = SubscriptionClient(
         base_url=settings.subscription_url,
-        auth_provider=NoAuthProvider(),
+        auth_provider=TokenAuthProvider(api_token()),
     )
 
     app.state.crm_client = crm_client

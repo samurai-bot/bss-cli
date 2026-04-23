@@ -10,6 +10,7 @@ post-Phase-12 work). They live in this package so consumers
 ``from bss_middleware import X`` works uniformly.
 """
 
+from .config import Settings
 from .startup import validate_api_token_present
 from .token_auth import (
     AUTH_MISSING_TOKEN,
@@ -17,6 +18,22 @@ from .token_auth import (
     BSSApiTokenMiddleware,
     EXEMPT_PATHS,
 )
+
+
+def api_token() -> str:
+    """Return the configured BSS_API_TOKEN. Raises if unset.
+
+    Single source of truth for "where does the token come from"
+    so services and bss-clients caller construction don't drift.
+    Reads via the same pydantic-settings path as the middleware.
+    """
+    token = Settings().BSS_API_TOKEN
+    if not token:
+        raise RuntimeError(
+            "BSS_API_TOKEN not configured — call validate_api_token_present() "
+            "in lifespan startup to fail fast on misconfig."
+        )
+    return token
 
 # 64-char hex test token. Per-service conftest.py sets BSS_API_TOKEN
 # to this value via monkeypatch and adds the header to its
@@ -30,5 +47,6 @@ __all__ = [
     "BSSApiTokenMiddleware",
     "EXEMPT_PATHS",
     "TEST_TOKEN",
+    "api_token",
     "validate_api_token_present",
 ]

@@ -10,6 +10,7 @@ from app.config import Settings
 from app.dependencies import lifespan
 from app.logging import configure_logging
 from app.middleware import RequestIdMiddleware
+from bss_middleware import BSSApiTokenMiddleware
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -24,6 +25,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
 
     app.add_middleware(RequestIdMiddleware)
+    app.add_middleware(BSSApiTokenMiddleware)  # last added = outermost; auth runs first
 
     # Health
     app.include_router(health.router)

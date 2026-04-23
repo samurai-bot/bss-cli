@@ -11,6 +11,7 @@ import uuid
 
 import pytest
 import pytest_asyncio
+from bss_middleware import TEST_TOKEN
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
@@ -83,7 +84,11 @@ async def integration_client():
     app.state.crm_client = crm_client
 
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as c:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"X-BSS-API-Token": TEST_TOKEN},
+    ) as c:
         yield c
 
     await txn.rollback()

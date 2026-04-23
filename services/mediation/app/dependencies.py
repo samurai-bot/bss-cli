@@ -5,7 +5,8 @@ from contextlib import asynccontextmanager
 
 import aio_pika
 import structlog
-from bss_clients import NoAuthProvider, SubscriptionClient
+from bss_clients import NoAuthProvider, SubscriptionClient, TokenAuthProvider
+from bss_middleware import api_token, validate_api_token_present
 from bss_telemetry import configure_telemetry
 from fastapi import Depends, FastAPI, Request
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -18,6 +19,7 @@ log = structlog.get_logger()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    validate_api_token_present()  # fail-fast on misconfig
     settings = app.state.settings
     configure_telemetry(service_name="mediation", app=app)
     engine = create_async_engine(settings.db_url, pool_size=5, max_overflow=5)
@@ -28,7 +30,7 @@ async def lifespan(app: FastAPI):
 
     app.state.subscription_client = SubscriptionClient(
         base_url=settings.subscription_url,
-        auth_provider=NoAuthProvider(),
+        auth_provider=TokenAuthProvider(api_token()),
     )
 
     # MQ — best-effort: mediation publishes usage.recorded / usage.rejected.

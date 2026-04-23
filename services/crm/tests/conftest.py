@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
+from bss_middleware import TEST_TOKEN
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -20,8 +21,25 @@ from app.logging import configure_logging
 from app.main import create_app
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _bss_api_token_env():
+    """v0.3 — BSSApiTokenMiddleware reads BSS_API_TOKEN at construction.
+
+    Set the env BEFORE create_app() runs so the middleware picks up the
+    test value. Done at session scope so monkeypatch is one-shot.
+    """
+    import os
+    prev = os.environ.get("BSS_API_TOKEN")
+    os.environ["BSS_API_TOKEN"] = TEST_TOKEN
+    yield
+    if prev is None:
+        os.environ.pop("BSS_API_TOKEN", None)
+    else:
+        os.environ["BSS_API_TOKEN"] = prev
+
+
 @pytest.fixture(scope="session")
-def settings() -> Settings:
+def settings(_bss_api_token_env) -> Settings:
     s = Settings()
     if not s.db_url:
         pytest.fail("BSS_DB_URL is not set. Export it or add to .env.")
@@ -96,5 +114,11 @@ async def client(settings: Settings, db_engine, db_session: AsyncSession):
     app.state.subscription_client = mock_sub_client
 
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as c:
+    # v0.3 — every request needs the API token; default header here so
+    # existing test bodies stay unchanged.
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"X-BSS-API-Token": TEST_TOKEN},
+    ) as c:
         yield c
