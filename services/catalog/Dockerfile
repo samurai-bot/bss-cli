@@ -2,24 +2,23 @@ FROM python:3.12-slim AS builder
 WORKDIR /build
 RUN pip install --no-cache-dir uv
 
+# v0.6: workspace-aware build using uv 0.11+ via UV_PROJECT_ENVIRONMENT.
+# Replaces the v0.1 sed workaround documented in DECISIONS.md
+# 2026-04-11; superseded by 2026-04-23 v0.6.0 entry.
+COPY pyproject.toml uv.lock ./
 COPY packages/ packages/
 COPY services/catalog/ services/catalog/
 
-# Rewrite workspace refs in packages/*/pyproject.toml (intra-package deps)
-RUN for p in packages/*/pyproject.toml; do sed -i -E 's|(bss-[a-z]+) = \{ workspace = true \}|\1 = { path = "../\1" }|g' "$p"; done
-
-WORKDIR /build/services/catalog
-# In Docker there is no workspace root — switch source from workspace to path
-RUN sed -i -E 's|(bss-[a-z]+) = \{ workspace = true \}|\1 = { path = "../../packages/\1" }|g' pyproject.toml \
-    && uv venv /app/.venv \
-    && uv pip install --python /app/.venv/bin/python .
+ENV UV_PROJECT_ENVIRONMENT=/app/.venv
+RUN uv sync --package catalog --frozen --no-dev
 
 FROM python:3.12-slim AS runtime
 RUN useradd -m -u 1000 bss && \
     apt-get update && apt-get install -y --no-install-recommends curl && \
     rm -rf /var/lib/apt/lists/*
 COPY --from=builder --chown=bss:bss /app/.venv /app/.venv
-WORKDIR /app
+COPY --from=builder --chown=bss:bss /build /build
+WORKDIR /build
 USER bss
 ENV PATH="/app/.venv/bin:$PATH"
 EXPOSE 8000

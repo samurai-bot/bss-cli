@@ -188,6 +188,7 @@ version = "0.1.0"
 source = { editable = "cli" }
 dependencies = [
     { name = "bss-clients" },
+    { name = "bss-clock" },
     { name = "bss-middleware" },
     { name = "bss-orchestrator" },
     { name = "bss-telemetry" },
@@ -213,6 +214,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "bss-clients", editable = "packages/bss-clients" },
+    { name = "bss-clock", editable = "packages/bss-clock" },
     { name = "bss-middleware", editable = "packages/bss-middleware" },
     { name = "bss-orchestrator", editable = "orchestrator" },
     { name = "bss-telemetry", editable = "packages/bss-telemetry" },

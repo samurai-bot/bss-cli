@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
 from typing import Annotated
 
 import typer
 from bss_clients import PolicyViolationFromServer
+from bss_clock import now as clock_now
 from bss_orchestrator.clients import get_clients
 from rich import print as rprint
 
@@ -52,7 +52,7 @@ def simulate(
     async def _do() -> None:
         c = get_clients()
         qty, unit = _parse_quantity(quantity, type_)
-        now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        now = clock_now().replace(microsecond=0).isoformat()
         out = await c.mediation.submit_usage(
             msisdn=msisdn,
             event_type=type_,
