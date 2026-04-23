@@ -146,6 +146,7 @@ class HTTPStep(_StepBase):
     http: str
     base_url: str = "http://portal-self-serve:8000"
     headers: dict[str, str] = Field(default_factory=dict)
+    cookies: dict[str, str] = Field(default_factory=dict)
     form: dict[str, Any] = Field(default_factory=dict)
     json_body: dict[str, Any] | None = Field(default=None, alias="json")
     expect: HTTPExpect = Field(default_factory=HTTPExpect)

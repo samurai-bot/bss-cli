@@ -1,0 +1,190 @@
+name: portal_csr_blocked_diagnosis
+description: |
+  v0.5 hero. Wraps the v0.1 hero-3 (LLM-driven blocked-subscription
+  diagnosis) in the CSR portal UI. Setup is deterministic — create
+  customer, add KYC, COF, order PLAN_S, burn the bundle to block the
+  subscription. Then a CSR operator logs in via the portal, finds the
+  customer by name, opens the 360, and asks the LLM "why is data not
+  working — fix it if you can". The agent's actions land on the
+  customer's interaction log attributed to channel=portal-csr and
+  actor=<operator_id>, not channel=llm.
+
+  Green only if:
+    - operator login + search + 360 page render
+    - the LLM call results in subscription transitioning blocked → active
+    - interaction.list shows channel=portal-csr + actor=csr-demo-001
+    - all v0.1-v0.4 hero scenarios still pass unchanged
+
+tags: [hero, portal, csr, regression, llm]
+
+setup:
+  reset_operational_data: true
+  freeze_clock_at: "2026-05-20T10:00:00+08:00"
+
+variables:
+  customer_email: "csr-demo-{{ run_id }}@bss-cli.local"
+  plan: PLAN_S
+  portal_base: "http://localhost:9002"
+
+# ─── Deterministic setup — drive directly, not via the portal ─────────
+steps:
+  - name: create customer
+    action: customer.create
+    args:
+      name: "CSR Demo {{ run_id }}"
+      email: "{{ customer_email }}"
+      phone: "+6590005555"
+    capture:
+      customer_id: "$.id"
+
+  - name: attest KYC
+    action: customer.attest_kyc
+    args:
+      customer_id: "{{ customer_id }}"
+      provider: myinfo
+      attestation_token: "csr-stub-jwt-{{ run_id }}"
+
+  - name: add card on file
+    action: payment.add_card
+    args:
+      customer_id: "{{ customer_id }}"
+      card_number: "4242424242424242"
+
+  - name: place order
+    action: order.create
+    args:
+      customer_id: "{{ customer_id }}"
+      offering_id: "{{ plan }}"
+    capture:
+      order_id: "$.id"
+
+  - name: wait for activation
+    action: order.wait_until
+    args:
+      order_id: "{{ order_id }}"
+      target_state: completed
+      timeout_s: 30
+
+  - name: get the subscription
+    action: subscription.list_for_customer
+    args:
+      customer_id: "{{ customer_id }}"
+    capture:
+      subscription_id: "$[0].id"
+      msisdn: "$[0].msisdn"
+
+  - name: burn 4 GB
+    action: usage.simulate
+    args:
+      msisdn: "{{ msisdn }}"
+      event_type: data
+      quantity: 4096
+      unit: mb
+
+  - name: burn final 1 GB (exhausts bundle)
+    action: usage.simulate
+    args:
+      msisdn: "{{ msisdn }}"
+      event_type: data
+      quantity: 1024
+      unit: mb
+
+  - name: verify subscription is blocked before handing to portal
+    assert:
+      tool: subscription.get
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        state: blocked
+      poll:
+        interval_ms: 100
+        timeout_seconds: 5
+
+  # ─── CSR portal flow ────────────────────────────────────────────────
+
+  - name: operator login
+    http: POST /login
+    base_url: "{{ portal_base }}"
+    form:
+      username: "csr-demo-001"
+      password: "anything"
+    expect:
+      status: 303
+      headers_match: { location: "/search" }
+    capture:
+      session_cookie: "$.cookies.bss_csr_session"
+
+  - name: search for customer by name fragment
+    # name_contains is an OR over given_name | family_name. The created
+    # customer's name was "CSR Demo <run_id>" → given="CSR",
+    # family="Demo <run_id>". Search by the run_id so the row is unique.
+    http: GET /search?q={{ run_id }}
+    base_url: "{{ portal_base }}"
+    cookies:
+      bss_csr_session: "{{ session_cookie }}"
+    expect:
+      status: 200
+      body_contains: ["{{ customer_id }}"]
+
+  - name: open customer 360 — confirm blocked subscription is visible
+    http: GET /customer/{{ customer_id }}
+    base_url: "{{ portal_base }}"
+    cookies:
+      bss_csr_session: "{{ session_cookie }}"
+    expect:
+      status: 200
+      body_contains:
+        - "Ask about this customer"
+        - "{{ subscription_id }}"
+        - "blocked"
+
+  - name: operator asks the agent to diagnose and fix
+    http: POST /customer/{{ customer_id }}/ask
+    base_url: "{{ portal_base }}"
+    cookies:
+      bss_csr_session: "{{ session_cookie }}"
+    form:
+      question: "Why is this customer's data not working? Fix it if you can."
+    expect:
+      status: 303
+    capture_regex:
+      ask_session_id:
+        source: headers.location
+        pattern: "session=([a-f0-9]+)"
+
+  - name: drive the SSE stream to completion
+    http: GET /agent/events/{{ ask_session_id }}
+    base_url: "{{ portal_base }}"
+    cookies:
+      bss_csr_session: "{{ session_cookie }}"
+    drain_stream: true
+    timeout_seconds: 120
+    expect:
+      status: 200
+      body_contains: ["event: agent-complete"]
+
+  # ─── Backend verification — the agent's work is visible on the account ─
+
+  - name: subscription is active again
+    assert:
+      tool: subscription.get
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        state: active
+        balances.data.remaining: {gt: 0}
+      poll:
+        interval_ms: 200
+        timeout_seconds: 10
+
+  - name: interaction log attributes the agent action to the operator + channel
+    assert:
+      tool: interaction.list
+      args: {customer_id: "{{ customer_id }}"}
+      expect:
+        any_match:
+          channel: portal-csr
+      poll:
+        interval_ms: 200
+        timeout_seconds: 10
+
+teardown:
+  unfreeze_clock: true

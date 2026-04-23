@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}{{ case.id }} · {{ case.subject or "case" }} · bss-cli csr{% endblock %}
+
+{% block main %}
+<a class="back-link" href="/customer/{{ case.customer_id }}">← back to customer</a>
+
+<header class="case-header">
+  <div class="case-header-row">
+    <h1 class="page-title">{{ case.subject or "(no subject)" }}</h1>
+    <code class="customer-id">{{ case.id }}</code>
+  </div>
+  <dl class="customer-summary-meta">
+    <div><dt>State</dt><dd class="case-state">{{ case.state }}</dd></div>
+    {% if case.priority %}<div><dt>Priority</dt><dd>{{ case.priority }}</dd></div>{% endif %}
+    {% if case.category %}<div><dt>Category</dt><dd>{{ case.category }}</dd></div>{% endif %}
+    {% if case.agent_id %}<div><dt>Assigned</dt><dd>{{ case.agent_id }}</dd></div>{% endif %}
+    {% if case.customer_id %}<div><dt>Customer</dt><dd><a href="/customer/{{ case.customer_id }}">{{ case.customer_id }}</a></dd></div>{% endif %}
+    {% if case.created_at %}<div><dt>Created</dt><dd><code>{{ case.created_at[:19] | replace('T', ' ') }}</code></dd></div>{% endif %}
+  </dl>
+</header>
+
+<section class="three-sixty-section">
+  <h2>Tickets</h2>
+  {% if tickets %}
+  <table class="tickets-table">
+    <thead><tr><th>ID</th><th>Type</th><th>Subject</th><th>State</th><th>Agent</th></tr></thead>
+    <tbody>
+      {% for t in tickets %}
+      <tr>
+        <td><code>{{ t.id }}</code></td>
+        <td>{{ t.type }}</td>
+        <td>{{ t.subject or "(no subject)" }}</td>
+        <td><span class="case-state">{{ t.state }}</span></td>
+        <td>{{ t.agent_id or "—" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty-state">No child tickets.</p>
+  {% endif %}
+</section>
+
+<section class="three-sixty-section">
+  <h2>Notes</h2>
+  {% if notes %}
+  <ul class="notes-thread">
+    {% for n in notes %}
+    <li>
+      <header>
+        <span class="note-author">{{ n.author }}</span>
+        {% if n.at %}<span class="note-at"><code>{{ n.at[:19] | replace('T', ' ') }}</code></span>{% endif %}
+      </header>
+      <p class="note-body">{{ n.body }}</p>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="empty-state">No notes yet. The operator can add one by asking the agent on the customer's 360 view.</p>
+  {% endif %}
+</section>
+{% endblock %}

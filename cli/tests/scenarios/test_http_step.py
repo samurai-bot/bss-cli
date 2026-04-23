@@ -173,6 +173,58 @@ async def test_http_step_fails_on_status_mismatch() -> None:
 
 
 @pytest.mark.asyncio
+async def test_http_step_sends_cookies_and_captures_set_cookie() -> None:
+    ctx = ScenarioContext.new()
+    ctx.variables["session_token"] = "abc-123"
+
+    step_send = HTTPStep(
+        name="send cookie",
+        http="GET /protected",
+        base_url="http://portal-csr:8000",
+        cookies={"bss_csr_session": "{{ session_token }}"},
+        expect={"status": 200},
+    )
+
+    received: dict = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        received["cookie"] = request.headers.get("cookie", "")
+        return httpx.Response(200, text="ok")
+
+    with respx.mock() as mock:
+        mock.get("http://portal-csr:8000/protected").mock(side_effect=_capture)
+        result = await run_http_step(step_send, ctx, format_error=_format_error)
+    assert result.ok, result.error
+    assert "bss_csr_session=abc-123" in received["cookie"]
+
+
+@pytest.mark.asyncio
+async def test_http_step_captures_response_cookie_via_jsonpath() -> None:
+    ctx = ScenarioContext.new()
+    step = HTTPStep(
+        name="login",
+        http="POST /login",
+        base_url="http://portal-csr:8000",
+        form={"username": "ck"},
+        expect={"status": 303},
+        capture={"cookie_token": "$.cookies.bss_csr_session"},
+    )
+    with respx.mock() as mock:
+        mock.post("http://portal-csr:8000/login").mock(
+            return_value=httpx.Response(
+                303,
+                headers={
+                    "location": "/search",
+                    "set-cookie": "bss_csr_session=cookie-xyz; Path=/",
+                },
+            )
+        )
+        result = await run_http_step(step, ctx, format_error=_format_error)
+    assert result.ok, result.error
+    assert ctx.variables["cookie_token"] == "cookie-xyz"
+
+
+@pytest.mark.asyncio
 async def test_http_step_drain_stream_reads_entire_response() -> None:
     ctx = ScenarioContext.new()
     step = HTTPStep(

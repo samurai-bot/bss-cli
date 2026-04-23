@@ -122,21 +122,30 @@ Port 8009 is reserved for the v0.2 billing service — see the "Note on billing 
 
 ## Portals (channel layer, v0.4+)
 
-A portal is a **channel** onto the BSS — a thin HTTP surface that translates a specific audience's actions (self-serve customers, CSRs, retail partners) into tool calls the LLM orchestrator runs against the 9 core services. Portals live under `portals/` in the repo, not under `services/`; each one ships as its own container on the **9xxx port range**. v0.4 ships the first portal; v0.5 adds `portals/csr/` on 9002.
+A portal is a **channel** onto the BSS — a thin HTTP surface that translates a specific audience's actions (self-serve customers, CSRs, retail partners) into tool calls the LLM orchestrator runs against the 9 core services. Portals live under `portals/` in the repo, not under `services/`; each one ships as its own container on the **9xxx port range**. v0.4 shipped the self-serve portal; v0.5 adds the CSR console.
 
-| # | Portal | Port | Audience | Writes go through… |
-|---|---|---|---|---|
-| 1 | self-serve | 9001 | Prospect browsing / signing up | `agent_bridge.drive_signup` → `bss_orchestrator.session.astream_once` |
-| 2 | csr | 9002 | CSR agents (v0.5) | `agent_bridge.*` → orchestrator |
+| # | Portal | Port | Audience | Writes go through… | Inbound auth |
+|---|---|---|---|---|---|
+| 1 | self-serve | 9001 | Prospect browsing / signing up | `agent_bridge.drive_signup` → `astream_once(channel="portal-self-serve")` | none (public signup) |
+| 2 | csr | 9002 | CSR operators | `agent_bridge.ask_about_customer` → `astream_once(channel="portal-csr", actor=<op>)` | stub login (cookie); Phase 12 swaps for real OAuth |
 
 The defining property of a portal is that **every write routes through the LLM orchestrator**. The route handler never imports `CustomerClient.create`, `OrderClient.create`, or any other mutating bss-clients method. It builds a natural-language instruction, passes it to `astream_once`, and streams the resulting events (tool call started, tool call completed, final message) back to the browser via Server-Sent Events.
 
-- **Reads go direct.** Listing offerings on a landing page, fetching a subscription on the confirmation page, polling order state — all direct `bss-clients` calls. LLM-mediating a pass-through read is pointless latency.
-- **`X-BSS-Channel` attribution.** Every outbound call carries `portal-self-serve` so CRM's interaction auto-log attributes the write to the right surface. The hero scenario asserts this.
-- **`BSS_API_TOKEN` on outbound only.** The portal's inbound HTTP surface is public (no `BSSApiTokenMiddleware`); its outbound calls through `TokenAuthProvider` are authenticated like any other v0.3+ caller.
-- **Pure server-rendered HTML + HTMX.** No React/Vue/Svelte, no bundler, no npm. One vendored `htmx.min.js` + `htmx-sse.js`, one CSS file.
+- **Reads go direct.** Listing offerings, fetching a customer 360, polling order state — all direct `bss-clients` calls. LLM-mediating a pass-through read is pointless latency.
+- **`X-BSS-Channel` attribution.** Every outbound call carries the portal's channel name (`portal-self-serve` or `portal-csr`) so CRM's interaction auto-log attributes the write to the right surface. The hero scenarios assert this.
+- **`X-BSS-Actor` carries the human (v0.5+).** The CSR portal sets `actor=<operator_id>` on every outbound call so the interaction log shows *who* asked, not which model executed. Per-model attribution still lives in `audit.domain_event.actor` (`llm-<model-slug>`).
+- **`BSS_API_TOKEN` on outbound only.** Portals' inbound HTTP surfaces are not gated by `BSSApiTokenMiddleware` (different auth stories per portal — see the table). Their outbound calls through `TokenAuthProvider` are authenticated like any other v0.3+ caller.
+- **Pure server-rendered HTML + HTMX.** No React/Vue/Svelte, no bundler, no npm.
 
-The hero artifact on every portal page is the **Agent Activity** log widget — a side panel streaming the LLM's tool-call sequence live. Strip it out and the portal looks like any CRUD frontend; keep it in and the viewer can see the LLM is doing the work, tool by tool. Details in `phases/V0_4_0.md` and `DECISIONS.md` 2026-04-23.
+### Shared package: `packages/bss-portal-ui` (v0.5+)
+
+The agent log widget, SSE plumbing helpers (`format_frame`, `status_html`), event-projection logic (`project`, `render_html`), base CSS (palette + layout primitives + agent log styling), and vendored HTMX (`htmx.min.js` + `htmx-sse.js`) live in a single shared package. Both portals consume it via:
+- a Jinja `ChoiceLoader` that resolves portal-local templates first then falls back to the package's shared partials, and
+- a `StaticFiles` mount at `/portal-ui/static/` that serves the package's CSS + JS.
+
+Extracted in v0.5 (before the second portal was written) to prevent the agent log widget from drifting between portals — a fix landing only in self-serve when both need it would surface as a demo bug a month later. Documented in `DECISIONS.md` 2026-04-23.
+
+The hero artifact on every portal page is the **Agent Activity** log widget — a side panel streaming the LLM's tool-call sequence live. Strip it out and the portal looks like any CRUD frontend; keep it in and the viewer can see the LLM is doing the work, tool by tool. Details in `phases/V0_4_0.md` and `phases/V0_5_0.md`.
 
 The **Inventory sub-domain** (MSISDN pool + eSIM profile pool) lives inside the CRM service on port 8002, mounted under `/inventory-api/v1/...`. It has its own schema (`inventory`), repositories, policies, and HTTP endpoints — just no separate container. SOM and Subscription call it via `bss-clients` as if it were a distinct service. If it outgrows CRM, extraction to an 11th container is mechanical because the boundary is already enforced.
 

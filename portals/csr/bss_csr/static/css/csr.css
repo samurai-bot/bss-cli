@@ -264,3 +264,43 @@
 .channel-portal_self_serve { color: var(--accent-amber); }
 .channel-llm { color: #cbb6e8; }
 .channel-cli { color: var(--fg-muted); }
+
+/* ─── Case thread ────────────────────────────────────────── */
+
+.back-link {
+  color: var(--fg-muted); text-decoration: none;
+  font-family: var(--mono); font-size: 13px;
+  display: inline-block; margin-bottom: 16px;
+}
+.back-link:hover { color: var(--accent); }
+
+.case-header { margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+.case-header-row { display: flex; align-items: baseline; gap: 16px; margin-bottom: 12px; }
+.case-header-row .page-title { margin: 0; }
+
+.tickets-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.tickets-table th, .tickets-table td {
+  text-align: left; padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.tickets-table th {
+  color: var(--fg-muted); font-weight: 500;
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
+}
+
+.notes-thread { list-style: none; padding: 0; margin: 0; }
+.notes-thread li {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 16px;
+  margin-bottom: 10px;
+}
+.notes-thread header {
+  display: flex; gap: 12px; align-items: baseline;
+  margin-bottom: 6px;
+  font-family: var(--mono); font-size: 12px;
+}
+.note-author { color: var(--accent-amber); font-weight: 600; }
+.note-at { color: var(--fg-muted); }
+.note-body { margin: 0; font-size: 14px; line-height: 1.5; }

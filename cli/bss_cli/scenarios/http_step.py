@@ -53,6 +53,7 @@ def _build_result(resp: httpx.Response, body_text: str | None = None) -> dict[st
     return {
         "status": resp.status_code,
         "headers": {k.lower(): v for k, v in resp.headers.items()},
+        "cookies": dict(resp.cookies),
         "body": parsed,
         "body_text": text or "",
     }
@@ -111,12 +112,18 @@ def _parse_method_url(http: str, base_url: str, ctx: ScenarioContext) -> tuple[s
 async def _do_request(step: HTTPStep, ctx: ScenarioContext) -> dict[str, Any]:
     method, url = _parse_method_url(step.http, step.base_url, ctx)
     headers = {k: str(ctx.interpolate(v)) for k, v in step.headers.items()}
+    cookies = (
+        {k: str(ctx.interpolate(v)) for k, v in step.cookies.items()}
+        if step.cookies
+        else None
+    )
     form = ctx.interpolate(step.form) if step.form else None
     json_body = ctx.interpolate(step.json_body) if step.json_body is not None else None
 
     async with httpx.AsyncClient(
         timeout=step.timeout_seconds,
         follow_redirects=step.follow_redirects,
+        cookies=cookies,
     ) as client:
         if step.drain_stream:
             # Consume the response to EOF so the server finishes streaming
