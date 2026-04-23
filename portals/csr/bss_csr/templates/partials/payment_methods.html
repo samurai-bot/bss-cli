@@ -1,0 +1,14 @@
+{% if payments %}
+<ul class="payment-list">
+  {% for p in payments %}
+  <li class="payment-card">
+    <span class="payment-brand">{{ p.brand | upper }}</span>
+    <span class="payment-pan">•••• {{ p.last4 }}</span>
+    {% if p.exp %}<span class="payment-exp">exp {{ p.exp }}</span>{% endif %}
+    {% if p.is_default %}<span class="payment-default">default</span>{% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="empty-state">No payment methods on file.</p>
+{% endif %}

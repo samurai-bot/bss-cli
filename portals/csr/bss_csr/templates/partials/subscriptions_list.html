@@ -1,0 +1,36 @@
+<div id="subscriptions-list"
+     hx-get="/customer/{{ customer_id }}/subscriptions"
+     hx-trigger="sse:agent-complete from:body"
+     hx-swap="outerHTML">
+{% if subscriptions %}
+  {% for s in subscriptions %}
+    <article class="sub-card sub-card--{{ s.state }}">
+      <header>
+        <code class="sub-id">{{ s.id }}</code>
+        <span class="sub-state">{{ s.state }}</span>
+      </header>
+      <div class="sub-meta">
+        <span><strong>{{ s.offering_id }}</strong></span>
+        {% if s.msisdn %}<span>+65 {{ s.msisdn }}</span>{% endif %}
+      </div>
+      {% if s.balances %}
+      <ul class="sub-balances">
+        {% for b in s.balances %}
+        <li>
+          <span class="balance-label">{{ b.type }}</span>
+          <span class="balance-value">
+            {% if b.remaining == -1 %}unlimited{% else %}{{ b.remaining }}/{{ b.total }} {{ b.unit }}{% endif %}
+          </span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+      {% if s.next_renewal %}
+      <footer class="sub-footer">renews {{ s.next_renewal[:10] }}</footer>
+      {% endif %}
+    </article>
+  {% endfor %}
+{% else %}
+  <p class="empty-state">No subscriptions on this customer.</p>
+{% endif %}
+</div>
