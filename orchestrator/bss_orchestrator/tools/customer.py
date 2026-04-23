@@ -16,6 +16,7 @@ from ..types import (
     CustomerId,
     CustomerState,
     Email,
+    Msisdn,
     Phone,
 )
 from ._registry import register
@@ -50,6 +51,30 @@ async def customer_create(
             - ``customer.create.invalid_email``: format is invalid.
     """
     return await get_clients().crm.create_customer(name=name, email=email, phone=phone)
+
+
+@register("customer.find_by_msisdn")
+async def customer_find_by_msisdn(msisdn: Msisdn) -> dict[str, Any]:
+    """Find the customer who owns a given mobile number.
+
+    Use when the operator types a phone number in the search box, or
+    when a question like *"who's calling from +6590001234?"* needs an
+    ID for subsequent ``customer.get`` / ``subscription.list_for_customer``
+    calls. Resolves MSISDN → subscription → customer in one hop.
+
+    Args:
+        msisdn: 8+ digit mobile number, no formatting (e.g.,
+            ``"90001234"``). Country code is optional and stripped to
+            the local digits in the inventory pool.
+
+    Returns:
+        Customer dict — same shape as ``customer.get``.
+
+    Raises:
+        NotFound: number is unassigned, or the owning subscription's
+            customer was deleted.
+    """
+    return await get_clients().crm.find_customer_by_msisdn(msisdn)
 
 
 @register("customer.get")

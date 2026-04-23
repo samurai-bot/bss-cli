@@ -20,6 +20,7 @@ Every write tool goes through the service's policy layer. A tool call that viola
 | `customer.create` | create | Create a customer with name + at least one contact medium |
 | `customer.get` | read | Get customer with contact mediums and KYC status |
 | `customer.list` | read | List customers with filters (state, name_contains) |
+| `customer.find_by_msisdn` | read | Resolve a phone number to its owning customer (v0.5+; CSR portal search) |
 | `customer.update_contact` | update | Update primary contact medium |
 | `customer.add_contact_medium` | create | Add additional contact |
 | `customer.remove_contact_medium` | destructive | Remove contact medium |

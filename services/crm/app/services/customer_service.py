@@ -15,6 +15,7 @@ from app.events import publisher
 from app.policies import customer as customer_policies
 from app.repositories.customer_repo import CustomerRepository
 from app.repositories.interaction_repo import InteractionRepository
+from app.repositories.msisdn_repo import MsisdnRepository
 from bss_models.crm import ContactMedium, Customer, Individual, Interaction, Party
 
 if TYPE_CHECKING:
@@ -35,11 +36,13 @@ class CustomerService:
         customer_repo: CustomerRepository,
         interaction_repo: InteractionRepository,
         subscription_client: SubscriptionClient | None = None,
+        msisdn_repo: MsisdnRepository | None = None,
     ) -> None:
         self._session = session
         self._customer_repo = customer_repo
         self._interaction_repo = interaction_repo
         self._subscription_client = subscription_client
+        self._msisdn_repo = msisdn_repo
 
     async def create_customer(
         self,
@@ -126,6 +129,32 @@ class CustomerService:
         return customer
 
     async def get_customer(self, customer_id: str) -> Customer | None:
+        return await self._customer_repo.get_with_party(customer_id)
+
+    async def find_by_msisdn(self, msisdn: str) -> Customer | None:
+        """Resolve MSISDN → subscription → customer.
+
+        Inventory's MSISDN pool stores ``assigned_to_subscription_id``;
+        the subscription's ``customerId`` is then the owner. Returns
+        ``None`` if any hop misses (number unassigned, or assigned to
+        a subscription whose customer was deleted).
+        """
+        if self._msisdn_repo is None or self._subscription_client is None:
+            raise RuntimeError(
+                "find_by_msisdn requires msisdn_repo + subscription_client"
+            )
+        row = await self._msisdn_repo.get(msisdn)
+        if row is None or not row.assigned_to_subscription_id:
+            return None
+        try:
+            subscription = await self._subscription_client.get(
+                row.assigned_to_subscription_id
+            )
+        except Exception:  # noqa: BLE001 — best-effort cross-service read
+            return None
+        customer_id = subscription.get("customerId") if subscription else None
+        if not customer_id:
+            return None
         return await self._customer_repo.get_with_party(customer_id)
 
     async def list_customers(
