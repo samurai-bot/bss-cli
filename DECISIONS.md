@@ -624,3 +624,74 @@ payload and renders ASCII via `cli/bss_cli/renderers/trace.py`).
 **Consequences:** LLM's `trace.for_order` response is ~150 bytes
 instead of ~250 KB. Human inspection is one extra command (CLI
 swimlane) but gives the better presentation.
+
+### 2026-04-23 — v0.3.0 — Shared API token over OAuth for single-operator auth
+**Context:** v0.1 and v0.2 ship without authentication. The moment the
+stack is reachable from anything beyond `localhost` or a private VPN,
+every BSS service is a credential-free admin API surface. Phase 12
+ships proper OAuth2 + per-principal RBAC, but that's two weeks of
+work; we needed a two-hour fix that closed the open-door problem
+without prejudicing the Phase 12 design.
+**Decision:** A single shared admin token (`BSS_API_TOKEN`) gates
+every BSS service. New `packages/bss-middleware/` ships
+`BSSApiTokenMiddleware` (pure ASGI, timing-safe `hmac.compare_digest`,
+exempts only `/health`, `/health/ready`, `/health/live`).
+`bss-clients` gets `TokenAuthProvider` alongside the existing
+`NoAuthProvider`. Services validate the token at lifespan startup
+(`validate_api_token_present()`) — empty / `"changeme"` / <32-char
+tokens fail-fast.
+**Alternatives rejected:**
+- (a) **OAuth2 client credentials** — multi-week build (auth service,
+  client registration, JWT signing/verification, key rotation, scope
+  catalog). Not justified for single-operator scale; deferred to
+  Phase 12 in full.
+- (b) **mTLS between services** — cert lifecycle complexity
+  (generation, rotation, revocation, distribution) for the same
+  authentication outcome.
+- (c) **IP allowlisting at infra layer** — fragile (containers move,
+  IPs change, dev-vs-prod split), provides no defense once an
+  attacker is on the network.
+- (d) **Per-endpoint `Depends(require_token)`** — middleware is the
+  chokepoint by construction; per-endpoint decoration is what you
+  do when you want some endpoints unprotected, and we don't.
+**Consequences:**
+- Phase 12 upgrade path is one swap: replace `BSSApiTokenMiddleware`
+  with a JWT-validating middleware, replace `TokenAuthProvider`'s
+  static token with a JWT issuer. `auth_context.py` reads claims
+  from the JWT instead of headers. Policy code, business logic,
+  and the entire bss-clients caller surface are untouched.
+- `auth_context.py` per-service is left ALONE in v0.3 — the spec
+  said to refactor it but the existing implementation already
+  populated from a ContextVar via `RequestIdMiddleware`. v0.3's
+  middleware just gates whether that path runs at all.
+- The middleware ships as **pure ASGI** (not BaseHTTPMiddleware),
+  avoiding the contextvar-task-spawn fragility we hit in v0.2.
+- Rotation is restart-based, ~60s downtime
+  (`docs/runbooks/api-token-rotation.md`). Zero-downtime rotation
+  is a real auth-system feature, deferred to Phase 12.
+- Per-service `RequestIdMiddleware` is duplicated across 9 services
+  (consequence of v0.2's pure-ASGI rewrite). v0.3 spec called for
+  consolidation into `bss-middleware` but kept the duplication for
+  scope discipline. Future refactor.
+
+### 2026-04-23 — v0.3.0 — Step 2 of the v0.3 spec was a no-op (auth_context unchanged)
+**Context:** The v0.3 spec said: "every service has `app/auth_context.py`
+that today returns a hardcoded admin principal regardless of request
+state. In v0.3, the middleware writes to a `ContextVar` on successful
+token validation, and `auth_context.current()` reads from it."
+**Discovery during reconnaissance:** The auth_context module ALREADY
+reads from a `ContextVar`. `RequestIdMiddleware` (existing since
+Phase 5) populates it via `set_for_request(actor, tenant, channel)`
+from the `X-BSS-Actor` / `X-BSS-Channel` / `X-BSS-Tenant` request
+headers. The "hardcoded admin principal" claim in the spec was
+wrong — it's the ContextVar's *default* that's the admin principal,
+overridable per-request.
+**Decision:** Skip the planned auth_context refactor. The existing
+ContextVar-based design works as-is. v0.3 just adds gating in front
+of it (the middleware) without touching the principal-population
+path.
+**Consequences:** ~9 fewer files touched. No risk of subtle
+behavior shift in audit/interaction logging. The "actor" in audit
+events still comes from the `X-BSS-Actor` header (still trusted, as
+v0.3 is single-tenant-shared-token scope; Phase 12 takes that from
+JWT claims).
