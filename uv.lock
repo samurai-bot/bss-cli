@@ -10,6 +10,7 @@ members = [
     "bss-clients",
     "bss-clock",
     "bss-events",
+    "bss-middleware",
     "bss-models",
     "bss-orchestrator",
     "bss-seed",
@@ -184,6 +185,7 @@ version = "0.1.0"
 source = { editable = "cli" }
 dependencies = [
     { name = "bss-clients" },
+    { name = "bss-middleware" },
     { name = "bss-orchestrator" },
     { name = "bss-telemetry" },
     { name = "httpx" },
@@ -208,6 +210,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "bss-clients", editable = "packages/bss-clients" },
+    { name = "bss-middleware", editable = "packages/bss-middleware" },
     { name = "bss-orchestrator", editable = "orchestrator" },
     { name = "bss-telemetry", editable = "packages/bss-telemetry" },
     { name = "httpx", specifier = ">=0.27" },
@@ -342,6 +345,39 @@ dev = [
 ]
 
 [[package]]
+name = "bss-middleware"
+version = "0.1.0"
+source = { editable = "packages/bss-middleware" }
+dependencies = [
+    { name = "pydantic-settings" },
+    { name = "starlette" },
+    { name = "structlog" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pydantic-settings", specifier = ">=2.0" },
+    { name = "starlette", specifier = ">=0.40" },
+    { name = "structlog", specifier = ">=24.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "fastapi", specifier = ">=0.110" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=0.23" },
+]
+
+[[package]]
 name = "bss-models"
 version = "0.1.0"
 source = { editable = "packages/bss-models" }
@@ -367,6 +403,7 @@ source = { editable = "orchestrator" }
 dependencies = [
     { name = "bss-clients" },
     { name = "bss-clock" },
+    { name = "bss-middleware" },
     { name = "bss-telemetry" },
     { name = "httpx" },
     { name = "langchain-core" },
@@ -389,6 +426,7 @@ dev = [
 requires-dist = [
     { name = "bss-clients", editable = "packages/bss-clients" },
     { name = "bss-clock", editable = "packages/bss-clock" },
+    { name = "bss-middleware", editable = "packages/bss-middleware" },
     { name = "bss-telemetry", editable = "packages/bss-telemetry" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "langchain-core", specifier = ">=0.3" },
@@ -479,6 +517,7 @@ version = "0.1.0"
 source = { editable = "services/catalog" }
 dependencies = [
     { name = "asyncpg" },
+    { name = "bss-middleware" },
     { name = "bss-models" },
     { name = "bss-telemetry" },
     { name = "fastapi" },
@@ -498,6 +537,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "asyncpg", specifier = ">=0.29" },
+    { name = "bss-middleware", editable = "packages/bss-middleware" },
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "bss-telemetry", editable = "packages/bss-telemetry" },
     { name = "fastapi", specifier = ">=0.115" },
@@ -628,6 +668,7 @@ dependencies = [
     { name = "bss-clients" },
     { name = "bss-clock" },
     { name = "bss-events" },
+    { name = "bss-middleware" },
     { name = "bss-models" },
     { name = "bss-telemetry" },
     { name = "fastapi" },
@@ -653,6 +694,7 @@ requires-dist = [
     { name = "bss-clients", editable = "packages/bss-clients" },
     { name = "bss-clock", editable = "packages/bss-clock" },
     { name = "bss-events", editable = "packages/bss-events" },
+    { name = "bss-middleware", editable = "packages/bss-middleware" },
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "bss-telemetry", editable = "packages/bss-telemetry" },
     { name = "fastapi", specifier = ">=0.115" },
@@ -764,6 +806,7 @@ dependencies = [
     { name = "bss-clients" },
     { name = "bss-clock" },
     { name = "bss-events" },
+    { name = "bss-middleware" },
     { name = "bss-models" },
     { name = "bss-telemetry" },
     { name = "fastapi" },
@@ -788,6 +831,7 @@ requires-dist = [
     { name = "bss-clients", editable = "packages/bss-clients" },
     { name = "bss-clock", editable = "packages/bss-clock" },
     { name = "bss-events", editable = "packages/bss-events" },
+    { name = "bss-middleware", editable = "packages/bss-middleware" },
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "bss-telemetry", editable = "packages/bss-telemetry" },
     { name = "fastapi", specifier = ">=0.115" },
@@ -1315,6 +1359,7 @@ dependencies = [
     { name = "bss-clients" },
     { name = "bss-clock" },
     { name = "bss-events" },
+    { name = "bss-middleware" },
     { name = "bss-models" },
     { name = "bss-telemetry" },
     { name = "fastapi" },
@@ -1340,6 +1385,7 @@ requires-dist = [
     { name = "bss-clients", editable = "packages/bss-clients" },
     { name = "bss-clock", editable = "packages/bss-clock" },
     { name = "bss-events", editable = "packages/bss-events" },
+    { name = "bss-middleware", editable = "packages/bss-middleware" },
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "bss-telemetry", editable = "packages/bss-telemetry" },
     { name = "fastapi", specifier = ">=0.115" },
@@ -1777,6 +1823,7 @@ dependencies = [
     { name = "bss-clients" },
     { name = "bss-clock" },
     { name = "bss-events" },
+    { name = "bss-middleware" },
     { name = "bss-models" },
     { name = "bss-telemetry" },
     { name = "fastapi" },
@@ -1801,6 +1848,7 @@ requires-dist = [
     { name = "bss-clients", editable = "packages/bss-clients" },
     { name = "bss-clock", editable = "packages/bss-clock" },
     { name = "bss-events", editable = "packages/bss-events" },
+    { name = "bss-middleware", editable = "packages/bss-middleware" },
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "bss-telemetry", editable = "packages/bss-telemetry" },
     { name = "fastapi", specifier = ">=0.115" },
@@ -1937,6 +1985,7 @@ dependencies = [
     { name = "bss-clients" },
     { name = "bss-clock" },
     { name = "bss-events" },
+    { name = "bss-middleware" },
     { name = "bss-models" },
     { name = "bss-telemetry" },
     { name = "fastapi" },
@@ -1962,6 +2011,7 @@ requires-dist = [
     { name = "bss-clients", editable = "packages/bss-clients" },
     { name = "bss-clock", editable = "packages/bss-clock" },
     { name = "bss-events", editable = "packages/bss-events" },
+    { name = "bss-middleware", editable = "packages/bss-middleware" },
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "bss-telemetry", editable = "packages/bss-telemetry" },
     { name = "fastapi", specifier = ">=0.115" },
@@ -2193,6 +2243,7 @@ dependencies = [
     { name = "bss-clients" },
     { name = "bss-clock" },
     { name = "bss-events" },
+    { name = "bss-middleware" },
     { name = "bss-models" },
     { name = "bss-telemetry" },
     { name = "fastapi" },
@@ -2215,6 +2266,7 @@ requires-dist = [
     { name = "bss-clients", editable = "packages/bss-clients" },
     { name = "bss-clock", editable = "packages/bss-clock" },
     { name = "bss-events", editable = "packages/bss-events" },
+    { name = "bss-middleware", editable = "packages/bss-middleware" },
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "bss-telemetry", editable = "packages/bss-telemetry" },
     { name = "fastapi", specifier = ">=0.115" },
@@ -2409,6 +2461,7 @@ dependencies = [
     { name = "bss-clients" },
     { name = "bss-clock" },
     { name = "bss-events" },
+    { name = "bss-middleware" },
     { name = "bss-models" },
     { name = "bss-telemetry" },
     { name = "fastapi" },
@@ -2434,6 +2487,7 @@ requires-dist = [
     { name = "bss-clients", editable = "packages/bss-clients" },
     { name = "bss-clock", editable = "packages/bss-clock" },
     { name = "bss-events", editable = "packages/bss-events" },
+    { name = "bss-middleware", editable = "packages/bss-middleware" },
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "bss-telemetry", editable = "packages/bss-telemetry" },
     { name = "fastapi", specifier = ">=0.115" },
@@ -2544,6 +2598,7 @@ dependencies = [
     { name = "bss-clients" },
     { name = "bss-clock" },
     { name = "bss-events" },
+    { name = "bss-middleware" },
     { name = "bss-models" },
     { name = "bss-telemetry" },
     { name = "fastapi" },
@@ -2571,6 +2626,7 @@ requires-dist = [
     { name = "bss-clients", editable = "packages/bss-clients" },
     { name = "bss-clock", editable = "packages/bss-clock" },
     { name = "bss-events", editable = "packages/bss-events" },
+    { name = "bss-middleware", editable = "packages/bss-middleware" },
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "bss-telemetry", editable = "packages/bss-telemetry" },
     { name = "fastapi", specifier = ">=0.115" },

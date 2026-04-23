@@ -2,7 +2,7 @@
 
 from .admin import AdminClient
 from .audit import AuditClient
-from .auth import AuthProvider, NoAuthProvider
+from .auth import AuthProvider, NoAuthProvider, TokenAuthProvider
 from .base import BSSClient, set_context
 from .catalog import CatalogClient
 from .com import COMClient
@@ -35,5 +35,6 @@ __all__ = [
     "ServerError",
     "SubscriptionClient",
     "Timeout",
+    "TokenAuthProvider",
     "set_context",
 ]

@@ -12,8 +12,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from bss_clients import AuditClient
+from bss_clients import AuditClient, TokenAuthProvider
 from bss_clock import now as clock_now
+from bss_middleware import api_token
 from bss_telemetry import JaegerClient, JaegerError
 
 from ..clients import get_clients
@@ -194,7 +195,9 @@ async def trace_for_order(order_id: OrderId) -> dict[str, Any]:
     Raises:
         ToolException: audit-events endpoint unreachable.
     """
-    async with AuditClient(base_url=settings.com_url) as ac:
+    async with AuditClient(
+        base_url=settings.com_url, auth_provider=TokenAuthProvider(api_token())
+    ) as ac:
         events = await ac.list_events(
             aggregate_type="ProductOrder", aggregate_id=order_id, limit=20
         )
@@ -224,7 +227,10 @@ async def trace_for_subscription(subscription_id: SubscriptionId) -> dict[str, A
     Raises:
         ToolException: audit-events endpoint unreachable.
     """
-    async with AuditClient(base_url=settings.subscription_url) as ac:
+    async with AuditClient(
+        base_url=settings.subscription_url,
+        auth_provider=TokenAuthProvider(api_token()),
+    ) as ac:
         events = await ac.list_events(
             aggregate_type="subscription", aggregate_id=subscription_id, limit=20
         )

@@ -22,8 +22,9 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
-from bss_clients import AdminClient
+from bss_clients import AdminClient, TokenAuthProvider
 from bss_clients.errors import ClientError, NotFound, ServerError, Timeout
+from bss_middleware import api_token
 from bss_orchestrator.config import settings
 from bss_orchestrator.tools import TOOL_REGISTRY
 
@@ -74,8 +75,9 @@ async def admin_reset_operational_data(
     scenario setup hard-fails — half-reset state is worse than no reset.
     """
     results: list[dict[str, Any]] = []
+    auth = TokenAuthProvider(api_token())
     for target in _RESET_TARGETS:
-        client = AdminClient(base_url=target.base_url)
+        client = AdminClient(base_url=target.base_url, auth_provider=auth)
         try:
             body = await client.reset_operational_data()
             results.append({"service": target.label, "ok": True, "body": body})
@@ -90,7 +92,8 @@ async def admin_reset_operational_data(
 
 async def _clock_fanout(path: str, payload: dict[str, Any]) -> dict[str, Any]:
     per_service: list[dict[str, Any]] = []
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    headers = {"X-BSS-API-Token": api_token()}
+    async with httpx.AsyncClient(timeout=10.0, headers=headers) as client:
         for target in _CLOCK_TARGETS:
             url = f"{target.base_url}/admin-api/v1{path}"
             try:

@@ -11,10 +11,24 @@ from app.config import Settings
 from app.logging import configure_logging
 from app.main import create_app
 from bss_clients import InventoryClient
+from bss_middleware import TEST_TOKEN
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _bss_api_token_env():
+    """v0.3 — middleware reads BSS_API_TOKEN at app construction; set before."""
+    import os
+    prev = os.environ.get("BSS_API_TOKEN")
+    os.environ["BSS_API_TOKEN"] = TEST_TOKEN
+    yield
+    if prev is None:
+        os.environ.pop("BSS_API_TOKEN", None)
+    else:
+        os.environ["BSS_API_TOKEN"] = prev
 
 
 @pytest.fixture(scope="session")
-def settings() -> Settings:
+def settings(_bss_api_token_env) -> Settings:
     s = Settings()
     if not s.db_url:
         pytest.fail("BSS_DB_URL is not set. Export it or add to .env.")
@@ -90,5 +104,9 @@ async def client(settings: Settings, db_engine, db_session: AsyncSession):
     app.state.session_factory = _FakeSessionFactory()
 
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as c:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"X-BSS-API-Token": TEST_TOKEN},
+    ) as c:
         yield c

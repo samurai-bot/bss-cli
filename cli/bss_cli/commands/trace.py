@@ -6,7 +6,8 @@ import json
 from typing import Annotated, Any
 
 import typer
-from bss_clients import AuditClient
+from bss_clients import AuditClient, TokenAuthProvider
+from bss_middleware import api_token
 from bss_orchestrator.config import settings
 from rich import print as rprint
 
@@ -47,7 +48,10 @@ def for_order_cmd(
 ) -> None:
     """Resolve trace_id from audit events for an order, then render."""
     async def _run() -> None:
-        async with AuditClient(base_url=settings.com_url) as ac:
+        async with AuditClient(
+            base_url=settings.com_url,
+            auth_provider=TokenAuthProvider(api_token()),
+        ) as ac:
             events = await ac.list_events(
                 aggregate_type="ProductOrder",
                 aggregate_id=order_id,
@@ -80,7 +84,10 @@ def for_subscription_cmd(
 ) -> None:
     """Resolve trace_id from audit events for a subscription, then render."""
     async def _run() -> None:
-        async with AuditClient(base_url=settings.subscription_url) as ac:
+        async with AuditClient(
+            base_url=settings.subscription_url,
+            auth_provider=TokenAuthProvider(api_token()),
+        ) as ac:
             events = await ac.list_events(
                 aggregate_type="subscription",
                 aggregate_id=subscription_id,

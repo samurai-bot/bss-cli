@@ -107,18 +107,25 @@ Hard rule:
 
 ## Authentication & RBAC readiness
 
-v0.1 ships WITHOUT authentication. But the architecture is shaped so that Phase 12 (auth + RBAC) can be a decorator-layer concern, not a rewrite.
+v0.3 introduces the smallest possible auth story: a single shared API token that gates every BSS service's HTTP surface. v0.1 and v0.2 had no authentication at all. Phase 12 will add per-principal OAuth2/JWT through the same `auth_context.py` seam that's been in every service since Phase 3.
 
-### What's already in place
+### What v0.3 ships
+
+- **`packages/bss-middleware/`** with `BSSApiTokenMiddleware` (pure ASGI). Every BSS service registers it; missing or wrong `X-BSS-API-Token` header → 401 before routing. Comparison is timing-safe (`hmac.compare_digest`). Exempt paths: exactly `/health`, `/health/ready`, `/health/live`.
+- **`bss_middleware.validate_api_token_present()`** called at the top of every service's lifespan. Empty / sentinel `"changeme"` / <32-char tokens fail-fast on startup.
+- **`bss_clients.TokenAuthProvider`** alongside the existing `NoAuthProvider`. Every cross-service client constructed via `orchestrator/bss_orchestrator/clients.py:get_clients()` carries the token on outbound calls.
+- **`BSS_API_TOKEN` in `.env`** is the single source of truth, generated via `openssl rand -hex 32`. Rotation is restart-based (`docs/runbooks/api-token-rotation.md`).
+
+### What's already in place from v0.1 (still applies)
 
 - **`tenant_id` column on every table**, seeded with `'DEFAULT'`
 - **`X-BSS-Actor` and `X-BSS-Channel` headers** plumbed through every HTTP call
 - **Policy layer** as the single chokepoint for writes (the right place for `@requires_role`)
 - **bss-clients** as the single chokepoint for service-to-service calls
-- **`auth_context.py`** module in every service that returns a hardcoded `AuthContext(actor='system', tenant='DEFAULT', roles=['admin'], permissions=['*'])` for v0.1
+- **`auth_context.py`** module in every service. v0.3 leaves it alone — RequestIdMiddleware still populates it from `X-BSS-Actor`. The principal is still the hardcoded admin.
 - **Policies and tool dispatches read from `auth_context.current()`**, never hardcoded
 
-When Phase 12 ships, only `auth_context.py` and the middleware change per service. Business logic stays untouched.
+When Phase 12 ships, the BSSApiTokenMiddleware swap (token → JWT validator) is the change per service. `auth_context.py` then reads claims from the JWT instead of headers. Business logic stays untouched.
 
 ### Phase 12 model (not in v0.1, documented for architectural intent)
 

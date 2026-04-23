@@ -8,7 +8,9 @@ from bss_clients import (
     InventoryClient,
     NoAuthProvider,
     PaymentClient,
+    TokenAuthProvider,
 )
+from bss_middleware import api_token, validate_api_token_present
 from bss_telemetry import configure_telemetry
 from fastapi import Depends, FastAPI, Request
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -23,6 +25,7 @@ log = structlog.get_logger()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    validate_api_token_present()  # fail-fast on misconfig
     settings = app.state.settings
     configure_telemetry(service_name="subscription", app=app)
     engine = create_async_engine(settings.db_url, pool_size=5, max_overflow=5)
@@ -31,16 +34,16 @@ async def lifespan(app: FastAPI):
     app.state.mq_exchange = None
     app.state.mq_connection = None
     app.state.crm_client = CRMClient(
-        base_url=settings.crm_url, auth_provider=NoAuthProvider()
+        base_url=settings.crm_url, auth_provider=TokenAuthProvider(api_token())
     )
     app.state.payment_client = PaymentClient(
-        base_url=settings.payment_url, auth_provider=NoAuthProvider()
+        base_url=settings.payment_url, auth_provider=TokenAuthProvider(api_token())
     )
     app.state.catalog_client = CatalogClient(
-        base_url=settings.catalog_url, auth_provider=NoAuthProvider()
+        base_url=settings.catalog_url, auth_provider=TokenAuthProvider(api_token())
     )
     app.state.inventory_client = InventoryClient(
-        base_url=settings.crm_url, auth_provider=NoAuthProvider()
+        base_url=settings.crm_url, auth_provider=TokenAuthProvider(api_token())
     )
 
     try:

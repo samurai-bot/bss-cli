@@ -447,7 +447,7 @@ Cost estimate: **~$4,000-8,000/month**.
 | Multi-AZ database | ✅ | Postgres connection URL is env-driven |
 | Zero-downtime deploys | ⚠️ | Needs graceful SIGTERM handler (wired in Phase 3 reference slice) |
 | TLS termination | ➖ | Expected at ALB / ingress layer, not per-service |
-| Auth between services | ❌ | Phase 12. `auth_context.py` seam is already in place. |
+| Auth between services | ⚠️ | Shared API token (v0.3) via `BSSApiTokenMiddleware` + `TokenAuthProvider`. Per-principal OAuth2 + JWT is Phase 12. `auth_context.py` seam unchanged — Phase 12 fills the principal from JWT claims. |
 | Rate limiting per principal | ❌ | Phase 12 |
 | Distributed tracing | ✅ | OpenTelemetry to Jaeger (v0.2). W3C traceparent through HTTP / MQ / SQL. `bss trace` renders ASCII swimlanes. |
 | uv workspace builds in CI | ⚠️ | Per-service Dockerfile with `sed` rewrite workaround (Phase 4 expedient). Native workspace-aware build tracked in Phase 11 backlog. See DECISIONS.md. |

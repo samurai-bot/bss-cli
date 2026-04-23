@@ -5,7 +5,9 @@ import structlog
 from fastapi import Depends, FastAPI, Request
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from bss_clients import TokenAuthProvider
 from bss_clients.subscription import SubscriptionClient
+from bss_middleware import api_token, validate_api_token_present
 from bss_telemetry import configure_telemetry
 
 from app.repositories.case_repo import CaseRepository
@@ -26,6 +28,7 @@ log = structlog.get_logger()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    validate_api_token_present()  # fail-fast before any other setup
     settings = app.state.settings
     configure_telemetry(service_name="crm", app=app)
     engine = create_async_engine(settings.db_url, pool_size=5, max_overflow=5)
@@ -33,6 +36,7 @@ async def lifespan(app: FastAPI):
     app.state.session_factory = async_sessionmaker(engine, expire_on_commit=False)
     app.state.subscription_client = SubscriptionClient(
         base_url=settings.subscription_url,
+        auth_provider=TokenAuthProvider(api_token()),
     )
     log.info("service.starting", service=settings.service_name)
     yield

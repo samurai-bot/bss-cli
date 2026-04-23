@@ -13,6 +13,7 @@ dependencies = [
     "bss-clock",
     "bss-events",
     "bss-telemetry",
+    "bss-middleware",
     "asyncpg>=0.29",
     "sqlalchemy[asyncio]>=2.0",
 ]
@@ -39,3 +40,4 @@ bss-admin = { workspace = true }
 bss-clock = { workspace = true }
 bss-events = { workspace = true }
 bss-telemetry = { workspace = true }
+bss-middleware = { workspace = true }

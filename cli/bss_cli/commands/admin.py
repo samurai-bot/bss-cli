@@ -17,8 +17,9 @@ from dataclasses import dataclass
 from typing import Annotated
 
 import typer
-from bss_clients import AdminClient
+from bss_clients import AdminClient, TokenAuthProvider
 from bss_clients.errors import ClientError, NotFound, ServerError, Timeout
+from bss_middleware import api_token
 from bss_orchestrator.config import settings
 from rich import print as rprint
 from rich.table import Table
@@ -95,8 +96,9 @@ class _Result:
 
 async def _fanout(targets: list[_Target]) -> list[_Result]:
     results: list[_Result] = []
+    auth = TokenAuthProvider(api_token())
     for target in targets:
-        client = AdminClient(base_url=target.url)
+        client = AdminClient(base_url=target.url, auth_provider=auth)
         try:
             body = await client.reset_operational_data()
             results.append(_Result(target, "ok", "reset", body))

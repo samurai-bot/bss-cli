@@ -22,7 +22,9 @@ from bss_clients import (
     ProvisioningClient,
     SOMClient,
     SubscriptionClient,
+    TokenAuthProvider,
 )
+from bss_middleware import api_token
 
 from .config import settings
 
@@ -44,18 +46,23 @@ class Clients:
 
 @lru_cache(maxsize=1)
 def get_clients() -> Clients:
-    """Return the process-wide ``Clients`` bundle (constructed on first call)."""
+    """Return the process-wide ``Clients`` bundle (constructed on first call).
+
+    v0.3+: every client carries ``X-BSS-API-Token`` via TokenAuthProvider
+    so the receiving services' BSSApiTokenMiddleware accepts the request.
+    """
+    auth = TokenAuthProvider(api_token())
     return Clients(
-        catalog=CatalogClient(base_url=settings.catalog_url),
-        crm=CRMClient(base_url=settings.crm_url),
+        catalog=CatalogClient(base_url=settings.catalog_url, auth_provider=auth),
+        crm=CRMClient(base_url=settings.crm_url, auth_provider=auth),
         # Inventory lives inside CRM (port 8002) — same base URL.
-        inventory=InventoryClient(base_url=settings.crm_url),
-        payment=PaymentClient(base_url=settings.payment_url),
-        com=COMClient(base_url=settings.com_url),
-        som=SOMClient(base_url=settings.som_url),
-        subscription=SubscriptionClient(base_url=settings.subscription_url),
-        mediation=MediationClient(base_url=settings.mediation_url),
-        provisioning=ProvisioningClient(base_url=settings.provisioning_url),
+        inventory=InventoryClient(base_url=settings.crm_url, auth_provider=auth),
+        payment=PaymentClient(base_url=settings.payment_url, auth_provider=auth),
+        com=COMClient(base_url=settings.com_url, auth_provider=auth),
+        som=SOMClient(base_url=settings.som_url, auth_provider=auth),
+        subscription=SubscriptionClient(base_url=settings.subscription_url, auth_provider=auth),
+        mediation=MediationClient(base_url=settings.mediation_url, auth_provider=auth),
+        provisioning=ProvisioningClient(base_url=settings.provisioning_url, auth_provider=auth),
     )
 
 

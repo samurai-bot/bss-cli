@@ -24,6 +24,8 @@ Assumes you already have PostgreSQL 16 and RabbitMQ 3.13 running.
 git clone <repo>
 cd bss-cli
 cp .env.example .env          # edit DB/MQ connection strings
+# v0.3+ requires an API token — generate one and replace 'changeme':
+sed -i "s/^BSS_API_TOKEN=changeme$/BSS_API_TOKEN=$(openssl rand -hex 32)/" .env
 docker compose up -d          # brings up 9 BSS services only
 make migrate
 make seed
@@ -40,6 +42,22 @@ make migrate
 make seed
 bss scenario run scenarios/customer_signup_and_exhaust.yaml
 ```
+
+## Authentication (v0.3)
+
+Every BSS service requires `X-BSS-API-Token: <BSS_API_TOKEN>` on every request. The CLI, orchestrator, and scenario runner all read `BSS_API_TOKEN` from `.env` and inject the header automatically — no per-call wiring.
+
+```bash
+# Generate a token (≥32 chars; the .env.example sentinel "changeme" is rejected at startup)
+openssl rand -hex 32
+
+# Edit .env and replace BSS_API_TOKEN=changeme with the value above.
+# Services fail to start until you do this.
+```
+
+The exemption allowlist for unauthenticated requests is exactly `/health`, `/health/ready`, `/health/live` — nothing else (not `/docs`, not `/openapi.json`). For the rotation procedure see [`docs/runbooks/api-token-rotation.md`](docs/runbooks/api-token-rotation.md).
+
+This is intentionally the smallest possible auth story (one shared admin token; no roles, no per-principal claims). OAuth2 with real RBAC is Phase 12 — see `CLAUDE.md`.
 
 ## Tracing (v0.2)
 

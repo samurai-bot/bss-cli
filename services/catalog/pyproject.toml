@@ -9,6 +9,7 @@ dependencies = [
     "pydantic-settings>=2.0",
     "bss-models",
     "bss-telemetry",
+    "bss-middleware",
     "asyncpg>=0.29",
     "sqlalchemy[asyncio]>=2.0",
 ]
@@ -30,3 +31,4 @@ packages = ["bss_catalog"]
 [tool.uv.sources]
 bss-models = { workspace = true }
 bss-telemetry = { workspace = true }
+bss-middleware = { workspace = true }

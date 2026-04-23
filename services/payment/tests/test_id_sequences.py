@@ -8,6 +8,7 @@ needs to verify cross-restart behavior. It cleans up after itself.
 """
 
 import pytest
+from bss_middleware import TEST_TOKEN
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -55,7 +56,11 @@ async def _make_client(settings: Settings):
     app.state.crm_client = mock_crm
 
     transport = ASGITransport(app=app)
-    client = AsyncClient(transport=transport, base_url="http://test")
+    client = AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"X-BSS-API-Token": TEST_TOKEN},
+    )
     return client, engine
 
 

@@ -55,7 +55,7 @@ All three must pass three runs in a row against a live stack.
 - [x] `DATA_MODEL.md` — schemas + tables + relationships.
 - [x] `TOOL_SURFACE.md` — full tool list with arg shapes.
 - [x] `DECISIONS.md` — every non-obvious decision recorded.
-- [x] `RUNBOOK.md` — operational procedures.
+- [x] `docs/runbooks/phase-execution-runbook.md` — phase build workflow (was `RUNBOOK.md` pre-v0.3).
 - [x] `SHIP_CRITERIA.md` — this file.
 
 ## Tagging
