@@ -70,12 +70,23 @@ class AgentEventToolCallStarted:
 
 @dataclass(frozen=True)
 class AgentEventToolCallCompleted:
-    """The tool's result came back. ``result`` is a truncated string repr."""
+    """The tool's result came back.
+
+    ``result`` is the truncated string repr — safe to flood into a
+    log widget or SSE frame.
+
+    ``result_full`` (v0.6+) is the untruncated string repr. Consumers
+    that need to parse the JSON (e.g. the REPL's renderer-dispatch
+    hook for ``*.get``-shaped tools) read this field. Defaults to
+    the truncated value when full data wasn't captured (preserves
+    backward compat for code that only used ``result``).
+    """
 
     name: str
     call_id: str
     result: str
     is_error: bool = False
+    result_full: str = ""
 
 
 @dataclass(frozen=True)
@@ -147,6 +158,63 @@ class Session:
             state = await self._graph.ainvoke({"messages": self.history})
             self.history = list(state["messages"])
             return _last_ai_text(self.history)
+
+    async def astream(self, text: str) -> AsyncIterator[AgentEvent]:
+        """Streaming variant of :meth:`ask` — yields AgentEvents as the
+        graph runs. Conversation history is updated as messages stream in.
+        Used by the v0.6 REPL so tool-call observations can render live
+        via the matching :mod:`bss_cli.renderers` alongside the model's
+        text reply (rather than the prose-only view ``ask`` produced).
+        """
+        with tracer("bss-orchestrator").start_as_current_span("bss.ask") as span:
+            span.set_attribute(semconv.BSS_CHANNEL, "llm")
+            span.set_attribute("bss.ask.turn", len(self.history) // 2 + 1)
+            span.set_attribute("bss.ask.streaming", True)
+            use_llm_context()
+            self.history.append(HumanMessage(content=text))
+            yield AgentEventPromptReceived(prompt=text)
+
+            seen_call_ids: set[str] = set()
+            last_ai_text = ""
+
+            try:
+                async for update in self._graph.astream(
+                    {"messages": self.history},
+                    stream_mode="updates",
+                ):
+                    for node_output in update.values():
+                        messages = node_output.get("messages", []) if isinstance(node_output, dict) else []
+                        for msg in messages:
+                            self.history.append(msg)
+                            if isinstance(msg, AIMessage):
+                                tool_calls = getattr(msg, "tool_calls", []) or []
+                                for tc in tool_calls:
+                                    call_id = tc.get("id", "") or ""
+                                    if call_id in seen_call_ids:
+                                        continue
+                                    seen_call_ids.add(call_id)
+                                    yield AgentEventToolCallStarted(
+                                        name=tc.get("name", "") or "",
+                                        args=tc.get("args", {}) or {},
+                                        call_id=call_id,
+                                    )
+                                text_out = _ai_text(msg)
+                                if text_out and not tool_calls:
+                                    last_ai_text = text_out
+                            elif isinstance(msg, ToolMessage):
+                                full = str(msg.content) if msg.content is not None else ""
+                                yield AgentEventToolCallCompleted(
+                                    name=msg.name or "",
+                                    call_id=msg.tool_call_id or "",
+                                    result=_truncate(full),
+                                    result_full=full,
+                                    is_error=getattr(msg, "status", None) == "error",
+                                )
+            except Exception as exc:  # noqa: BLE001
+                yield AgentEventError(message=f"{type(exc).__name__}: {exc}")
+                return
+
+            yield AgentEventFinalMessage(text=last_ai_text)
 
     def reset(self) -> None:
         """Clear conversation history — next ``ask`` starts fresh."""
@@ -250,10 +318,12 @@ async def astream_once(
                             if text and not tool_calls:
                                 last_ai_text = text
                         elif isinstance(msg, ToolMessage):
+                            full = str(msg.content) if msg.content is not None else ""
                             yield AgentEventToolCallCompleted(
                                 name=msg.name or "",
                                 call_id=msg.tool_call_id or "",
-                                result=_truncate(str(msg.content) if msg.content is not None else ""),
+                                result=_truncate(full),
+                                result_full=full,
                                 is_error=getattr(msg, "status", None) == "error",
                             )
         except Exception as exc:  # noqa: BLE001

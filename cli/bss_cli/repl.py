@@ -1,8 +1,15 @@
 """Interactive REPL — ``bss`` invoked with no subcommand.
 
-A minimal readline-driven loop. Each turn is a ``Session.ask`` call, so
-conversation history persists across turns in-memory. Exit with ``/exit``,
-``/quit``, Ctrl-D, or Ctrl-C.
+Each turn streams agent events from ``Session.astream`` (v0.6+) so
+tool-call observations on "show-shaped" tools (`subscription.get`,
+`customer.get`, `order.get`, `catalog.list_offerings`,
+`catalog.get_offering`, `inventory.esim.get_activation`,
+`subscription.get_esim_activation`) render via the matching
+:mod:`bss_cli.renderers` ASCII card *before* the model's text reply.
+
+Without that hook the REPL only ever printed the model's prose summary
+of a tool result — the polished CLI cards never showed up in the
+LLM-native flow, even after v0.6 polished them.
 
 Slash commands:
     /exit, /quit   — leave the REPL
@@ -13,6 +20,8 @@ Slash commands:
 from __future__ import annotations
 
 import asyncio
+import json
+from typing import Any, Callable
 
 from rich import print as rprint
 from rich.align import Align
@@ -23,7 +32,21 @@ from rich.text import Text
 
 from bss_orchestrator.clients import close_clients
 from bss_orchestrator.config import settings
-from bss_orchestrator.session import Session
+from bss_orchestrator.session import (
+    AgentEventError,
+    AgentEventFinalMessage,
+    AgentEventToolCallCompleted,
+    Session,
+)
+
+from .renderers import (
+    render_catalog,
+    render_catalog_show,
+    render_customer_360,
+    render_esim_activation,
+    render_order,
+    render_subscription,
+)
 
 
 # Pieced from classic block letters — 8 lines tall, renders clean in 80-col.
@@ -42,7 +65,7 @@ def _render_banner(allow_destructive: bool) -> Panel:
         Text.from_markup(
             "[bold white]LLM-native Business Support System[/]   "
             "[dim]·[/]   [magenta]TMF[/] [dim]+[/] [magenta]SID[/]   "
-            "[dim]·[/]   [dim]v0.1[/]"
+            "[dim]·[/]   [dim]v0.6[/]"
         )
     )
 
@@ -56,7 +79,7 @@ def _render_banner(allow_destructive: bool) -> Panel:
     hints = Text.from_markup(
         "  [bold]try[/]    "
         "[italic green]show the catalog[/]   [dim]·[/]   "
-        "[italic green]list active customers[/]   [dim]·[/]   "
+        "[italic green]show subscription SUB-0001[/]   [dim]·[/]   "
         "[italic green]what can you do?[/]\n"
         "  [bold]slash[/]  "
         "[cyan]/reset[/]   [dim]·[/]   "
@@ -93,6 +116,71 @@ def _render_banner(allow_destructive: bool) -> Panel:
     )
 
 
+# ─── Renderer dispatch ────────────────────────────────────────────────
+#
+# Map "show-shaped" tool names → callable that accepts the parsed JSON
+# and returns the polished ASCII card. The dispatch is best-effort: if
+# the tool result doesn't parse as JSON, or the renderer raises, the
+# REPL silently skips and falls back to the model's text reply.
+
+def _render_subscription(payload: dict) -> str:
+    return render_subscription(payload)
+
+
+def _render_customer(payload: dict) -> str:
+    # The 360 renderer accepts subscriptions/cases/interactions but
+    # works fine with just the customer dict — empty sections render
+    # cleanly. The agent will typically have called other tools first
+    # but we don't have visibility into those past results from a
+    # single tool observation.
+    return render_customer_360(payload)
+
+
+def _render_order(payload: dict) -> str:
+    return render_order(payload)
+
+
+def _render_catalog_list(payload: list) -> str:
+    return render_catalog(payload)
+
+
+def _render_catalog_show(payload: dict) -> str:
+    return render_catalog_show(payload)
+
+
+def _render_esim(payload: dict) -> str:
+    return render_esim_activation(payload)
+
+
+_RENDERER_DISPATCH: dict[str, Callable[[Any], str]] = {
+    "subscription.get": _render_subscription,
+    "customer.get": _render_customer,
+    "customer.find_by_msisdn": _render_customer,
+    "order.get": _render_order,
+    "catalog.list_offerings": _render_catalog_list,
+    "catalog.get_offering": _render_catalog_show,
+    "inventory.esim.get_activation": _render_esim,
+    "subscription.get_esim_activation": _render_esim,
+}
+
+
+def _maybe_render_tool_result(name: str, raw_result: str) -> str | None:
+    """Return the polished card for a `*.get`-shaped tool, or None."""
+    renderer = _RENDERER_DISPATCH.get(name)
+    if renderer is None:
+        return None
+    try:
+        payload = json.loads(raw_result)
+    except (ValueError, TypeError):
+        return None
+    if not payload:
+        return None
+    try:
+        return renderer(payload)
+    except Exception:  # noqa: BLE001 — best-effort; never break the REPL
+        return None
+
+
 def _handle_slash(cmd: str, session: Session) -> bool:
     """Run a slash command. Returns True if the REPL should exit."""
     if cmd in {"/exit", "/quit"}:
@@ -110,6 +198,34 @@ def _handle_slash(cmd: str, session: Session) -> bool:
         return False
     rprint(f"[yellow]Unknown command: {cmd}[/]")
     return False
+
+
+async def _drive_turn(session: Session, line: str) -> None:
+    """Stream one LLM turn, dispatching renderers on `*.get` tool results."""
+    final_text = ""
+    error: str | None = None
+    async for event in session.astream(line):
+        if isinstance(event, AgentEventToolCallCompleted):
+            # Prefer ``result_full`` (added v0.6) — the truncated
+            # ``result`` is for log-widget display and won't reliably
+            # parse as JSON for renderer dispatch.
+            raw = event.result_full or event.result
+            card = _maybe_render_tool_result(event.name, raw)
+            if card:
+                rprint(card)
+        elif isinstance(event, AgentEventFinalMessage):
+            final_text = event.text
+        elif isinstance(event, AgentEventError):
+            error = event.message
+            break
+
+    if error:
+        rprint(f"[red]LLM error:[/] {error}")
+        return
+    if not final_text.strip():
+        rprint("[yellow](no reply)[/]")
+        return
+    rprint(Panel(final_text, title="bss ai", border_style="cyan"))
 
 
 def run_repl(*, allow_destructive: bool = False) -> None:
@@ -139,15 +255,10 @@ def run_repl(*, allow_destructive: bool = False) -> None:
                 continue
 
             try:
-                reply = loop.run_until_complete(session.ask(line))
+                loop.run_until_complete(_drive_turn(session, line))
             except Exception as e:  # pragma: no cover — surface at runtime
                 rprint(f"[red]LLM error:[/] {e}")
                 continue
-
-            if not reply.strip():
-                rprint("[yellow](no reply)[/]")
-                continue
-            rprint(Panel(reply, title="bss ai", border_style="cyan"))
     finally:
         try:
             loop.run_until_complete(close_clients())

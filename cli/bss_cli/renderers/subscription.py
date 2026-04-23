@@ -77,10 +77,19 @@ def render_subscription(
     balances = sub.get("balances") or sub.get("bundleBalances") or []
     rows: list[str] = []
     for b in balances:
-        label = str(b.get("type", "?")).title()
-        used = float(b.get("used", 0))
+        # Accept both shapes: (type/used) from the renderer's original
+        # tests, and (allowanceType/consumed/remaining/total) from the
+        # live subscription service payload. ``-1`` total is the
+        # unlimited sentinel.
+        label = str(b.get("type") or b.get("allowanceType") or "?").title()
+        used_val = b.get("used")
+        if used_val is None and "consumed" in b:
+            used_val = b.get("consumed")
+        if used_val is None and "remaining" in b and b.get("total") not in (None, -1):
+            used_val = float(b["total"]) - float(b["remaining"])
+        used = float(used_val or 0)
         total = b.get("total")
-        if total in (None, "unlimited"):
+        if total in (None, "unlimited", -1):
             total_val: float | None = None
         else:
             total_val = float(total)
