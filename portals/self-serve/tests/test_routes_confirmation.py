@@ -20,6 +20,41 @@ def _seed_session_and_subscription(client, fake_clients, *, with_activation_on_s
     sig.order_id = "ORD-014"
     if with_activation_on_session:
         sig.activation_code = "LPA:1$smdp.bss-cli.local$abc-123-def"
+    sig.done = True
+    sig.event_log = [
+        {
+            "kind": "prompt",
+            "icon": "→",
+            "title": "prompt received",
+            "detail": "Full prompt text: create customer Ada on PLAN_M with MSISDN 90000042…",
+            "detail_full": "Full prompt text: create customer Ada on PLAN_M with MSISDN 90000042…",
+            "is_error": False,
+        },
+        {
+            "kind": "tool_started",
+            "icon": "↳",
+            "title": 'customer.create(name="Ada")',
+            "detail": "",
+            "detail_full": '{"name": "Ada"}',
+            "is_error": False,
+        },
+        {
+            "kind": "tool_completed",
+            "icon": "←",
+            "title": "customer.create",
+            "detail": '{"id": "CUST-042"}',
+            "detail_full": '{"id": "CUST-042", "href": "/tmf-api/customerManagement/v4/customer/CUST-042"}',
+            "is_error": False,
+        },
+        {
+            "kind": "final",
+            "icon": "✓",
+            "title": "complete",
+            "detail": "Signup complete. SUB-007 active.",
+            "detail_full": "Signup complete. SUB-007 active.",
+            "is_error": False,
+        },
+    ]
     asyncio.get_event_loop().run_until_complete(store.update(sig))
 
     fake_clients.subscription.records["SUB-007"] = {
@@ -67,3 +102,25 @@ def test_confirmation_agent_log_widget_is_present(client, fake_clients):  # type
     sig = _seed_session_and_subscription(client, fake_clients)
     resp = client.get(f"/confirmation/SUB-007?session={sig.session_id}")
     assert "Agent Activity" in resp.text
+
+
+def test_confirmation_replays_transcript_statically_without_sse(client, fake_clients):  # type: ignore[no-untyped-def]
+    sig = _seed_session_and_subscription(client, fake_clients)
+    resp = client.get(f"/confirmation/SUB-007?session={sig.session_id}")
+    body = resp.text
+    # No live SSE connection — would otherwise re-trigger the agent
+    # and spam the widget with "complete" frames on every reconnect.
+    assert "sse-connect" not in body
+    assert "sse-swap" not in body
+    # Each event from the session's event_log rendered on the page.
+    assert "prompt received" in body
+    assert 'customer.create(name=&#34;Ada&#34;)' in body
+    assert "CUST-042" in body
+    # Header reflects the done status, not "live".
+    assert 'class="dot done"' in body
+
+
+def test_confirmation_shows_full_prompt_not_truncated(client, fake_clients):  # type: ignore[no-untyped-def]
+    sig = _seed_session_and_subscription(client, fake_clients)
+    resp = client.get(f"/confirmation/SUB-007?session={sig.session_id}")
+    assert "Full prompt text: create customer Ada on PLAN_M with MSISDN 90000042" in resp.text

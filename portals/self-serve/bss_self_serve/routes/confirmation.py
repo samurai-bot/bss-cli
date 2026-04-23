@@ -55,11 +55,23 @@ async def confirmation(
     plans = flatten_offerings(await clients.catalog.list_offerings())
     plan = find_plan(plans, sig.plan)
 
+    # Render the agent's full transcript statically from the session —
+    # the confirmation page must NOT open a live SSE connection, or
+    # the browser would reconnect every ~3s and the widget would fill
+    # with repeated "complete" frames.
+    events = [
+        {**e, "detail": e.get("detail_full") or e.get("detail", "")}
+        for e in sig.event_log
+    ]
+
     return templates.TemplateResponse(
         request,
         "confirmation.html",
         {
-            "session_id": session,
+            "session_id": None,
+            "stream_live": False,
+            "agent_log_status": "error" if sig.error else "done",
+            "events": events,
             "subscription_id": subscription_id,
             "subscription": subscription,
             "activation_code": activation_code,

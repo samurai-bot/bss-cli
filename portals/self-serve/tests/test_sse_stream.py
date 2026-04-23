@@ -167,6 +167,70 @@ def test_sse_stream_populates_session_with_harvested_ids(client_with_agent_mock)
     assert sig.done is True
 
 
+def test_sse_stream_snapshots_event_log_on_session(client_with_agent_mock):  # type: ignore[no-untyped-def]
+    sub = client_with_agent_mock.post(
+        "/signup",
+        data={
+            "plan": "PLAN_M",
+            "name": "Ck",
+            "email": "ck@example.com",
+            "phone": "+6590001234",
+            "msisdn": "90000042",
+            "card_pan": "4242424242424242",
+        },
+        follow_redirects=False,
+    )
+    session_id = sub.headers["location"].split("session=")[-1]
+    resp = client_with_agent_mock.get(f"/agent/events/{session_id}")
+    assert resp.status_code == 200
+    _ = resp.text  # drain
+
+    import asyncio
+    store = client_with_agent_mock.app.state.session_store
+    sig = asyncio.get_event_loop().run_until_complete(store.get(session_id))
+    assert sig is not None
+    kinds = [e["kind"] for e in sig.event_log]
+    assert kinds == [
+        "prompt",
+        "tool_started",
+        "tool_completed",
+        "tool_started",
+        "tool_completed",
+        "final",
+    ]
+    # Prompt detail is the FULL prompt, not truncated.
+    prompt_entry = sig.event_log[0]
+    assert prompt_entry["detail"] == prompt_entry["detail_full"]
+    assert len(prompt_entry["detail"]) > 20  # canned stream uses a real sentence
+
+
+def test_sse_stream_done_session_replays_no_message_frames(client_with_agent_mock):  # type: ignore[no-untyped-def]
+    # Done sessions must NOT re-emit "complete" frames on every SSE
+    # reconnect — that was the v0.4 regression where the confirmation
+    # page spammed the widget.
+    sub = client_with_agent_mock.post(
+        "/signup",
+        data={
+            "plan": "PLAN_M",
+            "name": "Ck",
+            "email": "ck@example.com",
+            "phone": "+6590001234",
+            "msisdn": "90000042",
+            "card_pan": "4242424242424242",
+        },
+        follow_redirects=False,
+    )
+    session_id = sub.headers["location"].split("session=")[-1]
+    # First GET drives the agent to done.
+    _ = client_with_agent_mock.get(f"/agent/events/{session_id}").text
+    # Second GET simulates the browser's auto-reconnect — should have
+    # zero ``event: message`` frames, just a one-shot status.
+    resp = client_with_agent_mock.get(f"/agent/events/{session_id}")
+    text = resp.text
+    assert "event: message" not in text
+    assert "event: status" in text
+
+
 def test_sse_stream_redirect_event_carries_activation_url(client_with_agent_mock):  # type: ignore[no-untyped-def]
     sub = client_with_agent_mock.post(
         "/signup",

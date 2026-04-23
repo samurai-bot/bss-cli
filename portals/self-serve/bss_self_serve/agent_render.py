@@ -44,11 +44,14 @@ class RenderedEvent:
 def project(event: AgentEvent) -> RenderedEvent:
     """Turn one typed event into a template context dict."""
     if isinstance(event, AgentEventPromptReceived):
+        # Prompt is shown in full — it's the narrative header for the
+        # transcript and truncating it hides the interesting context
+        # (customer email, plan, MSISDN, KYC signature, ...).
         return RenderedEvent(
             kind="prompt",
             icon="→",
             title="prompt received",
-            detail=_truncate(event.prompt),
+            detail=event.prompt,
             detail_full=event.prompt,
         )
     if isinstance(event, AgentEventToolCallStarted):

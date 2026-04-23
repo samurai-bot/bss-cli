@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 from collections.abc import AsyncIterator
 
 import structlog
@@ -23,15 +22,13 @@ from bss_orchestrator.session import (
     AgentEvent,
     AgentEventError,
     AgentEventFinalMessage,
-    AgentEventPromptReceived,
     AgentEventToolCallCompleted,
-    AgentEventToolCallStarted,
 )
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from ..agent_bridge import drive_signup
-from ..agent_render import harvest_ids, render_html
+from ..agent_render import harvest_ids, project, render_html
 
 log = structlog.get_logger(__name__)
 router = APIRouter()
@@ -45,13 +42,16 @@ async def agent_events(request: Request, session_id: str) -> StreamingResponse:
         raise HTTPException(status_code=404, detail="Unknown or expired session.")
 
     async def stream() -> AsyncIterator[bytes]:
-        # Fire the agent and relay events as SSE frames. If the session
-        # was already completed (e.g., user refreshed the progress page),
-        # we don't restart the agent — replay nothing and emit a "done"
-        # status; the page will redirect via its own logic.
+        # If the session already finished, close the stream cleanly
+        # with no message frames. The browser's EventSource will try
+        # to reconnect every ~3s by default; an empty stream (no
+        # data lines) prevents the "complete ✓ complete ✓..." spam
+        # the confirmation page used to show after every reconnect.
+        # The confirmation page also no longer opens this endpoint —
+        # it renders ``sig.event_log`` statically — so this branch is
+        # defense-in-depth against stray clients.
         if sig.done:
             yield _sse_frame("status", _status_html("done"))
-            yield _sse_frame("message", _final_partial_html())
             return
 
         yield _sse_frame("status", _status_html("live"))
@@ -66,6 +66,10 @@ async def agent_events(request: Request, session_id: str) -> StreamingResponse:
                 card_pan=sig.card_pan,
             ):
                 _harvest(sig, event)
+                # Snapshot the rendered event on the session so the
+                # confirmation page can replay the transcript without
+                # reopening this stream.
+                sig.event_log.append(project(event).__dict__)
                 try:
                     yield _sse_frame("message", render_html(event))
                 except Exception as exc:  # noqa: BLE001
@@ -121,15 +125,6 @@ def _status_html(status: str) -> str:
         "idle": "dot idle",
     }.get(status, "dot idle")
     return f'<span class="{dot_class}"></span> {status}'
-
-
-def _final_partial_html() -> str:
-    return (
-        '<li class="agent-event agent-event--final">'
-        '<span class="agent-event-icon">✓</span>'
-        '<div class="agent-event-body"><div class="agent-event-title">complete</div></div>'
-        "</li>"
-    )
 
 
 def _redirect_html(sig) -> str:  # type: ignore[no-untyped-def]

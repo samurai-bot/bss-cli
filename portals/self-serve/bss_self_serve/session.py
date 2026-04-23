@@ -23,6 +23,7 @@ import asyncio
 import uuid
 from dataclasses import dataclass, field
 from time import monotonic
+from typing import Any
 
 
 @dataclass
@@ -55,6 +56,14 @@ class SignupSession:
     final_text: str = ""
     error: str | None = None
     done: bool = False
+
+    # One entry per streamed agent event, shaped like RenderedEvent's
+    # dict (``kind`` / ``icon`` / ``title`` / ``detail`` / ``detail_full``
+    # / ``is_error``). The confirmation page replays this list as static
+    # HTML instead of reopening the SSE stream, so done sessions don't
+    # retrigger the agent and don't get the "complete ✓ complete ✓"
+    # reconnect spam.
+    event_log: list[dict[str, Any]] = field(default_factory=list)
 
 
 class SessionStore:

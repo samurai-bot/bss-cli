@@ -59,7 +59,12 @@ async def signup_progress(request: Request, plan_id: str, session: str) -> HTMLR
     return templates.TemplateResponse(
         request,
         "progress.html",
-        {"session_id": session, "signup": sig, "plan_id": plan_id},
+        {
+            "session_id": session,
+            "stream_live": True,
+            "signup": sig,
+            "plan_id": plan_id,
+        },
     )
 
 

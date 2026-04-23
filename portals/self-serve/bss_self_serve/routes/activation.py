@@ -40,6 +40,7 @@ async def activation(request: Request, order_id: str, session: str) -> HTMLRespo
         "activation.html",
         {
             "session_id": session,
+            "stream_live": True,  # the agent may still be running
             "order_id": order_id,
             "plan_id": sig.plan,
         },

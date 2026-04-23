@@ -13,12 +13,15 @@ from bss_orchestrator.session import (
 from bss_self_serve.agent_render import harvest_ids, project, render_html
 
 
-def test_project_prompt_received_truncates_long_prompt() -> None:
+def test_project_prompt_received_shows_full_text() -> None:
+    # The prompt is the narrative header of the transcript — don't
+    # truncate it, or the widget hides the interesting context
+    # (customer email, plan, MSISDN, KYC signature, ...).
     long_text = "x" * 500
     proj = project(AgentEventPromptReceived(prompt=long_text))
     assert proj.kind == "prompt"
     assert proj.icon == "→"
-    assert len(proj.detail) <= 81  # 80 + ellipsis
+    assert proj.detail == long_text
     assert proj.detail_full == long_text
 
 

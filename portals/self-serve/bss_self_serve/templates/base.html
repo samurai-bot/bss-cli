@@ -9,7 +9,7 @@
   <script src="/static/js/htmx-sse.js" defer></script>
 </head>
 <body
-  {% if session_id %}
+  {% if stream_live and session_id %}
   hx-ext="sse"
   sse-connect="/agent/events/{{ session_id }}"
   {% endif %}
@@ -34,7 +34,7 @@
     </aside>
   </main>
 
-  {% if session_id %}
+  {% if stream_live and session_id %}
   {# Redirect sink: the SSE stream fires a ``redirect`` event whose
      payload is a single <a href="…"> fragment; the listener navigates
      the whole page to that href. #}
