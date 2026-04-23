@@ -73,11 +73,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         agent_events,
         confirmation,
         landing,
+        msisdn_picker,
         session_api,
         signup,
     )
 
     app.include_router(landing.router)
+    app.include_router(msisdn_picker.router)
     app.include_router(signup.router)
     app.include_router(activation.router)
     app.include_router(confirmation.router)

@@ -42,6 +42,7 @@ class SignupSession:
     name: str
     email: str
     phone: str
+    msisdn: str  # chosen on the picker page; passed to order.create as msisdn_preference
     card_pan: str  # in-memory only, cleared once the agent finishes
     card_pan_last4: str
     created_at: float = field(default_factory=monotonic)
@@ -71,6 +72,7 @@ class SessionStore:
         name: str,
         email: str,
         phone: str,
+        msisdn: str,
         card_pan: str,
     ) -> SignupSession:
         session_id = uuid.uuid4().hex
@@ -80,6 +82,7 @@ class SessionStore:
             name=name,
             email=email,
             phone=phone,
+            msisdn=msisdn,
             card_pan=card_pan,
             card_pan_last4=card_pan[-4:],
         )

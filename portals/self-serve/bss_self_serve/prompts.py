@@ -28,6 +28,7 @@ def signup_prompt(
     email: str,
     phone: str,
     plan: str,
+    msisdn: str,
     card_pan: str,
 ) -> str:
     """Build the NL instruction the agent sees when a signup form is submitted.
@@ -46,7 +47,8 @@ def signup_prompt(
         f"with signature '{signature}' "
         f"and attestation id '{KYC_PREBAKED_ATTESTATION_ID}'; "
         f"(3) add card {card_pan} as their payment method on file; "
-        f"(4) place an order for offering '{plan}'; "
+        f"(4) place an order for offering '{plan}', passing msisdn_preference='{msisdn}' "
+        f"so the customer gets the number they picked on the portal; "
         f"(5) wait for the order to reach 'completed' and report the "
         f"resulting subscription id plus the eSIM activation code."
     )

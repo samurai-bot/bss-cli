@@ -16,6 +16,7 @@ def test_session_api_returns_projection(client):  # type: ignore[no-untyped-def]
             name="n",
             email="e@x",
             phone="+0",
+            msisdn="90000042",
             card_pan="4242424242424242",
         )
     )

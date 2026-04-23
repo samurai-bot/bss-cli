@@ -7,6 +7,19 @@
 
 <form class="signup-form" method="post" action="/signup">
   <input type="hidden" name="plan" value="{{ plan.id }}" />
+  <input type="hidden" name="msisdn" value="{{ msisdn }}" />
+
+  <fieldset>
+    <legend>Your new number</legend>
+    <div class="msisdn-chosen">
+      <span class="msisdn-chosen-value">{{ msisdn_display }}</span>
+      <a class="msisdn-chosen-change" href="/signup/{{ plan.id }}/msisdn">Change</a>
+    </div>
+    <p class="form-hint">
+      Reserved when the agent runs <code>order.create</code> — if it's
+      gone by then, SOM falls back to the next available number.
+    </p>
+  </fieldset>
 
   <fieldset>
     <legend>About you</legend>
@@ -16,7 +29,7 @@
     <label>Email
       <input type="email" name="email" required autocomplete="email" placeholder="ada@example.sg" />
     </label>
-    <label>Phone
+    <label>Contact phone
       <input type="tel" name="phone" required autocomplete="tel" placeholder="+65 9000 0000" value="+65" />
     </label>
   </fieldset>

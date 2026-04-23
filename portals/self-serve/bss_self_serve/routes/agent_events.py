@@ -62,6 +62,7 @@ async def agent_events(request: Request, session_id: str) -> StreamingResponse:
                 email=sig.email,
                 phone=sig.phone,
                 plan=sig.plan,
+                msisdn=sig.msisdn,
                 card_pan=sig.card_pan,
             ):
                 _harvest(sig, event)

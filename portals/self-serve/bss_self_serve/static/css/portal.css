@@ -153,6 +153,62 @@ code {
   text-align: center;
 }
 
+/* ─── MSISDN picker ──────────────────────────────────────── */
+
+.msisdn-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-top: 16px;
+}
+.msisdn-tile {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 18px 14px;
+  text-align: center;
+  font-family: var(--mono);
+  color: var(--fg);
+  text-decoration: none;
+  transition: border-color 120ms, transform 80ms;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.msisdn-tile:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+.msisdn-country {
+  color: var(--fg-muted); font-size: 11px;
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+.msisdn-number {
+  font-size: 18px; font-weight: 600;
+  letter-spacing: 1px;
+}
+
+.msisdn-refresh {
+  display: flex; gap: 12px; align-items: end;
+  margin-top: 28px;
+  padding: 16px 18px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  flex-wrap: wrap;
+}
+.msisdn-refresh label {
+  display: flex; flex-direction: column; gap: 4px;
+  font-size: 13px; color: var(--fg-muted);
+}
+.msisdn-refresh input {
+  background: var(--bg-code); border: 1px solid var(--border);
+  color: var(--fg); font-family: var(--mono);
+  padding: 8px 10px; border-radius: 4px;
+  width: 140px;
+}
+.msisdn-refresh .form-hint {
+  flex-basis: 100%; margin: 0;
+}
+
 /* ─── Signup form ─────────────────────────────────────────── */
 
 .signup-form { display: flex; flex-direction: column; gap: 20px; max-width: 560px; }
@@ -196,6 +252,24 @@ code {
   font-size: 14px;
 }
 .form-submit:hover { background: #b5ff80; }
+
+.msisdn-chosen {
+  display: flex; align-items: baseline; gap: 16px;
+  padding: 12px 14px;
+  background: var(--bg-code);
+  border: 1px solid var(--accent-dim);
+  border-radius: 4px;
+  font-family: var(--mono);
+}
+.msisdn-chosen-value {
+  font-size: 20px; color: var(--accent); font-weight: 600;
+  letter-spacing: 1px; flex: 1;
+}
+.msisdn-chosen-change {
+  color: var(--fg-muted); font-size: 12px; text-decoration: none;
+  padding: 4px 10px; border: 1px solid var(--border); border-radius: 3px;
+}
+.msisdn-chosen-change:hover { color: var(--accent); border-color: var(--accent-dim); }
 
 .kyc-badge {
   display: flex; align-items: center; gap: 12px;

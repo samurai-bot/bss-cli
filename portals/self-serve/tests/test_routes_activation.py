@@ -13,6 +13,7 @@ def test_activation_redirects_to_confirmation_when_subscription_known(client):  
             name="n",
             email="e@x",
             phone="+0",
+            msisdn="90000042",
             card_pan="4242424242424242",
         )
     )
@@ -37,6 +38,7 @@ def test_activation_renders_polling_shell_when_subscription_pending(client):  # 
             name="n",
             email="e@x",
             phone="+0",
+            msisdn="90000042",
             card_pan="4242424242424242",
         )
     )
@@ -67,6 +69,7 @@ def test_activation_status_hx_redirects_once_subscription_arrives(client):  # ty
             name="n",
             email="e@x",
             phone="+0",
+            msisdn="90000042",
             card_pan="4242424242424242",
         )
     )

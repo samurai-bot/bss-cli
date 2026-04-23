@@ -21,7 +21,8 @@ def test_landing_shows_the_agent_log_widget(client):  # type: ignore[no-untyped-
     assert "agent-log-events" in resp.text
 
 
-def test_landing_links_to_signup_for_each_plan(client):  # type: ignore[no-untyped-def]
+def test_landing_links_to_msisdn_picker_for_each_plan(client):  # type: ignore[no-untyped-def]
     resp = client.get("/")
+    # Landing now sends users through the MSISDN picker first.
     for plan_id in ("PLAN_S", "PLAN_M", "PLAN_L"):
-        assert f'href="/signup/{plan_id}"' in resp.text
+        assert f'href="/signup/{plan_id}/msisdn"' in resp.text

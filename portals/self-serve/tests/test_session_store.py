@@ -17,10 +17,12 @@ async def test_create_returns_session_and_redacts_pan() -> None:
         name="Ck",
         email="ck@example.com",
         phone="+6590009999",
+        msisdn="90000042",
         card_pan="4242424242424242",
     )
     assert s.session_id and len(s.session_id) == 32
     assert s.plan == "PLAN_S"
+    assert s.msisdn == "90000042"
     assert s.card_pan == "4242424242424242"  # in-memory only, TTL-bounded
     assert s.card_pan_last4 == "4242"
 
@@ -33,6 +35,7 @@ async def test_get_by_session_id_returns_same_instance() -> None:
         name="n",
         email="e@x",
         phone="+0",
+        msisdn="90000042",
         card_pan="4242424242424242",
     )
     assert await store.get(s.session_id) is s
@@ -47,6 +50,7 @@ async def test_update_persists_agent_populated_fields() -> None:
         name="n",
         email="e@x",
         phone="+0",
+        msisdn="90000042",
         card_pan="4242424242424242",
     )
     s.customer_id = "CUST-042"
@@ -68,6 +72,7 @@ async def test_expired_sessions_are_pruned_on_access() -> None:
         name="n",
         email="e@x",
         phone="+0",
+        msisdn="90000042",
         card_pan="4242424242424242",
     )
     # Nudge time so created_at < monotonic() - ttl (ttl=0 should be enough,
@@ -86,6 +91,7 @@ async def test_concurrent_creates_yield_distinct_ids() -> None:
             name=f"n{i}",
             email=f"e{i}@x",
             phone="+0",
+            msisdn=f"9000{i:04d}",
             card_pan="4242424242424242",
         )
         return s.session_id

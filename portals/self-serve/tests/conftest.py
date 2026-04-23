@@ -37,11 +37,26 @@ class FakeSubscription:
 @dataclass
 class FakeInventory:
     activations: dict[str, dict[str, Any]] = field(default_factory=dict)
+    msisdns: list[dict[str, Any]] = field(default_factory=list)
 
     async def get_activation_code(self, iccid: str) -> dict[str, Any]:
         if iccid not in self.activations:
             raise KeyError(iccid)
         return dict(self.activations[iccid])
+
+    async def list_msisdns(
+        self,
+        *,
+        state: str | None = None,
+        prefix: str | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        out = list(self.msisdns)
+        if state:
+            out = [n for n in out if n.get("status") == state]
+        if prefix:
+            out = [n for n in out if n["msisdn"].startswith(prefix)]
+        return out[:limit]
 
 
 @dataclass
@@ -106,6 +121,14 @@ SAMPLE_OFFERINGS = [
 def fake_clients() -> FakeClientsBundle:
     bundle = FakeClientsBundle()
     bundle.catalog.offerings = list(SAMPLE_OFFERINGS)
+    bundle.inventory.msisdns = [
+        {"msisdn": f"9000000{i}", "status": "available", "reserved_at": None}
+        for i in range(2, 8)
+    ] + [
+        {"msisdn": "90000010", "status": "available", "reserved_at": None},
+        # an already-assigned one to prove the status filter works
+        {"msisdn": "90000001", "status": "assigned", "reserved_at": "2026-04-23T00:00:00Z"},
+    ]
     return bundle
 
 
@@ -116,7 +139,8 @@ def client(fake_clients: FakeClientsBundle):
     with patch("bss_self_serve.routes.landing.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.signup.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.activation.get_clients", return_value=fake_clients), \
-         patch("bss_self_serve.routes.confirmation.get_clients", return_value=fake_clients):
+         patch("bss_self_serve.routes.confirmation.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.msisdn_picker.get_clients", return_value=fake_clients):
         app = create_app(Settings())
         with TestClient(app) as c:
             yield c

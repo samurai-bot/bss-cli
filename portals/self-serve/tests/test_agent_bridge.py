@@ -51,6 +51,7 @@ async def test_drive_signup_passes_channel_and_blocks_destructive() -> None:
                 email="ck@example.com",
                 phone="+6590009999",
                 plan="PLAN_M",
+                msisdn="90000042",
                 card_pan="4242424242424242",
             )
         ]
@@ -85,6 +86,7 @@ async def test_drive_signup_relays_every_event_in_order() -> None:
                 email="x@y.z",
                 phone="+0",
                 plan="PLAN_S",
+                msisdn="90000007",
                 card_pan="4242424242424242",
             )
         ]
@@ -98,6 +100,7 @@ def test_signup_prompt_contains_all_form_fields_and_kyc_attestation() -> None:
         email="ada@bss-cli.local",
         phone="+6590001234",
         plan="PLAN_M",
+        msisdn="90000042",
         card_pan="4242424242424242",
     )
     assert "Ada Lovelace" in prompt
@@ -105,6 +108,8 @@ def test_signup_prompt_contains_all_form_fields_and_kyc_attestation() -> None:
     assert "+6590001234" in prompt
     assert "PLAN_M" in prompt
     assert "4242424242424242" in prompt
+    assert "90000042" in prompt
+    assert "msisdn_preference" in prompt
     # Per-customer signature — policy requires unique document hashes.
     assert "myinfo-simulated-prebaked-v1::ada@bss-cli.local" in prompt
     assert KYC_PREBAKED_ATTESTATION_ID in prompt

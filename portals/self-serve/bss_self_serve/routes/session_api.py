@@ -25,6 +25,7 @@ async def session_status(request: Request, session_id: str) -> JSONResponse:
         {
             "session_id": sig.session_id,
             "plan": sig.plan,
+            "msisdn_preference": sig.msisdn,
             "done": sig.done,
             "error": sig.error,
             "customer_id": sig.customer_id,

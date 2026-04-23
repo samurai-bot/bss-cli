@@ -11,7 +11,7 @@ show every tool call from the very first event.
 from __future__ import annotations
 
 from bss_orchestrator.clients import get_clients
-from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi import APIRouter, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ..offerings import find_plan, flatten_offerings
@@ -22,7 +22,11 @@ router = APIRouter()
 
 
 @router.get("/signup/{plan_id}", response_class=HTMLResponse)
-async def signup_form(request: Request, plan_id: str) -> HTMLResponse:
+async def signup_form(
+    request: Request,
+    plan_id: str,
+    msisdn: str = Query(default=..., pattern=r"^[0-9]{6,15}$"),
+) -> HTMLResponse:
     clients = get_clients()
     raw = await clients.catalog.list_offerings()
     plan = find_plan(flatten_offerings(raw), plan_id)
@@ -33,9 +37,17 @@ async def signup_form(request: Request, plan_id: str) -> HTMLResponse:
         "signup.html",
         {
             "plan": plan,
+            "msisdn": msisdn,
+            "msisdn_display": _format_msisdn(msisdn),
             "kyc_attestation_id": KYC_PREBAKED_ATTESTATION_ID,
         },
     )
+
+
+def _format_msisdn(msisdn: str) -> str:
+    if len(msisdn) == 8 and msisdn.isdigit():
+        return f"+65 {msisdn[:4]} {msisdn[4:]}"
+    return msisdn
 
 
 @router.get("/signup/{plan_id}/progress", response_class=HTMLResponse)
@@ -58,6 +70,7 @@ async def signup_submit(
     name: str = Form(...),
     email: str = Form(...),
     phone: str = Form(...),
+    msisdn: str = Form(...),
     card_pan: str = Form(...),
 ) -> RedirectResponse:
     store = request.app.state.session_store
@@ -66,6 +79,7 @@ async def signup_submit(
         name=name,
         email=email,
         phone=phone,
+        msisdn=msisdn,
         card_pan=card_pan,
     )
     # 303 flips a POST → GET on the redirect, which is what we want.

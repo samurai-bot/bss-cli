@@ -36,12 +36,31 @@ steps:
       status: 200
       body_contains: [PLAN_S, PLAN_M, PLAN_L, "Agent Activity"]
 
-  - name: visit signup form
-    http: GET /signup/{{ plan }}
+  - name: visit MSISDN picker
+    http: GET /signup/{{ plan }}/msisdn
     base_url: "{{ portal_base }}"
     expect:
       status: 200
-      body_contains: ["KYC-PREBAKED-001", "4242 4242 4242 4242"]
+      body_contains: ["Pick your number", "msisdn-tile"]
+
+  - name: pick an MSISDN from the available pool
+    http: GET /signup/{{ plan }}/msisdn
+    base_url: "{{ portal_base }}"
+    expect:
+      status: 200
+    capture_regex:
+      chosen_msisdn:
+        source: body_text
+        # First non-assigned tile on the page — the picker sorts
+        # available numbers first, so regex-first wins the race.
+        pattern: 'msisdn=([0-9]{6,15})'
+
+  - name: visit signup form with chosen number
+    http: GET /signup/{{ plan }}?msisdn={{ chosen_msisdn }}
+    base_url: "{{ portal_base }}"
+    expect:
+      status: 200
+      body_contains: ["KYC-PREBAKED-001", "4242 4242 4242 4242", "{{ chosen_msisdn }}"]
 
   - name: submit signup form
     http: POST /signup
@@ -51,6 +70,7 @@ steps:
       name: "{{ customer_name }}"
       email: "{{ customer_email }}"
       phone: "{{ customer_phone }}"
+      msisdn: "{{ chosen_msisdn }}"
       card_pan: "4242424242424242"
     expect:
       status: 303
@@ -95,13 +115,14 @@ steps:
 
   # ── Backend-side verification: all writes reached the policy layer ──
 
-  - name: subscription is active on PLAN_M
+  - name: subscription is active on PLAN_M with chosen MSISDN
     assert:
       tool: subscription.get
       args: {subscription_id: "{{ subscription_id }}"}
       expect:
         state: active
         offeringId: "{{ plan }}"
+        msisdn: "{{ chosen_msisdn }}"
       poll:
         interval_ms: 200
         timeout_seconds: 10

@@ -782,6 +782,34 @@ uniqueness check every time. The attestation is still flagged
 subscription still activates. Real eKYC is a channel-layer concern
 deferred indefinitely per CLAUDE.md §Scope boundaries.
 
+## 2026-04-23 — v0.4.0 — Portal signup gets an MSISDN picker step (spec amendment)
+**Context:** The v0.4 spec's signup flow was plan → form → agent.
+Numbers were auto-assigned by SOM's `reserve_next_msisdn` during
+decomposition. Manual testing surfaced the gap — a prospect expects
+a "pick your number" moment, same as every real Singapore MVNO
+signup (Singtel, Circles, M1, etc.).
+**Decision:** Insert `GET /signup/{plan}/msisdn` between plan
+selection and the form. The picker calls
+`inventory.list_msisdns(state="available", limit=12)` and renders a
+4×3 grid of tiles; each tile links to `/signup/{plan}?msisdn=...`.
+The signup form now requires the query param and carries the number
+as a hidden input through POST. `session.msisdn` stores it. The
+agent prompt tells the LLM to pass `msisdn_preference=<number>` to
+`order.create`, which COM already accepted and SOM already honored
+via `reserve_next_msisdn(preference=...)`.
+**Alternatives:** Defer to v0.5 — rejected; the demo felt broken
+without it, and the plumbing was a one-line change on the agent
+side (the tool already supported `msisdn_preference`). Lock-and-hold
+the chosen number during session — rejected; demo-scale collisions
+are harmless and the fallback-to-next-available behavior is the
+right thing anyway.
+**Consequences:** Spec widens from "one form, three fields" to
+"picker + form". Hero scenario now captures the first available
+MSISDN off the picker page (regex on `msisdn=([0-9]+)`), carries
+it through the form, and asserts the subscription's `msisdn`
+matches. DECISIONS entry is the amendment record — phases/V0_4_0.md
+remains the original intent.
+
 ## 2026-04-23 — v0.4.0 — Scenario runner gains `http:` step type
 **Context:** The portal hero scenario needs to drive the portal
 through its public HTTP surface (landing → signup POST → SSE

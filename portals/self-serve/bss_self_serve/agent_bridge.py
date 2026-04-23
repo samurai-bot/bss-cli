@@ -29,6 +29,7 @@ async def drive_signup(
     email: str,
     phone: str,
     plan: str,
+    msisdn: str,
     card_pan: str,
 ) -> AsyncIterator[AgentEvent]:
     """Drive a portal signup through the LLM agent and yield each event."""
@@ -37,6 +38,7 @@ async def drive_signup(
         email=email,
         phone=phone,
         plan=plan,
+        msisdn=msisdn,
         card_pan=card_pan,
     )
     async for event in astream_once(

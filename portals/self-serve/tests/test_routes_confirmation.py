@@ -12,6 +12,7 @@ def _seed_session_and_subscription(client, fake_clients, *, with_activation_on_s
             name="Ada",
             email="ada@example.sg",
             phone="+6590001234",
+            msisdn="90000042",
             card_pan="4242424242424242",
         )
     )
