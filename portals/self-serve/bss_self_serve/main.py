@@ -68,14 +68,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             }
         )
 
-    # Route modules mounted here in later commits (Steps 4-6).
-    from .routes import agent_events, activation, confirmation, landing, signup
+    from .routes import (
+        activation,
+        agent_events,
+        confirmation,
+        landing,
+        session_api,
+        signup,
+    )
 
     app.include_router(landing.router)
     app.include_router(signup.router)
     app.include_router(activation.router)
     app.include_router(confirmation.router)
     app.include_router(agent_events.router)
+    app.include_router(session_api.router)
 
     return app
 

@@ -105,7 +105,7 @@ def render_html(event: AgentEvent) -> str:
 # ID harvesting — read tool results and stash IDs on the session.
 # ─────────────────────────────────────────────────────────────────────────────
 
-_CUST_RE = re.compile(r"CUST-\d+")
+_CUST_RE = re.compile(r"CUST-[a-f0-9]+", re.IGNORECASE)
 _ORD_RE = re.compile(r"ORD-\d+")
 _SUB_RE = re.compile(r"SUB-\d+")
 _LPA_RE = re.compile(r"LPA:[^ \"'\n]+")

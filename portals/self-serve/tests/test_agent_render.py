@@ -70,13 +70,13 @@ def test_render_html_returns_single_line() -> None:
 
 def test_harvest_ids_picks_up_customer_order_subscription_lpa() -> None:
     text = (
-        'Created customer CUST-042, order ORD-014, subscription SUB-007, '
+        'Created customer CUST-3efd656f, order ORD-0014, subscription SUB-0007, '
         'activation code LPA:1$smdp.example.com$abc-123-def.'
     )
     out = harvest_ids(text)
-    assert out["customer_id"] == "CUST-042"
-    assert out["order_id"] == "ORD-014"
-    assert out["subscription_id"] == "SUB-007"
+    assert out["customer_id"] == "CUST-3efd656f"
+    assert out["order_id"] == "ORD-0014"
+    assert out["subscription_id"] == "SUB-0007"
     assert out["activation_code"].startswith("LPA:1$")
 
 
