@@ -14,7 +14,7 @@ dev = [
 ]
 
 [tool.uv.workspace]
-members = ["packages/*", "services/*", "cli", "orchestrator"]
+members = ["packages/*", "services/*", "portals/*", "cli", "orchestrator"]
 exclude = ["services/_template"]
 
 [tool.ruff]
