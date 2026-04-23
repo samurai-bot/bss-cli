@@ -25,8 +25,41 @@ class FakeCatalog:
 
 
 @dataclass
+class FakeSubscription:
+    records: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    async def get(self, subscription_id: str) -> dict[str, Any]:
+        if subscription_id not in self.records:
+            raise KeyError(subscription_id)
+        return dict(self.records[subscription_id])
+
+
+@dataclass
+class FakeInventory:
+    activations: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    async def get_activation_code(self, iccid: str) -> dict[str, Any]:
+        if iccid not in self.activations:
+            raise KeyError(iccid)
+        return dict(self.activations[iccid])
+
+
+@dataclass
+class FakeCOM:
+    orders: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    async def get_order(self, order_id: str) -> dict[str, Any]:
+        if order_id not in self.orders:
+            raise KeyError(order_id)
+        return dict(self.orders[order_id])
+
+
+@dataclass
 class FakeClientsBundle:
     catalog: FakeCatalog = field(default_factory=FakeCatalog)
+    subscription: FakeSubscription = field(default_factory=FakeSubscription)
+    inventory: FakeInventory = field(default_factory=FakeInventory)
+    com: FakeCOM = field(default_factory=FakeCOM)
 
 
 SAMPLE_OFFERINGS = [
@@ -81,7 +114,9 @@ def client(fake_clients: FakeClientsBundle):
     # Patch get_clients at every import site the routes use. Using
     # ``create=False`` so we don't accidentally create missing attrs.
     with patch("bss_self_serve.routes.landing.get_clients", return_value=fake_clients), \
-         patch("bss_self_serve.routes.signup.get_clients", return_value=fake_clients):
+         patch("bss_self_serve.routes.signup.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.activation.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.confirmation.get_clients", return_value=fake_clients):
         app = create_app(Settings())
         with TestClient(app) as c:
             yield c

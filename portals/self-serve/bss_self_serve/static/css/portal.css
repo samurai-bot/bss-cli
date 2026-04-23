@@ -315,6 +315,50 @@ code {
 }
 .agent-event--error .agent-event-icon { color: var(--accent-error); }
 
+/* ─── Confirmation (QR + LPA) ────────────────────────────── */
+
+.confirmation-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 32px;
+  align-items: start;
+  margin-top: 16px;
+}
+.confirmation-qr img {
+  background: #fff; padding: 12px; border-radius: 8px;
+  display: block;
+}
+.confirmation-qr-fallback {
+  width: 240px; height: 240px; display: grid; place-items: center;
+  background: var(--bg-inset); border: 1px dashed var(--border);
+  border-radius: 8px; color: var(--fg-muted); text-align: center; padding: 16px;
+}
+.confirmation-details dl {
+  display: grid; grid-template-columns: max-content 1fr;
+  row-gap: 10px; column-gap: 16px;
+  margin: 0;
+}
+.confirmation-details dt {
+  color: var(--fg-muted); font-size: 13px;
+  font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.5px;
+  padding-top: 2px;
+}
+.confirmation-details dd { margin: 0; }
+.confirmation-lpa {
+  display: inline-block; word-break: break-all;
+  background: var(--bg-code); padding: 6px 10px; border-radius: 4px;
+  color: var(--accent-amber); font-size: 13px; max-width: 100%;
+}
+.copy-btn {
+  background: transparent; border: 1px solid var(--border);
+  color: var(--fg-muted); padding: 3px 10px; margin-left: 8px;
+  border-radius: 3px; cursor: pointer;
+  font-family: var(--mono); font-size: 12px;
+}
+.copy-btn:hover { color: var(--accent); border-color: var(--accent-dim); }
+.confirmation-next { margin-top: 24px; }
+.confirmation-next .plan-card-cta { display: inline-block; width: auto; padding: 8px 20px; }
+
 /* ─── Progress (Step 5 fills the body with live-agent state) ── */
 
 .progress-card {
