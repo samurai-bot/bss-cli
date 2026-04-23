@@ -36,10 +36,12 @@ from .actions import resolve_action
 from .assertions import AssertionResult, evaluate_expect, poll_until
 from .context import ScenarioContext
 from .llm_executor import LLMDisabled, execute_ask_step
+from .http_step import run_http_step
 from .schema import (
     ActionStep,
     AskStep,
     AssertStep,
+    HTTPStep,
     LLMMode,
     Scenario,
     Step,
@@ -174,6 +176,8 @@ async def _run_step(
         return await _run_assert(step, ctx)
     if isinstance(step, AskStep):
         return await _run_ask(step, ctx, mode=mode)
+    if isinstance(step, HTTPStep):
+        return await run_http_step(step, ctx, format_error=_format_error)
     # pydantic guarantees the union — defensive default
     return StepResult(
         name=getattr(step, "name", "?"),

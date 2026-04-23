@@ -695,3 +695,140 @@ behavior shift in audit/interaction logging. The "actor" in audit
 events still comes from the `X-BSS-Actor` header (still trusted, as
 v0.3 is single-tenant-shared-token scope; Phase 12 takes that from
 JWT claims).
+
+## 2026-04-23 — v0.4.0 — Portal writes route through the LLM orchestrator
+**Context:** A web portal needs a write path. The natural instinct is
+to have route handlers call `bss-clients` mutating methods directly —
+it's one hop, it's fast, it's familiar. The alternative is to translate
+every portal write into a natural-language instruction and run it
+through the LangGraph ReAct agent (`bss_orchestrator.session.astream_once`).
+**Decision:** Every portal write goes through the agent. Route handlers
+never import `CustomerClient.create`, `OrderClient.create`, etc. Reads
+(list offerings, fetch subscription, poll order state) still go direct
+— LLM-mediating a pass-through read is pointless latency.
+**Alternatives:** (a) Direct bss-clients writes from handlers —
+rejected; creates a second write path that drifts from the CLI over
+time, and the "every write goes through the policy layer via the
+agent or CLI" claim in CLAUDE.md becomes a lie. (b) Portal drives a
+custom thin agent without LangGraph — rejected; duplicates the tool
+dispatch logic.
+**Consequences:** Portal writes are policy-gated through the same
+chokepoint as CLI writes. The agent log widget — streamed via SSE
+in real time — becomes the v0.4 demo artifact: the viewer watches
+the LLM chain `customer.create → attest_kyc → add_card → order.create
+→ wait_until → get_esim_activation` while the form submits. Latency
+cost: ~10-20s per signup on MiMo v2 Flash, up to 60s on a worse
+model. For a demo, that's the point; for a real customer portal it
+would be unacceptable and Phase 12+ would add a direct write path
+gated by `auth_context.role`.
+
+## 2026-04-23 — v0.4.0 — Agent log widget streams HTML partials, not JSON
+**Context:** The SSE stream from `/agent/events/{session}` needs a
+frame format. JSON-with-client-side-templating is the obvious choice
+— but that means shipping a template engine in the browser, which
+means JS, which means a bundler.
+**Decision:** Server-rendered HTML partials per SSE frame. HTMX's
+`sse-swap` extension swaps each frame into a target element with no
+JS on our side. One inline `<script>` block intercepts `htmx:sseMessage`
+solely to chase the final `event: redirect` (navigates the whole
+window when the agent signals "done").
+**Alternatives:** JSON + React/Vue/Svelte — rejected; breaks the
+"pure server-rendered, no bundler" rule. JSON + handwritten rendering
+in vanilla JS — rejected; indistinguishable from adding a template
+engine in 50 lines, and the HTML-partial path is strictly simpler.
+**Consequences:** Zero client-side template logic. The widget is a
+thin DOM shell; HTMX mutates it. The portal has exactly one JS file
+we wrote (`static/js/agent_log.js` — 1 line of placeholder content
+we haven't needed yet).
+
+## 2026-04-23 — v0.4.0 — Portal skips inbound auth by design
+**Context:** v0.3 ships `BSSApiTokenMiddleware` on every BSS service.
+Consistency says put it on the portal too. But the portal is a public
+signup surface — there's no token a prospect could send, and adding
+one would make the demo not a demo.
+**Decision:** No `BSSApiTokenMiddleware` on the portal. Its inbound
+HTTP surface is fully open. Outbound calls to BSS services DO carry
+`BSS_API_TOKEN` via the same `TokenAuthProvider` every other outbound
+caller uses. Port 9001 should only be published where network-level
+exposure control is acceptable (localhost, Tailscale, private VLAN).
+**Alternatives:** A separate "portal token" header — rejected; no
+real auth story, just security theater. Cloudflare Access / oauth2-proxy
+in front — out of scope for a demo; deployers who need it can wire it
+themselves.
+**Consequences:** Anyone who can reach port 9001 can burn LLM budget
+and create fake customers. That's deliberate for v0.x. Phase 12 swaps
+this for customer-facing OAuth (Apple/Google Sign-In, SMS OTP) as a
+first-class channel-layer concern.
+
+## 2026-04-23 — v0.4.0 — KYC attestation uses per-customer signatures, no seed file
+**Context:** Phase spec called for a `services/crm/bss_seed/kyc_prebaked.py`
+seeding a known-good attestation token. Reconnaissance found the
+existing `customer.attest_kyc` policy enforces a
+`document_hash_unique_per_tenant` rule — one identity document =
+one customer — so a single shared signature fails on the second
+signup.
+**Decision:** No seed file. The portal prompt derives the signature
+per-customer by templating the email into
+`myinfo-simulated-prebaked-v1::{email}`. The displayed attestation
+ID (`KYC-PREBAKED-001`) stays stable so the UI reads consistently.
+**Alternatives:** Pre-seed 100 known-good signatures and cycle through
+them — rejected; non-deterministic across scenario runs. Bypass the
+policy in dev mode — rejected; the policy chokepoint is the whole
+point of Write Policy doctrine.
+**Consequences:** The agent's `customer.attest_kyc` call passes the
+uniqueness check every time. The attestation is still flagged
+`not_verified` in CRM because the stub doesn't verify the signature
+(there is no real Myinfo); downstream doesn't block on that, so the
+subscription still activates. Real eKYC is a channel-layer concern
+deferred indefinitely per CLAUDE.md §Scope boundaries.
+
+## 2026-04-23 — v0.4.0 — Portal signup gets an MSISDN picker step (spec amendment)
+**Context:** The v0.4 spec's signup flow was plan → form → agent.
+Numbers were auto-assigned by SOM's `reserve_next_msisdn` during
+decomposition. Manual testing surfaced the gap — a prospect expects
+a "pick your number" moment, same as every real Singapore MVNO
+signup (Singtel, Circles, M1, etc.).
+**Decision:** Insert `GET /signup/{plan}/msisdn` between plan
+selection and the form. The picker calls
+`inventory.list_msisdns(state="available", limit=12)` and renders a
+4×3 grid of tiles; each tile links to `/signup/{plan}?msisdn=...`.
+The signup form now requires the query param and carries the number
+as a hidden input through POST. `session.msisdn` stores it. The
+agent prompt tells the LLM to pass `msisdn_preference=<number>` to
+`order.create`, which COM already accepted and SOM already honored
+via `reserve_next_msisdn(preference=...)`.
+**Alternatives:** Defer to v0.5 — rejected; the demo felt broken
+without it, and the plumbing was a one-line change on the agent
+side (the tool already supported `msisdn_preference`). Lock-and-hold
+the chosen number during session — rejected; demo-scale collisions
+are harmless and the fallback-to-next-available behavior is the
+right thing anyway.
+**Consequences:** Spec widens from "one form, three fields" to
+"picker + form". Hero scenario now captures the first available
+MSISDN off the picker page (regex on `msisdn=([0-9]+)`), carries
+it through the form, and asserts the subscription's `msisdn`
+matches. DECISIONS entry is the amendment record — phases/V0_4_0.md
+remains the original intent.
+
+## 2026-04-23 — v0.4.0 — Scenario runner gains `http:` step type
+**Context:** The portal hero scenario needs to drive the portal
+through its public HTTP surface (landing → signup POST → SSE
+trigger → status poll → confirmation). Existing step types are
+`action:` (tool calls), `assert:` (read + match), `ask:` (LLM).
+None can make an HTTP request.
+**Decision:** Add an `http:` step type with GET/POST, form + json
+bodies, expect matchers (status, body_contains, headers), the same
+`poll:` contract as `assert:`, jsonpath `capture:` against a
+synthetic `{status, headers, body, body_text}` shape, plus
+`capture_regex:` for the common "pull a session id out of a
+Location header" case, and `drain_stream:` to drive SSE endpoints
+to completion.
+**Alternatives:** Shell out to curl via a new `bash:` step —
+rejected; YAML files would become opaque and non-portable. Drive
+the portal through `action:` tool calls that themselves make HTTP
+requests — rejected; the point of the portal hero is to exercise
+the public HTTP surface, not bypass it.
+**Consequences:** One new step type in schema.py + one handler in
+http_step.py (~200 lines). The existing action/assert/ask path is
+untouched. Future portals (v0.5 CSR console) reuse this step type
+without extension.

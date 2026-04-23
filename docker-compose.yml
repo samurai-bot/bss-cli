@@ -104,6 +104,35 @@ services:
     environment:
       BSS_SERVICE_NAME: provisioning-sim
 
+  # v0.4 — self-serve customer portal. Public-facing (no inbound auth);
+  # outbound calls carry BSS_API_TOKEN via orchestrator's client factory.
+  # Port 9001 is the first of the 9xxx portal range; v0.5 CSR takes 9002.
+  portal-self-serve:
+    <<: *bss-service
+    build:
+      context: .
+      dockerfile: portals/self-serve/Dockerfile
+    ports: ["9001:8000"]
+    environment:
+      BSS_SERVICE_NAME: portal-self-serve
+      BSS_CATALOG_URL: http://catalog:8000
+      BSS_COM_URL: http://com:8000
+      BSS_SUBSCRIPTION_URL: http://subscription:8000
+      BSS_CRM_URL: http://crm:8000
+      BSS_PAYMENT_URL: http://payment:8000
+      BSS_SOM_URL: http://som:8000
+      BSS_MEDIATION_URL: http://mediation:8000
+      BSS_PROVISIONING_URL: http://provisioning-sim:8000
+      BSS_RATING_URL: http://rating:8000
+    depends_on:
+      catalog: { condition: service_healthy }
+      crm:     { condition: service_healthy }
+      com:     { condition: service_healthy }
+      subscription: { condition: service_healthy }
+      payment: { condition: service_healthy }
+      som:     { condition: service_healthy }
+      provisioning-sim: { condition: service_healthy }
+
 networks:
   bss:
     driver: bridge

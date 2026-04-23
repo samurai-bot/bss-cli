@@ -104,7 +104,72 @@ class AssertStep(_StepBase):
         return self
 
 
-Step = ActionStep | AskStep | AssertStep
+# ─────────────────────────────────────────────────────────────────────────────
+# HTTP step (v0.4 — driven by the portal hero scenario)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class HTTPExpect(BaseModel):
+    """What the scenario expects to see in a single HTTP response."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: int | list[int] | None = None
+    body_contains: list[str] = Field(default_factory=list)
+    body_not_contains: list[str] = Field(default_factory=list)
+    headers_match: dict[str, str] = Field(default_factory=dict)
+    body_json_equals: dict[str, Any] = Field(default_factory=dict)
+
+
+class HTTPRegexCapture(BaseModel):
+    """Capture a regex group out of a header or body field."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: str  # e.g., "headers.location" or "body_text"
+    pattern: str
+    group: int = 1
+
+
+class HTTPStep(_StepBase):
+    """Driven HTTP request — GET/POST with expect + poll + capture.
+
+    ``http`` is ``"GET /url"`` or ``"POST /url"``; URLs may be absolute
+    or relative to ``base_url``. ``form`` and ``json`` are mutually
+    exclusive. ``drain_stream`` reads-and-discards a streaming body
+    (used to drive the SSE endpoint to completion so the agent runs
+    to the final event before later steps poll for results).
+    """
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    http: str
+    base_url: str = "http://portal-self-serve:8000"
+    headers: dict[str, str] = Field(default_factory=dict)
+    form: dict[str, Any] = Field(default_factory=dict)
+    json_body: dict[str, Any] | None = Field(default=None, alias="json")
+    expect: HTTPExpect = Field(default_factory=HTTPExpect)
+    poll: Poll | None = None
+    follow_redirects: bool = False
+    drain_stream: bool = False
+    timeout_seconds: float = 30.0
+    capture_regex: dict[str, HTTPRegexCapture] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _validate(self):
+        if self.form and self.json_body is not None:
+            raise ValueError("http: step cannot set both `form` and `json`")
+        method, _, url = self.http.strip().partition(" ")
+        if method.upper() not in ("GET", "POST"):
+            raise ValueError(
+                f"http: step method must be GET or POST, got {method!r}"
+            )
+        if not url:
+            raise ValueError("http: step must include a URL after the method")
+        return self
+
+
+Step = ActionStep | AskStep | AssertStep | HTTPStep
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -53,3 +53,23 @@ def use_scenario_context(
     rid = request_id or str(uuid.uuid4())
     set_context(actor=f"scenario:{name}", channel="scenario", request_id=rid)
     return rid
+
+
+def use_channel_context(
+    *, channel: str, actor: str | None = None, request_id: str | None = None
+) -> str:
+    """Mark calls with an arbitrary channel label — used by portals (v0.4+).
+
+    When a portal (self-serve, CSR) routes a request through the LLM, it
+    sets ``channel="portal-self-serve"`` so CRM's interaction log attributes
+    the resulting actions to the portal, not to raw LLM use. Actor stays
+    the model slug by default so forensic "which model did this" lookups
+    still work via ``audit.domain_event.actor``.
+    """
+    rid = request_id or str(uuid.uuid4())
+    set_context(
+        actor=actor or settings.llm_actor,
+        channel=channel,
+        request_id=rid,
+    )
+    return rid
