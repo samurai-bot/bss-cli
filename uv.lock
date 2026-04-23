@@ -10,6 +10,7 @@ members = [
     "bss-clients",
     "bss-clock",
     "bss-events",
+    "bss-middleware",
     "bss-models",
     "bss-orchestrator",
     "bss-seed",
@@ -336,6 +337,39 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=0.23" },
+]
+
+[[package]]
+name = "bss-middleware"
+version = "0.1.0"
+source = { editable = "packages/bss-middleware" }
+dependencies = [
+    { name = "pydantic-settings" },
+    { name = "starlette" },
+    { name = "structlog" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pydantic-settings", specifier = ">=2.0" },
+    { name = "starlette", specifier = ">=0.40" },
+    { name = "structlog", specifier = ">=24.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "fastapi", specifier = ">=0.110" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-asyncio", specifier = ">=0.23" },
