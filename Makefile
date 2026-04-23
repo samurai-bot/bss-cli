@@ -1,4 +1,4 @@
-.PHONY: help up up-all up-minimal up-core down build test fmt lint migrate seed reset-db check-clock scenarios scenarios-hero
+.PHONY: help up up-all up-minimal up-core down build test fmt lint migrate seed reset-db check-clock doctrine-check scenarios scenarios-hero
 
 help:
 	@echo "  up               — 10 BSS services (BYOI Postgres/RabbitMQ)"
@@ -13,6 +13,7 @@ help:
 	@echo "  scenarios        — run every scenario in ./scenarios (including LLM ask: steps)"
 	@echo "  scenarios-hero   — run only the three hero ship-gate scenarios"
 	@echo "  check-clock      — grep guard: all datetime.now sites route through bss-clock"
+	@echo "  doctrine-check   — run all v0.6+ grep guards (clock, channel, portals, no-bypass)"
 
 up:
 	docker compose up -d
@@ -43,9 +44,12 @@ test:
 
 check-clock:
 	@# Every business-logic site must route through bss_clock.now().
-	@# Tests, CLI, and the bss-clock package itself are allowed to call datetime.now directly.
-	@hits=$$(grep -rnE "datetime\.(utcnow|now)" --include="*.py" services/ packages/ orchestrator/ 2>/dev/null \
+	@# bss-clock impl, the `bss clock` cmd surface, the renderer wall-clock fallback,
+	@# tests, and any line carrying `# noqa: bss-clock` are exempt.
+	@hits=$$(grep -rnE "datetime\.(utcnow|now)" --include="*.py" \
+		services/ packages/ orchestrator/ cli/bss_cli/ portals/ 2>/dev/null \
 		| grep -v "packages/bss-clock/" \
+		| grep -v "cli/bss_cli/commands/clock.py" \
 		| grep -v "/tests/" \
 		| grep -v "# noqa: bss-clock" \
 		|| true); \
@@ -55,6 +59,40 @@ check-clock:
 		exit 1; \
 	fi; \
 	echo "✓ all datetime.now sites route through bss_clock"
+
+doctrine-check: check-clock
+	@# v0.6 wrapper around all grep-guard doctrine checks.
+	@# Adds: portal-handlers don't write via bss-clients (v0.4+),
+	@# and OTel imports stay out of business-logic services/policies (v0.2).
+	@hits=$$(grep -rnE '\.(create|charge|purchase_vas|terminate|add_card|remove_method|cancel)\(' \
+		--include='*.py' portals/*/bss_*/routes/ 2>/dev/null \
+		| grep -v 'session_store.create\|store.create\|ask_about_customer' \
+		|| true); \
+	if [ -n "$$hits" ]; then \
+		echo "✗ portal route handlers must not call mutating bss-clients:"; \
+		echo "$$hits"; \
+		exit 1; \
+	fi; \
+	echo "✓ portal handlers route writes through agent_bridge"
+	@hits=$$(grep -rn 'from opentelemetry' --include='*.py' \
+		services/*/app/services/ services/*/app/policies/ 2>/dev/null \
+		|| true); \
+	if [ -n "$$hits" ]; then \
+		echo "✗ OTel imports leaked into service/policy layer:"; \
+		echo "$$hits"; \
+		exit 1; \
+	fi; \
+	echo "✓ OTel surfaces stay out of services/ and policies/"
+	@hits=$$(grep -rn 'campaignos' services/ cli/ orchestrator/ portals/ packages/ scenarios/ 2>/dev/null \
+		| grep -v '/alembic/versions/' \
+		| grep -v '# noqa: campaignos' \
+		|| true); \
+	if [ -n "$$hits" ]; then \
+		echo "✗ campaign OS reference leaked:"; \
+		echo "$$hits"; \
+		exit 1; \
+	fi; \
+	echo "✓ campaign OS untouched"
 
 fmt:
 	uv run ruff format .

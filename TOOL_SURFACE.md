@@ -164,53 +164,66 @@ SOM writes are internally triggered by COM events — no direct-create tool for 
 | `events.list` | read | Query `audit.domain_event` |
 | `agents.list` | read | |
 
-## Billing tools (v0.2 planned — not implemented in v0.1)
+## Billing tools — `(planned, deferred from v0.2)`
+
+Reserved namespace; deferred from v0.2 to a future minor — see `DECISIONS.md` 2026-04-13 and `ROADMAP.md` "Near-term". Not in `TOOL_REGISTRY`.
 
 | Tool | Type | Description |
 |---|---|---|
-| `billing.get_account` | read | v0.2 — receipt account summary |
-| `billing.list_bills` | read | v0.2 — statement history |
-| `billing.get_bill` | read | v0.2 — single statement |
-| `billing.get_current_period` | read | v0.2 — current-period receipt summary |
+| `billing.get_account` | read | `(planned)` Receipt account summary |
+| `billing.list_bills` | read | `(planned)` Statement history |
+| `billing.get_bill` | read | `(planned)` Single statement |
+| `billing.get_current_period` | read | `(planned)` Current-period receipt summary |
 
-Not in v0.1 but reserved in the tool namespace. v0.2 will implement these as a read-only view layer over `payment.payment_attempt` — see `DECISIONS.md` 2026-04-13.
+## Knowledge tools — `(planned, Phase 11)`
 
-## Knowledge tools (post-v0.1, Phase 11)
-
-| Tool | Type | Description |
-|---|---|---|
-| `knowledge.search` | read | RAG over `docs/runbooks/` indexed into pgvector |
-| `knowledge.get_document` | read | Full runbook by slug |
-
-Not in v0.1 but reserved in the tool namespace.
-
-## Admin tools (CLI-only, not LLM-exposed)
+Reserved namespace for the RAG-over-runbooks surface. Not in `TOOL_REGISTRY`.
 
 | Tool | Type | Description |
 |---|---|---|
-| `admin.reset_operational_data` | destructive | Scenario runner only |
-| `admin.release_stuck_msisdn` | destructive | Emergency fix |
-| `admin.release_stuck_esim` | destructive | Emergency fix |
-| `admin.force_subscription_state` | destructive | Heavily audited |
+| `knowledge.search` | read | `(planned, Phase 11)` RAG over `docs/runbooks/` indexed into pgvector |
+| `knowledge.get_document` | read | `(planned, Phase 11)` Full runbook by slug |
+
+## Admin tools — `(admin only, not in LLM registry)`
+
+Exposed via `bss admin <verb>` and the scenario runner setup; intentionally NOT registered in `TOOL_REGISTRY` so the LLM can't reach them.
+
+| Tool | Type | Description |
+|---|---|---|
+| `admin.reset_operational_data` | destructive | `(admin only)` Scenario runner setup hook |
+| `admin.release_stuck_msisdn` | destructive | `(admin only)` Emergency fix |
+| `admin.release_stuck_esim` | destructive | `(admin only)` Emergency fix |
+| `admin.force_subscription_state` | destructive | `(admin only)` Heavily audited |
 
 ---
 
-## Tool count
+## Tool count (v0.6 re-tally)
+
+Counted from the live `TOOL_REGISTRY` against this document; the
+`test_registry_matches_tool_surface_md` test enforces consistency.
 
 - Customer + KYC + interaction + case + ticket: **19**
 - Inventory: **4**
 - Catalog: **4**
 - Payment: **6**
 - Order (COM): **5**
-- SOM: **4**
+- SOM: **2**
 - Provisioning: **5**
 - Subscription: **7**
+- Service: **2**
 - Usage: **2**
-- Billing: **0** (deferred to v0.2; 4 tools planned)
-- Ops/observability: **9**
-- Admin: **4** (not LLM-exposed)
+- Trace + observability: **5** (`trace.get`, `trace.for_order`, `trace.for_subscription`, `events.list`, `agents.list`)
+- Clock: **4**
 
-**Total LLM-exposed: ~61 tools.** Down from ~65 in the v0.1.0 plan; billing deferred to v0.2 (see `DECISIONS.md` 2026-04-13).
+**Total LLM-exposed: 73 tools** (live in `TOOL_REGISTRY`).
+
+**Documented but not registered (planned / non-tool):**
+- 4 `billing.*` — `(planned)` reserved namespace, see ROADMAP near-term
+- 2 `knowledge.*` — `(planned, Phase 11)` RAG surface
+- 4 `admin.*` — `(admin only)` not exposed to the LLM
+- (3 historical strays — `audit.domain_event`, `payment.payment_attempt`, `order.create.requires_verified_customer` — are tables / policies, not tools; clarified inline near their references rather than listed in the tool tables.)
+
+**13 documented placeholder rows / 73 registered tools.** A reader scanning the tables should immediately tell live tools from planned/non-tool entries by the `(...)` status badge in the description column.
 
 ## Why this is still manageable
 

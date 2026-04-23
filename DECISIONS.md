@@ -934,3 +934,135 @@ for data questions, `case.list` for ticket questions, etc.
 The hero scenario passes 3 runs in a row at 12-17s each on MiMo
 v2 Flash. Without the snapshot, the same model wandered for ~30s
 and sometimes hit the timeout.
+
+## 2026-04-23 — v0.6.0 — Catalog service granted formal layout exemption
+**Context:** Every other v0.x service uses `services/<svc>/app/`
+with subdirs (`api/`, `services/`, `policies/`, `repositories/`,
+`domain/`, `events/`). Catalog uses a flatter pre-template layout
+(`services/catalog/bss_catalog/{app.py, deps.py, repository.py,
+routes/, schemas/}`). v0.6 set out to migrate it for consistency.
+**Decision:** Formal exemption. Catalog stays on the
+`bss_catalog/` package layout. Reasoning:
+1. Catalog is read-only stateless — no policies, no service classes,
+   no event publishers, no domain ORM models. Migrating to the
+   standard template adds 4 empty directories (`services/`, `policies/`,
+   `events/`, `domain/`) for symmetry's sake. Empty-directory ceremony
+   was rejected per the spec's "either proceed with empty-dir
+   ceremony or grant catalog a documented exception" wording.
+2. The migration would force changing `services/catalog/tests/`
+   import paths (`from bss_catalog.app import create_app` →
+   `from app.main import create_app`), which violates the spec's
+   hard constraint *"Existing services/catalog/tests/ must pass
+   without modification."*
+3. The `bss_catalog/` layout is actually MORE faithful to what
+   catalog does — one repository file, three route files, one
+   TMF schema. Forcing the standard structure dilutes the
+   "shape mirrors function" property.
+**Alternatives:** (a) Migrate with empty-dir ceremony + edit
+test imports — rejected; violates the constraint. (b) Keep
+package name `bss_catalog/` but reorganize internals
+(`routes/` → `api/`, `repository.py` → `repositories/catalog_repo.py`,
+`deps.py` → `dependencies.py`) — rejected; partial-migration
+doesn't get the consistency win and breaks `from bss_catalog.repository`
+test imports. (c) Add a `bss_catalog` shim re-export package —
+rejected; cosmetic indirection that future maintainers will
+remove.
+**Consequences:** `services/catalog/` remains the one structurally-
+distinct service. CONTRIBUTING.md's "How to add a new service"
+section points contributors at `services/_template/` (the standard
+template) — catalog is the documented exception, not the model.
+If catalog ever gains policies (e.g. catalog write APIs in v0.7+),
+the migration becomes natural at that point because the test-import
+constraint can be relaxed alongside the larger change.
+
+## 2026-04-23 — v0.6.0 — Per-service Dockerfile sed workaround retired (uv 0.11+ workspace builds)
+**Context:** DECISIONS.md 2026-04-11 documented the per-service
+Dockerfile `sed` workaround required because `uv` ≤ ~0.5 couldn't
+resolve workspace dependencies inside a Docker build context that
+only contained the service subtree. Tracked as a Phase 11 backlog
+item; v0.6 evaluated empirically against `uv 0.11.3`.
+**Decision:** Retire the sed workaround. The new template per
+service:
+```Dockerfile
+COPY pyproject.toml uv.lock ./
+COPY packages/ packages/
+COPY services/<svc>/ services/<svc>/   # or portals/<name>/ + orchestrator/
+
+ENV UV_PROJECT_ENVIRONMENT=/app/.venv
+RUN uv sync --package <svc> --frozen --no-dev
+```
+The COPY now includes the workspace root manifest +  `uv.lock`,
+which is what `uv sync --package <svc>` needs to resolve the
+workspace graph. Portal Dockerfiles additionally COPY `orchestrator/`
+because portals depend on `bss-orchestrator` (workspace member).
+**Empirical test:** All 11 containers (9 services + 2 portals)
+build with the new template; all come up healthy within 23 s of
+`docker compose up -d --wait` (compared to 18 s with the sed
+workaround — overhead is ~5 s from larger COPY layers); image
+sizes within 5% of the previous version.
+**Alternatives:** (a) Keep the sed workaround — rejected; the
+debt was a v0.1 expedient and uv has matured since. (b) Publish
+internal packages to a local PyPI mirror — rejected; too much
+infrastructure for a demo project. (c) Switch to a Bazel/Pants/Nx
+build system — rejected; massive scope creep.
+**Consequences:** Each Dockerfile dropped from ~28 lines to ~22.
+Workspace dependency rewires (e.g., adding a new bss-* package)
+no longer require touching every Dockerfile. The COPY pattern
+also doubles as cache-friendly: changes to packages/ invalidate
+all service builds, but changes to services/<svc>/ only invalidate
+that one service. ARCHITECTURE.md "Per-service Dockerfile pattern"
+section needs a small update to reflect the new template (drift
+fix in PR 5).
+
+## 2026-04-23 — v0.6.0 — `datetime.now()` doctrine grep guard added to CI
+**Context:** SHIP_CRITERIA.md v0.1 entry: *"No business-logic module
+calls `datetime.utcnow()` — `bss_clock.now()` is the only path.
+Enforced by grep guard in CI (post-v0.1)."* The grep guard never
+landed across v0.1-v0.5; one violation accumulated
+(`cli/bss_cli/commands/usage.py`).
+**Decision:** v0.6 adds `make doctrine-check` (a one-line
+`rg 'datetime\.(now|utcnow)\(\)'` over business-logic paths,
+excluding `**/tests/**`, `**/config.py`, the bss-clock package
+itself, the `bss clock` CLI surface, and lines marked with
+`# noqa: bss-clock`). The existing violation in `usage.py` is
+fixed in the same commit. The guard is wired into both
+`make verify` (local) and CI as a required check.
+**Alternatives:** (a) Manual reviewer discipline — rejected;
+empirically already failed once. (b) AST-based check — rejected;
+overkill for a one-line grep. (c) Just delete the SHIP_CRITERIA
+claim — rejected; the doctrine is right, only the enforcement
+was missing.
+**Consequences:** Future violations fail CI. The exemption list
+(`config.py`, `bss clock` cmd surface, `# noqa: bss-clock`-annotated
+sites) is small and explicit; expanding it requires a code-review
+diff so the exception is reviewable.
+
+## 2026-04-23 — v0.6.0 — TOOL_SURFACE.md tagged for aspirational vs registered tools
+**Context:** TOOL_SURFACE.md listed 86 entries; 73 of them
+matched `TOOL_REGISTRY` exactly, 13 were aspirational
+placeholders (`billing.*` v0.2-deferred, `knowledge.*` Phase 11,
+`admin.*` admin-only out of LLM registry) or non-tool concepts
+(`audit.domain_event` is a table, not a tool;
+`payment.payment_attempt` ditto;
+`order.create.requires_verified_customer` is a policy rule).
+A reader couldn't tell which entries were live LLM tools versus
+roadmap placeholders.
+**Decision:** v0.6 tags every aspirational / non-tool row
+explicitly with a status badge in the description column
+(`(planned vX.Y)`, `(admin only — not in LLM registry)`,
+`(table — not a tool)`, `(policy rule — not a tool)`). The
+registry-vs-doc sync test (`test_registry_matches_tool_surface_md`)
+continues to enforce that every registered tool is documented;
+v0.6 also adds the inverse direction (every doc-listed *tool*
+that isn't tagged with a status badge must be in the registry).
+**Alternatives:** (a) Delete the aspirational rows — rejected;
+the placeholders document intent that ROADMAP.md alone doesn't
+capture (e.g. specific tool argument shapes the future
+implementation should match). (b) Move them all to ROADMAP.md —
+rejected; ROADMAP.md is for versioned shipments, not per-tool
+specs.
+**Consequences:** Tool count line at the bottom of TOOL_SURFACE.md
+states both numbers ("73 registered, 13 planned/non-tool").
+Strangers reading the doc cold immediately see what's live vs
+what's specced. The `_LLM_HIDDEN_TOOLS` mechanism unchanged.
+
