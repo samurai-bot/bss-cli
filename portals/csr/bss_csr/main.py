@@ -24,6 +24,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from .agent_session import AgentAskStore
 from .config import Settings
 from .deps import install_redirect_handler
 from .session import OperatorSessionStore
@@ -38,6 +39,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.session_store = OperatorSessionStore(
         ttl_seconds=settings.bss_portal_csr_session_ttl,
     )
+    app.state.agent_ask_store = AgentAskStore(ttl_seconds=1800)
     log.info("portal.starting", service=settings.service_name)
     yield
     log.info("portal.stopping", service=settings.service_name)
