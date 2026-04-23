@@ -201,9 +201,17 @@ def _handle_slash(cmd: str, session: Session) -> bool:
 
 
 async def _drive_turn(session: Session, line: str) -> None:
-    """Stream one LLM turn, dispatching renderers on `*.get` tool results."""
+    """Stream one LLM turn, dispatching renderers on `*.get` tool results.
+
+    When at least one renderer card prints, the model's text reply is
+    suppressed — for ``show me X``-shaped questions the card IS the
+    answer; the prose panel just restates it. For tool-less or
+    no-renderer turns (`what can you do?`, `top up 5GB`, etc.) the
+    text reply is shown as before.
+    """
     final_text = ""
     error: str | None = None
+    cards_shown = 0
     async for event in session.astream(line):
         if isinstance(event, AgentEventToolCallCompleted):
             # Prefer ``result_full`` (added v0.6) — the truncated
@@ -213,6 +221,7 @@ async def _drive_turn(session: Session, line: str) -> None:
             card = _maybe_render_tool_result(event.name, raw)
             if card:
                 rprint(card)
+                cards_shown += 1
         elif isinstance(event, AgentEventFinalMessage):
             final_text = event.text
         elif isinstance(event, AgentEventError):
@@ -221,6 +230,9 @@ async def _drive_turn(session: Session, line: str) -> None:
 
     if error:
         rprint(f"[red]LLM error:[/] {error}")
+        return
+    if cards_shown:
+        # The card is the answer; skip the redundant prose panel.
         return
     if not final_text.strip():
         rprint("[yellow](no reply)[/]")
