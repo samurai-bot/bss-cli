@@ -37,6 +37,7 @@ async def publish(
         actor=ctx.actor,
         channel=ctx.channel,
         tenant_id=ctx.tenant,
+        service_identity=ctx.service_identity,
         payload=payload or {},
         schema_version=1,
         published_to_mq=False,

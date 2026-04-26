@@ -29,3 +29,7 @@ BSS_ICCID_LAST4 = "bss.iccid.last4"
 # Caller context (also propagated via X-BSS-* headers; useful on root spans)
 BSS_ACTOR = "bss.actor"
 BSS_CHANNEL = "bss.channel"
+# v0.9 — perimeter-resolved identity. Comes from validated token, not
+# a header. Lets `bss trace` filter spans by initiating surface
+# (default / portal_self_serve / partner_<name>).
+BSS_SERVICE_IDENTITY = "bss.service.identity"

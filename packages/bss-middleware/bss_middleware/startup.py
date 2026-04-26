@@ -1,45 +1,42 @@
-"""Fail-fast startup validator for BSS_API_TOKEN.
+"""Fail-fast startup validators for the BSS perimeter token map.
 
-Called from each service's lifespan BEFORE any other setup. If the
-token is unset, still the ``changeme`` sentinel from .env.example,
-or shorter than 32 chars, the service refuses to start. Compose's
-healthcheck surfaces the crash immediately.
+v0.9 introduces ``validate_token_map_present`` (in ``api_token.py``)
+which loads + validates a multi-token map. The v0.3-era helper
+``validate_api_token_present`` is preserved as a thin alias that
+emits a one-time deprecation warning, so existing service ``main.py``
+files continue to boot mid-rollout. Both names removed in v1.0.
 """
 
 from __future__ import annotations
 
+import warnings
+
 import structlog
 
-from .config import Settings
+from .api_token import validate_token_map_present
 
 log = structlog.get_logger(__name__)
 
-_SENTINEL = "changeme"
-_MIN_LENGTH = 32
+_DEPRECATION_LOGGED = False
 
 
 def validate_api_token_present() -> None:
-    """Raise RuntimeError if BSS_API_TOKEN is unset / sentinel / too short.
+    """Deprecated alias — call ``validate_token_map_present`` instead.
 
-    Loads via pydantic-settings so .env values are picked up the same
-    way services read other env config. Os.environ also works in tests
-    (monkeypatch.setenv) because pydantic-settings reads os.environ first.
+    Behaviour is identical for the single-``BSS_API_TOKEN`` case (v0.3
+    deployments). For multi-token deployments the new name returns
+    the loaded ``TokenMap``; this alias drops the return for source
+    compat. A deprecation warning is emitted once per process so logs
+    surface the migration without spamming.
     """
-    token = Settings().BSS_API_TOKEN
-    if not token:
-        raise RuntimeError(
-            "BSS_API_TOKEN is unset; set it in .env before starting services. "
-            "Generate via: openssl rand -hex 32"
+    global _DEPRECATION_LOGGED
+    if not _DEPRECATION_LOGGED:
+        warnings.warn(
+            "validate_api_token_present() is deprecated — call "
+            "validate_token_map_present() instead. The old name is removed in v1.0.",
+            DeprecationWarning,
+            stacklevel=2,
         )
-    if token == _SENTINEL:
-        raise RuntimeError(
-            "BSS_API_TOKEN is still the .env.example sentinel value "
-            f"({_SENTINEL!r}); replace it with a real token. "
-            "Generate via: openssl rand -hex 32"
-        )
-    if len(token) < _MIN_LENGTH:
-        raise RuntimeError(
-            f"BSS_API_TOKEN is too short ({len(token)} chars; need >={_MIN_LENGTH}). "
-            "Generate via: openssl rand -hex 32"
-        )
-    log.info("auth.token.validated", length=len(token))
+        log.info("auth.token.validate.deprecated_alias")
+        _DEPRECATION_LOGGED = True
+    validate_token_map_present()

@@ -155,6 +155,63 @@ Extracted in v0.5 (before the second portal was written) to prevent the agent lo
 
 The hero artifact on every portal page is the **Agent Activity** log widget — a side panel streaming the LLM's tool-call sequence live. Strip it out and the portal looks like any CRUD frontend; keep it in and the viewer can see the LLM is doing the work, tool by tool. Details in `phases/V0_4_0.md` and `phases/V0_5_0.md`.
 
+### Named-token perimeter (v0.9)
+
+v0.9 splits the v0.3 single-token model so each external-facing surface carries its own identity at the BSS perimeter. The diagram below shows the post-v0.9 token flow; the orchestrator and CSR keep using `BSS_API_TOKEN` (default identity), while the self-serve portal carries `BSS_PORTAL_SELF_SERVE_API_TOKEN` (`portal_self_serve` identity).
+
+```
+                ┌─────────────┐
+                │   browser   │
+                └──────┬──────┘
+                       │ session cookie (no BSS token here — server-side only)
+                       ▼
+   ┌──────────────────────────┐         ┌──────────────────────────┐
+   │ portal-self-serve (9001) │         │ csr-console (9002)       │
+   │  outbound: NamedToken    │         │  outbound: TokenAuth     │
+   │  → BSS_PORTAL_SELF_SERVE_API_TOKEN  │         │  → BSS_API_TOKEN         │
+   │  identity: portal_self_  │         │  identity: default       │
+   │            serve         │         │                          │
+   └──────────────┬───────────┘         └──────────────┬───────────┘
+                  │                                    │
+                  ▼                                    ▼
+   ┌─────────────────────────────────────────────────────────────────┐
+   │              orchestrator (cli + scenario runner)               │
+   │              outbound: TokenAuth → BSS_API_TOKEN                │
+   └─────────────────────────────┬───────────────────────────────────┘
+                                 │ X-BSS-API-Token: <one of N>
+                                 ▼
+   ┌─────────────────────────────────────────────────────────────────┐
+   │   BSSApiTokenMiddleware (every BSS service)                     │
+   │   • TokenMap loaded once at startup from BSS_*_API_TOKEN envs   │
+   │   • hashed (HMAC-SHA-256, fixed salt) for safe debug logs       │
+   │   • on hit: scope["service_identity"] = <derived from token>    │
+   │   • on miss: 401 (rate-limit-aware log policy)                  │
+   └─────────────────────────────┬───────────────────────────────────┘
+                                 ▼
+                   ┌──────────────────────────────┐
+                   │ RequestIdMiddleware          │
+                   │ • reads scope.service_identity
+                   │ • → auth_context             │
+                   │ • → structlog ctxvars        │
+                   │ • → OTel server span attr    │
+                   └──────────────┬───────────────┘
+                                  ▼
+                          route → policy → repo
+                                  │
+                                  ▼
+                       audit.domain_event
+                       (service_identity column,
+                        backfilled to 'default'
+                        for pre-v0.9 rows)
+```
+
+**Key invariants:**
+- Identity is *resolved* (validated token → identity), never *asserted* (no `X-BSS-Service-Identity` header is trusted).
+- Each surface carries a distinct token. Sharing a named token across surfaces collapses the blast-radius reduction.
+- Rotation is restart-based and per-token. A leaked portal token rotates without disturbing orchestrator/CSR.
+
+Phase 12 swap: replace `BSSApiTokenMiddleware` with a JWT validator. `auth_context.py` reads claims instead of headers. The named-token model is the bridge — it leaves the principal/role layer untouched while distinguishing surfaces, so the Phase 12 step is mechanical.
+
 ### Portal authentication (self-serve, v0.8)
 
 v0.8 puts a login wall in front of the self-serve portal. CSR console retains its v0.5 stub auth (Phase 12 picks up CSR's auth story). Schema, library, and middleware live separately so Phase 12 can swap the OAuth/JWT validator without touching business logic.
@@ -506,6 +563,7 @@ Cost estimate: **~$4,000-8,000/month**.
 | Zero-downtime deploys | ⚠️ | Needs graceful SIGTERM handler (wired in Phase 3 reference slice) |
 | TLS termination | ➖ | Expected at ALB / ingress layer, not per-service |
 | Auth between services | ⚠️ | Shared API token (v0.3) via `BSSApiTokenMiddleware` + `TokenAuthProvider`. Per-principal OAuth2 + JWT is Phase 12. `auth_context.py` seam unchanged — Phase 12 fills the principal from JWT claims. |
+| Per-portal named tokens | ✅ | v0.9 splits the perimeter into a `TokenMap` of named tokens. Self-serve portal carries `BSS_PORTAL_SELF_SERVE_API_TOKEN` → `service_identity="portal_self_serve"`; orchestrator + CSR keep `BSS_API_TOKEN` (default identity). `service_identity` flows into `audit.domain_event`, structlog, OTel spans. Rotation is per-token, restart-based. |
 | Operator-facing portal | ⚠️ | CSR console (v0.5) on port 9002 ships with stub login (NOT real auth). Real OAuth Phase 12. Trusted-network deploy only. |
 | Customer-facing portal | ⚠️ | Self-serve signup (v0.4) on port 9001 ships with no inbound auth (it's a public signup surface by design). Network exposure control required. |
 | Rate limiting per principal | ❌ | Phase 12 |

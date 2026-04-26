@@ -17,7 +17,7 @@ session as ``identity_id`` so the agent stream can call
 
 from __future__ import annotations
 
-from bss_orchestrator.clients import get_clients
+from ..clients import get_clients
 from bss_portal_auth import IdentityView
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse

@@ -10,7 +10,7 @@ that refreshes itself via HTMX until ``order.get`` reports
 
 from __future__ import annotations
 
-from bss_orchestrator.clients import get_clients
+from ..clients import get_clients
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 

@@ -21,14 +21,46 @@ graph so downstream service-to-service calls carry the right attribution.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Union
 
+from bss_clients import reset_service_identity_token, set_service_identity_token
 from bss_telemetry import semconv, tracer
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
 from .context import use_channel_context, use_llm_context
 from .graph import build_graph
+
+
+def _resolve_token_for_service_identity(identity: str) -> str:
+    """v0.9 — resolve a service_identity label to its env-loaded token.
+
+    Mirrors the convention used by ``bss_middleware.api_token``:
+
+    - ``"default"`` → ``BSS_API_TOKEN``
+    - ``"<name>"`` → ``BSS_<NAME>_API_TOKEN`` (uppercased, underscored)
+
+    Raises ``RuntimeError`` if the env var is unset. The orchestrator's
+    own clients keep using ``BSS_API_TOKEN`` (via ``get_clients()``); the
+    resolved token here is set into bss-clients' per-Context override
+    so individual ``astream_once`` invocations can run "as another
+    surface" for audit-attribution purposes (v0.11 portal chat).
+    """
+    if not identity:
+        raise ValueError("service_identity must be a non-empty string")
+    env_var = (
+        "BSS_API_TOKEN" if identity == "default"
+        else f"BSS_{identity.upper()}_API_TOKEN"
+    )
+    token = os.environ.get(env_var, "")
+    if not token:
+        raise RuntimeError(
+            f"astream_once(service_identity={identity!r}): {env_var} is unset. "
+            "The named token must be provisioned in the orchestrator's env "
+            "for downstream calls to carry it. Generate via: openssl rand -hex 32"
+        )
+    return token
 
 
 def _last_ai_text(messages: list[BaseMessage]) -> str:
@@ -243,6 +275,7 @@ async def astream_once(
     allow_destructive: bool = False,
     channel: str = "llm",
     actor: str | None = None,
+    service_identity: str | None = None,
 ) -> AsyncIterator[AgentEvent]:
     """Streaming variant of ``ask_once``. Yields ``AgentEvent`` as the graph runs.
 
@@ -257,6 +290,19 @@ async def astream_once(
     rather than to ``llm-<model-slug>``. Per-model attribution still
     lives in ``audit.domain_event.actor``. Defaults to ``settings.llm_actor``
     when ``channel != "llm"`` and no actor is given (preserves v0.4 behaviour).
+
+    The ``service_identity`` parameter (v0.9+) overrides the X-BSS-API-Token
+    on outbound bss-clients calls so audit rows attribute writes to the
+    initiating surface (e.g. ``"portal_self_serve"`` when v0.11 portal chat
+    routes a question through the orchestrator). The orchestrator's own
+    clients are constructed with ``BSS_API_TOKEN``; this parameter
+    populates a per-Context ``ContextVar`` that bss-clients reads on each
+    request. The token is resolved by env-var convention (``"portal_self_serve"``
+    → ``BSS_PORTAL_SELF_SERVE_API_TOKEN``); receiving services then resolve
+    ``service_identity`` from token validation. Defaults to ``None`` —
+    no override; callers using the orchestrator default identity get v0.4
+    behaviour. v0.9 ships the parameter and propagation; the portal chat
+    surface in v0.11 is the first caller.
 
     Event sequence:
     1. One ``AgentEventPromptReceived`` at the start.
@@ -278,59 +324,79 @@ async def astream_once(
         span.set_attribute("bss.ask.streaming", True)
         if actor:
             span.set_attribute("bss.actor", actor)
+        if service_identity:
+            span.set_attribute("bss.service.identity", service_identity)
 
         if channel == "llm":
             use_llm_context()
         else:
             use_channel_context(channel=channel, actor=actor)
 
-        yield AgentEventPromptReceived(prompt=prompt)
-
-        graph = build_graph(allow_destructive=allow_destructive)
-        seen_call_ids: set[str] = set()
-        last_ai_text = ""
+        # v0.9 — per-Context X-BSS-API-Token override. Resolves once
+        # before the graph runs; reset on exit (in finally) so a stream
+        # that raises still leaves the Context clean for whatever runs
+        # next in the same task.
+        identity_reset_token = None
+        if service_identity:
+            override_token = _resolve_token_for_service_identity(service_identity)
+            identity_reset_token = set_service_identity_token(override_token)
 
         try:
-            async for update in graph.astream(
-                {"messages": [HumanMessage(content=prompt)]},
-                stream_mode="updates",
-            ):
-                # update shape: {node_name: {"messages": [new_messages...]}}
-                for node_output in update.values():
-                    messages = node_output.get("messages", []) if isinstance(node_output, dict) else []
-                    for msg in messages:
-                        if isinstance(msg, AIMessage):
-                            tool_calls = getattr(msg, "tool_calls", []) or []
-                            for tc in tool_calls:
-                                call_id = tc.get("id", "") or ""
-                                if call_id in seen_call_ids:
-                                    continue
-                                seen_call_ids.add(call_id)
-                                yield AgentEventToolCallStarted(
-                                    name=tc.get("name", "") or "",
-                                    args=tc.get("args", {}) or {},
-                                    call_id=call_id,
-                                )
-                            # Track the latest textual AI message so we emit
-                            # the right "final" text at the end. The final
-                            # message is the AIMessage without tool_calls.
-                            text = _ai_text(msg)
-                            if text and not tool_calls:
-                                last_ai_text = text
-                        elif isinstance(msg, ToolMessage):
-                            full = str(msg.content) if msg.content is not None else ""
-                            yield AgentEventToolCallCompleted(
-                                name=msg.name or "",
-                                call_id=msg.tool_call_id or "",
-                                result=_truncate(full),
-                                result_full=full,
-                                is_error=getattr(msg, "status", None) == "error",
-                            )
-        except Exception as exc:  # noqa: BLE001
-            yield AgentEventError(message=f"{type(exc).__name__}: {exc}")
-            return
+            yield AgentEventPromptReceived(prompt=prompt)
 
-        yield AgentEventFinalMessage(text=last_ai_text)
+            graph = build_graph(allow_destructive=allow_destructive)
+            seen_call_ids: set[str] = set()
+            last_ai_text = ""
+
+            try:
+                async for update in graph.astream(
+                    {"messages": [HumanMessage(content=prompt)]},
+                    stream_mode="updates",
+                ):
+                    # update shape: {node_name: {"messages": [new_messages...]}}
+                    for node_output in update.values():
+                        messages = (
+                            node_output.get("messages", [])
+                            if isinstance(node_output, dict) else []
+                        )
+                        for msg in messages:
+                            if isinstance(msg, AIMessage):
+                                tool_calls = getattr(msg, "tool_calls", []) or []
+                                for tc in tool_calls:
+                                    call_id = tc.get("id", "") or ""
+                                    if call_id in seen_call_ids:
+                                        continue
+                                    seen_call_ids.add(call_id)
+                                    yield AgentEventToolCallStarted(
+                                        name=tc.get("name", "") or "",
+                                        args=tc.get("args", {}) or {},
+                                        call_id=call_id,
+                                    )
+                                # Track the latest textual AI message so we emit
+                                # the right "final" text at the end. The final
+                                # message is the AIMessage without tool_calls.
+                                text = _ai_text(msg)
+                                if text and not tool_calls:
+                                    last_ai_text = text
+                            elif isinstance(msg, ToolMessage):
+                                full = (
+                                    str(msg.content) if msg.content is not None else ""
+                                )
+                                yield AgentEventToolCallCompleted(
+                                    name=msg.name or "",
+                                    call_id=msg.tool_call_id or "",
+                                    result=_truncate(full),
+                                    result_full=full,
+                                    is_error=getattr(msg, "status", None) == "error",
+                                )
+            except Exception as exc:  # noqa: BLE001
+                yield AgentEventError(message=f"{type(exc).__name__}: {exc}")
+                return
+
+            yield AgentEventFinalMessage(text=last_ai_text)
+        finally:
+            if identity_reset_token is not None:
+                reset_service_identity_token(identity_reset_token)
 
 
 def _ai_text(msg: AIMessage) -> str:

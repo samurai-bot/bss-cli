@@ -1,0 +1,145 @@
+name: named_token_audit_separation
+description: |
+  v0.9 hero scenario: prove that two writes initiated through two
+  different perimeter tokens land in audit.domain_event with two
+  different service_identity values. This is the named-token
+  blast-radius story made concrete — operators can answer "which
+  surface initiated this write?" by SQL pivot alone, without
+  correlating across log streams.
+
+  Flow:
+
+  1. Reset operational data + freeze the clock so the audit query
+     window is bounded and deterministic.
+  2. Orchestrator-default-identity write: create a customer + KYC
+     attestation through the standard tool path (TokenAuthProvider
+     against BSS_API_TOKEN). Receiving services resolve
+     service_identity="default".
+  3. Portal-named-identity write: add a contact medium to that
+     customer using NamedTokenAuthProvider against BSS_PORTAL_SELF_SERVE_API_TOKEN.
+     Receiving services resolve service_identity="portal_self_serve".
+  4. Query audit.domain_event with the new ?serviceIdentity= filter
+     and assert:
+       - the customer creation event is attributed to "default"
+       - the contact-medium add event is attributed to "portal_self_serve"
+       - "default" and "portal_self_serve" rows are non-overlapping
+         for this customer's aggregate_id
+
+  Three runs in a row green is the v0.9 ship gate.
+
+  Prerequisite: BSS_PORTAL_SELF_SERVE_API_TOKEN must be set in the env, and the
+  BSS services must have been started with that same value in their
+  TokenMap (either by env-file or compose env_file). Without that the
+  portal write step 401s and the scenario fails loud — which is the
+  correct failure mode (the hero exists to demonstrate the named-token
+  path actually works end-to-end).
+
+tags: [hero, v0_9, audit, regression, deterministic]
+
+setup:
+  reset_operational_data: true
+  freeze_clock_at: "2026-04-26T09:00:00+00:00"
+
+variables:
+  customer_email: "named-token-{{ run_id }}@bss-cli.local"
+  customer_phone: "+6590009999"
+  portal_extra_email: "portal-extra-{{ run_id }}@bss-cli.local"
+
+steps:
+  # ─── Orchestrator-default-identity write ────────────────────────────
+  - name: create customer (orchestrator default identity)
+    action: customer.create
+    args:
+      name: "Named Token Demo"
+      email: "{{ customer_email }}"
+      phone: "{{ customer_phone }}"
+    capture:
+      customer_id: "$.id"
+
+  - name: attest KYC (orchestrator default identity)
+    action: customer.attest_kyc
+    args:
+      customer_id: "{{ customer_id }}"
+      provider: myinfo
+      attestation_token: "stub-signed-jwt-{{ run_id }}"
+
+  # ─── Portal-named-identity write ────────────────────────────────────
+  - name: add contact medium via portal token
+    action: portal.write_demo_contact
+    args:
+      customer_id: "{{ customer_id }}"
+      medium_type: email
+      value: "{{ portal_extra_email }}"
+
+  # ─── Audit attribution assertions ───────────────────────────────────
+  # 1. Default-identity rows include the customer.created + kyc_attested
+  #    events for this customer.
+  - name: default-identity audit count for this customer is at least 2
+    assert:
+      tool: audit.count_by_identity
+      args:
+        service_identity: default
+        aggregate_id: "{{ customer_id }}"
+      expect:
+        identity: default
+        count: { gte: 2 }
+
+  - name: default-identity audit list includes customer.created
+    assert:
+      tool: audit.events_by_identity
+      args:
+        service_identity: default
+        aggregate_id: "{{ customer_id }}"
+      expect:
+        any_match:
+          eventType: customer.created
+          serviceIdentity: default
+
+  - name: default-identity audit list includes customer.kyc_attested
+    assert:
+      tool: audit.events_by_identity
+      args:
+        service_identity: default
+        aggregate_id: "{{ customer_id }}"
+      expect:
+        any_match:
+          eventType: customer.kyc_attested
+          serviceIdentity: default
+
+  # 2. Portal-identity rows include the contact_medium_added event.
+  - name: portal-identity audit count for this customer is at least 1
+    assert:
+      tool: audit.count_by_identity
+      args:
+        service_identity: portal_self_serve
+        aggregate_id: "{{ customer_id }}"
+      expect:
+        identity: portal_self_serve
+        count: { gte: 1 }
+
+  - name: portal-identity audit list includes contact_medium_added
+    assert:
+      tool: audit.events_by_identity
+      args:
+        service_identity: portal_self_serve
+        aggregate_id: "{{ customer_id }}"
+      expect:
+        any_match:
+          eventType: customer.contact_medium_added
+          serviceIdentity: portal_self_serve
+
+  # 3. Negative control: portal-identity rows must NOT include the
+  #    initial customer.created event (it predates the portal write
+  #    AND was issued by the orchestrator's default token).
+  - name: portal-identity rows do NOT include customer.created
+    assert:
+      tool: audit.count_by_identity
+      args:
+        service_identity: portal_self_serve
+        aggregate_id: "{{ customer_id }}"
+        event_type_prefix: customer.created
+      expect:
+        count: 0
+
+teardown:
+  unfreeze_clock: true

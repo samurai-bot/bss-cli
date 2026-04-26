@@ -160,7 +160,7 @@ class CRMClient(BSSClient):
         attestation_token: str,
         provider_reference: str | None = None,
         document_type: str = "nric",
-        document_number: str = "S1234567D",
+        document_number: str | None = None,
         document_country: str = "SG",
         date_of_birth: str = "1990-01-01",
         nationality: str | None = "SG",
@@ -172,8 +172,25 @@ class CRMClient(BSSClient):
         Full channel-layer attestation. Scenario runners can pass only
         ``provider`` + ``attestation_token`` and rely on the stub defaults
         for the rest; real channels fill in every field.
+
+        ``document_number`` defaults to a deterministic per-customer stub
+        (``"S" + customer_id-derived digits + "D"``) so portal-driven
+        signups don't all hash to the same value and trip the
+        ``customer.attest_kyc.document_hash_unique_per_tenant`` policy.
+        Real channels override with the actual NRIC / passport number.
         """
         from datetime import datetime, timezone
+
+        if document_number is None:
+            # Stub: derive 7 digits from the hex tail of customer_id.
+            # Pads with zeros if the id has <7 hex digits in its tail.
+            tail = "".join(ch for ch in customer_id if ch.isdigit())
+            digits = (tail + "0000000")[:7] if tail else "0000000"
+            # If hex-only tail produced too few digits, fall back to
+            # ord-summing the customer_id for distinctness.
+            if digits == "0000000":
+                digits = f"{abs(hash(customer_id)) % 10_000_000:07d}"
+            document_number = f"S{digits}D"
 
         body = {
             "provider": provider,

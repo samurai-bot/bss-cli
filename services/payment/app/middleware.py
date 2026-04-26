@@ -11,6 +11,7 @@ import uuid
 import structlog
 from bss_clients import set_context
 from bss_clients.errors import ServerError
+from bss_telemetry import stamp_request_span
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app import auth_context
@@ -35,8 +36,17 @@ class RequestIdMiddleware:
         actor = headers.get("x-bss-actor", "system")
         channel = headers.get("x-bss-channel", "system")
         tenant = headers.get("x-bss-tenant", "DEFAULT")
+        # v0.9 — service_identity is set by BSSApiTokenMiddleware after
+        # token validation. Default fallback is for tests that bypass
+        # the perimeter middleware (direct ASGITransport against the app).
+        service_identity = scope.get("service_identity", "default")
 
-        auth_context.set_for_request(actor=actor, tenant=tenant, channel=channel)
+        auth_context.set_for_request(
+            actor=actor,
+            tenant=tenant,
+            channel=channel,
+            service_identity=service_identity,
+        )
         set_context(actor=actor, channel=channel, request_id=request_id)
 
         structlog.contextvars.clear_contextvars()
@@ -44,8 +54,17 @@ class RequestIdMiddleware:
             request_id=request_id,
             actor=actor,
             channel=channel,
+            service_identity=service_identity,
             method=scope.get("method", "?"),
             path=scope.get("path", "?"),
+        )
+
+        # v0.9 — stamp the active server span (set up by FastAPIInstrumentor)
+        # with caller context. Lets `bss trace` filter by service identity.
+        stamp_request_span(
+            actor=actor,
+            channel=channel,
+            service_identity=service_identity,
         )
 
         status_holder = {"status": 0}

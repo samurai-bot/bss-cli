@@ -18,6 +18,7 @@ from . import semconv
 from .bootstrap import configure_telemetry, tracer
 from .jaeger import JaegerClient, JaegerError
 from .propagation import current_trace_id, use_amqp_span
+from .request_span import stamp_request_span
 
 __all__ = [
     "JaegerClient",
@@ -25,6 +26,7 @@ __all__ = [
     "configure_telemetry",
     "current_trace_id",
     "semconv",
+    "stamp_request_span",
     "tracer",
     "use_amqp_span",
 ]

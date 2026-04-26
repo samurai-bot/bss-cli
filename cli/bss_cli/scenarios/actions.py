@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
-from bss_clients import AdminClient, TokenAuthProvider
+from bss_clients import AdminClient, AuditClient, TokenAuthProvider
 from bss_clients.errors import ClientError, NotFound, ServerError, Timeout
 from bss_middleware import api_token
 from bss_orchestrator.config import settings
@@ -124,6 +124,135 @@ async def clock_advance(duration: str) -> dict[str, Any]:
     return await _clock_fanout("/clock/advance", {"duration": duration})
 
 
+async def _fetch_events_by_identity(
+    service_identity: str,
+    *,
+    aggregate_type: str | None,
+    aggregate_id: str | None,
+    event_type_prefix: str | None,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Inner helper — query CRM's audit-events router and return the list."""
+    auth = TokenAuthProvider(api_token())
+    async with AuditClient(base_url=settings.crm_url, auth_provider=auth) as ac:
+        return await ac.list_events(
+            aggregate_type=aggregate_type,
+            aggregate_id=aggregate_id,
+            event_type_prefix=event_type_prefix,
+            service_identity=service_identity,
+            limit=limit,
+        )
+
+
+async def audit_events_by_identity(
+    service_identity: str,
+    *,
+    aggregate_type: str | None = None,
+    aggregate_id: str | None = None,
+    event_type_prefix: str | None = None,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """v0.9 — return audit.domain_event rows scoped to a perimeter identity.
+
+    ``audit.domain_event`` is a single table in the shared Postgres
+    instance, so any service's ``/audit-api/v1/events`` exposes the
+    full log. We hit CRM by convention (always running in compose).
+
+    Returns the events list directly (not a wrapped dict) so
+    scenario ``assert: any_match:`` can pivot on individual rows.
+    Pair with ``audit.count_by_identity`` for count assertions.
+    """
+    return await _fetch_events_by_identity(
+        service_identity,
+        aggregate_type=aggregate_type,
+        aggregate_id=aggregate_id,
+        event_type_prefix=event_type_prefix,
+        limit=limit,
+    )
+
+
+async def audit_count_by_identity(
+    service_identity: str,
+    *,
+    aggregate_type: str | None = None,
+    aggregate_id: str | None = None,
+    event_type_prefix: str | None = None,
+    limit: int = 200,
+) -> dict[str, Any]:
+    """Companion to ``audit.events_by_identity`` — returns ``{count, identity}``.
+
+    Lets a scenario assert on cardinality (``count: { gte: 1 }``) without
+    iterating the events list.
+    """
+    events = await _fetch_events_by_identity(
+        service_identity,
+        aggregate_type=aggregate_type,
+        aggregate_id=aggregate_id,
+        event_type_prefix=event_type_prefix,
+        limit=limit,
+    )
+    return {"identity": service_identity, "count": len(events)}
+
+
+async def portal_write_demo_contact(
+    customer_id: str,
+    *,
+    medium_type: str = "email",
+    value: str = "portal-demo@bss-cli.local",
+) -> dict[str, Any]:
+    """v0.9 hero — perform a single write attributed to the portal identity.
+
+    Constructs a ``NamedTokenAuthProvider("portal_self_serve",
+    "BSS_PORTAL_SELF_SERVE_API_TOKEN")`` so the receiving CRM service resolves
+    ``service_identity="portal_self_serve"`` from token validation. The
+    write itself is a contact-medium add — a small, auditable mutation
+    that fires a single ``customer.contact_medium_added`` event.
+
+    The TMF body shape (`{mediumType, value}`) is sent as a direct
+    httpx POST rather than via ``CRMClient.add_contact_medium`` because
+    the existing client method wraps ``value`` inside a TMF
+    ``characteristic`` block that the v0.1 CRM endpoint does not
+    accept. Fixing the client is pre-v0.9 scope-creep; the scenario
+    sidesteps it.
+
+    Required env: ``BSS_PORTAL_SELF_SERVE_API_TOKEN`` must be set AND must be present
+    in the BSS services' TokenMap (i.e., the same value the services
+    loaded at startup). Without that, the perimeter middleware 401s.
+    No fallback to BSS_API_TOKEN here — the hero scenario's whole point
+    is to demonstrate the distinct identity, so the action fails loud
+    when the named token isn't provisioned. ``NamedTokenAuthProvider``
+    raises ``RuntimeError("BSS_PORTAL_SELF_SERVE_API_TOKEN is unset")`` directly
+    when the env is missing, which surfaces in the scenario report.
+    """
+    from bss_clients import NamedTokenAuthProvider
+
+    auth = NamedTokenAuthProvider(
+        "portal_self_serve",
+        "BSS_PORTAL_SELF_SERVE_API_TOKEN",
+        # No fallback — see docstring: failing loud is the point.
+        fallback_env_var=None,
+    )
+    headers = await auth.get_headers()
+    url = (
+        f"{settings.crm_url}/tmf-api/customerManagement/v4/customer/"
+        f"{customer_id}/contactMedium"
+    )
+    body = {"mediumType": medium_type, "value": value}
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.post(url, headers=headers, json=body)
+        if resp.status_code >= 400:
+            raise RuntimeError(
+                f"portal-token contactMedium add failed: "
+                f"{resp.status_code} {resp.text}"
+            )
+        result = resp.json()
+    return {
+        "identity": auth.identity,
+        "customerId": customer_id,
+        "result": result,
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Registry
 # ─────────────────────────────────────────────────────────────────────────────
@@ -136,6 +265,15 @@ _SCENARIO_ACTIONS: dict[str, AsyncAction] = {
     "clock.freeze": clock_freeze,
     "clock.unfreeze": clock_unfreeze,
     "clock.advance": clock_advance,
+    # v0.9 — perimeter-identity audit query for hero scenario assertions.
+    # Not exposed as an LLM tool (the LLM has trace.for_order / trace.for_subscription
+    # for trace-level lookups). Operator-shaped audit pivots stay in scenario land.
+    "audit.events_by_identity": audit_events_by_identity,
+    "audit.count_by_identity": audit_count_by_identity,
+    # v0.9 — used by the named-token hero scenario to make a write that
+    # carries BSS_PORTAL_SELF_SERVE_API_TOKEN, demonstrating the distinct audit
+    # attribution (service_identity="portal_self_serve").
+    "portal.write_demo_contact": portal_write_demo_contact,
 }
 
 

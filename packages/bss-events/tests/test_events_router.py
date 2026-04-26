@@ -72,6 +72,7 @@ def _row(
         "actor": "system",
         "channel": "cli",
         "tenant_id": "DEFAULT",
+        "service_identity": "default",
         "payload": payload or {"note": "hello"},
         "schema_version": 1,
         "published_to_mq": False,
@@ -115,6 +116,30 @@ def test_no_filters_issues_bare_select_with_default_limit() -> None:
     assert "WHERE" not in sql
     assert "ORDER BY occurred_at ASC, id ASC" in sql
     assert factory.session.last_params["limit"] == 100
+
+
+def test_service_identity_filter_binds_param() -> None:
+    """v0.9 — ?serviceIdentity=portal_self_serve scopes the audit query."""
+    app, factory = _mk_app([])
+    client = TestClient(app)
+    r = client.get(
+        "/audit-api/v1/events",
+        params={"serviceIdentity": "portal_self_serve"},
+    )
+    assert r.status_code == 200
+    sql = factory.session.last_sql or ""
+    assert "service_identity = :service_identity" in sql
+    assert factory.session.last_params["service_identity"] == "portal_self_serve"
+
+
+def test_service_identity_response_field_camel_case() -> None:
+    """v0.9 — the row exposes serviceIdentity in the JSON shape."""
+    app, _ = _mk_app([_row()])
+    client = TestClient(app)
+    r = client.get("/audit-api/v1/events")
+    assert r.status_code == 200
+    e = r.json()["events"][0]
+    assert e["serviceIdentity"] == "default"
 
 
 def test_aggregate_and_event_type_filters_bind_params() -> None:

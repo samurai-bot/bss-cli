@@ -39,6 +39,10 @@ class _RenderSpan:
     is_error: bool
     is_sql: bool
     is_manual: bool
+    # v0.9 — perimeter-resolved identity from the bss.service.identity
+    # span tag. Empty string when the span pre-dates v0.9 or the
+    # request never reached RequestIdMiddleware (rare; auth-401 paths).
+    service_identity: str = ""
     depth: int = 0
 
 
@@ -62,6 +66,13 @@ def _normalize(trace: dict[str, Any]) -> tuple[list[_RenderSpan], int, int]:
             for tag in s.get("tags", [])
         )
         is_manual = operation in MANUAL_SPAN_NAMES
+        # v0.9 — surface bss.service.identity per span. Tag is set by
+        # the per-request span hook in each service's middleware.
+        service_identity = ""
+        for tag in s.get("tags", []):
+            if tag.get("key") == "bss.service.identity":
+                service_identity = str(tag.get("value", "") or "")
+                break
         # Find parent span_id from references
         parent_id = None
         for ref in s.get("references", []):
@@ -79,6 +90,7 @@ def _normalize(trace: dict[str, Any]) -> tuple[list[_RenderSpan], int, int]:
                 is_error=is_error,
                 is_sql=is_sql,
                 is_manual=is_manual,
+                service_identity=service_identity,
             )
         )
 
@@ -158,7 +170,12 @@ def render_swimlane(
     label_col_w = 14 + indent_per_level * max(max_depth, 1)
     duration_col_w = 8
     op_col_w = 40  # wide enough for the longest manual-span name (`com.order.complete_to_subscription` = 34) + asterisk
-    bar_w = max(20, term_width - label_col_w - duration_col_w - op_col_w - 4)
+    # v0.9 — perimeter identity column. Wide enough for "portal_self_serve"
+    # (17 chars) plus a leading space; truncate longer identities. Hidden
+    # entirely if no span has a tag (pre-v0.9 traces stay clean).
+    has_identity = any(r.service_identity for r in visible)
+    identity_col_w = 18 if has_identity else 0
+    bar_w = max(20, term_width - label_col_w - identity_col_w - duration_col_w - op_col_w - 4)
 
     trace_id = trace.get("traceID") or (
         rows[0].span_id if rows else "<unknown>"
@@ -195,7 +212,15 @@ def render_swimlane(
         if len(op_label) > op_col_w:
             op_label = op_label[: op_col_w - 1] + "…"
 
-        line = f"{svc_label}{bar}  {dur_label}  {op_label}{marker}"
+        # v0.9 — render the identity column when at least one span carries a tag.
+        if identity_col_w > 0:
+            ident = r.service_identity or "—"
+            if len(ident) > identity_col_w - 1:
+                ident = ident[: identity_col_w - 2] + "…"
+            identity_label = ident.ljust(identity_col_w)
+            line = f"{svc_label}{identity_label}{bar}  {dur_label}  {op_label}{marker}"
+        else:
+            line = f"{svc_label}{bar}  {dur_label}  {op_label}{marker}"
         if r.is_error:
             # Wrap full line in red ANSI
             line = f"\033[31m{line} ERR\033[0m"

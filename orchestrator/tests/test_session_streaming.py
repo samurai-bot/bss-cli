@@ -187,3 +187,105 @@ async def test_channel_parameter_reaches_bss_clients_context() -> None:
     # the channel propagation end-to-end is validated by the portal's own
     # integration test + the hero scenario's interaction-log assertion.
     assert True  # Structural assertion — no real invariant to check here
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v0.9 — service_identity propagation through astream_once
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+PORTAL_SELF_SERVE_TOKEN = (
+    "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+)
+
+
+async def test_service_identity_param_overrides_outbound_token(monkeypatch) -> None:
+    """``astream_once(service_identity="portal_self_serve")`` sets the per-Context
+    X-BSS-API-Token override so downstream bss-clients calls carry the
+    portal token. Captured via a graph stub that reads the contextvar at
+    the moment the graph "runs" (mid-stream)."""
+    monkeypatch.setenv("BSS_PORTAL_SELF_SERVE_API_TOKEN", PORTAL_SELF_SERVE_TOKEN)
+
+    captured: dict[str, str] = {}
+
+    class _CapturingGraph:
+        async def astream(self, _input, *, stream_mode="updates"):
+            # Read the override at the exact point downstream tool
+            # calls would observe it.
+            from bss_clients.base import _service_identity_token_var
+            captured["token"] = _service_identity_token_var.get()
+            yield {"agent": {"messages": [AIMessage(content="done")]}}
+
+    with patch("bss_orchestrator.session.build_graph", return_value=_CapturingGraph()):
+        async for _ in astream_once(
+            "x", service_identity="portal_self_serve"
+        ):
+            pass
+
+    assert captured["token"] == PORTAL_SELF_SERVE_TOKEN
+
+
+async def test_service_identity_default_means_no_override() -> None:
+    """No ``service_identity=`` arg → no override → bss-clients keeps using
+    whatever AuthProvider the orchestrator's clients were built with."""
+    captured: dict[str, str] = {}
+
+    class _CapturingGraph:
+        async def astream(self, _input, *, stream_mode="updates"):
+            from bss_clients.base import _service_identity_token_var
+            captured["token"] = _service_identity_token_var.get()
+            yield {"agent": {"messages": [AIMessage(content="done")]}}
+
+    with patch("bss_orchestrator.session.build_graph", return_value=_CapturingGraph()):
+        async for _ in astream_once("x"):
+            pass
+
+    # Empty string means "no override" — bss-clients _request will fall
+    # through to the AuthProvider's token (the orchestrator default).
+    assert captured["token"] == ""
+
+
+async def test_service_identity_override_reset_after_stream(monkeypatch) -> None:
+    """Override must NOT leak past the stream — even if the stream raises."""
+    monkeypatch.setenv("BSS_PORTAL_SELF_SERVE_API_TOKEN", PORTAL_SELF_SERVE_TOKEN)
+    from bss_clients.base import _service_identity_token_var
+
+    fake = _FakeGraph([{"agent": {"messages": [AIMessage(content="done")]}}])
+    with patch("bss_orchestrator.session.build_graph", return_value=fake):
+        async for _ in astream_once("x", service_identity="portal_self_serve"):
+            pass
+
+    # After the stream, the override must be cleared.
+    assert _service_identity_token_var.get() == ""
+
+
+async def test_service_identity_resolved_token_missing_env_raises(monkeypatch) -> None:
+    monkeypatch.delenv("BSS_NEVER_SET_API_TOKEN", raising=False)
+    fake = _FakeGraph([{"agent": {"messages": [AIMessage(content="done")]}}])
+    with patch("bss_orchestrator.session.build_graph", return_value=fake):
+        with pytest.raises(RuntimeError, match="BSS_NEVER_SET_API_TOKEN is unset"):
+            async for _ in astream_once("x", service_identity="never_set"):
+                pass
+
+
+async def test_service_identity_default_resolves_to_bss_api_token(monkeypatch) -> None:
+    """``service_identity="default"`` resolves to BSS_API_TOKEN
+    (matches bss_middleware's identity-derivation rule in reverse)."""
+    default_token = (
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    )
+    monkeypatch.setenv("BSS_API_TOKEN", default_token)
+
+    captured: dict[str, str] = {}
+
+    class _CapturingGraph:
+        async def astream(self, _input, *, stream_mode="updates"):
+            from bss_clients.base import _service_identity_token_var
+            captured["token"] = _service_identity_token_var.get()
+            yield {"agent": {"messages": [AIMessage(content="done")]}}
+
+    with patch("bss_orchestrator.session.build_graph", return_value=_CapturingGraph()):
+        async for _ in astream_once("x", service_identity="default"):
+            pass
+
+    assert captured["token"] == default_token

@@ -42,3 +42,5 @@ def test_core_id_keys_present():
     assert semconv.BSS_ORDER_ID == "bss.order_id"
     assert semconv.BSS_SUBSCRIPTION_ID == "bss.subscription_id"
     assert semconv.BSS_OFFERING_ID == "bss.offering_id"
+    # v0.9 — perimeter-resolved identity for span filtering.
+    assert semconv.BSS_SERVICE_IDENTITY == "bss.service.identity"

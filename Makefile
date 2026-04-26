@@ -131,6 +131,43 @@ doctrine-check: check-clock
 		exit 1; \
 	fi; \
 	echo "✓ renewal reads snapshot, not catalog"
+	@# v0.9+ — service_identity is resolved from token validation, never from
+	@# a sibling header. A grep for any "X-BSS-Service-Identity" reference in
+	@# Python source must stay empty. The negative-control test in the
+	@# middleware suite asserts the runtime behaviour; this guard catches
+	@# accidental introductions during code review.
+	@hits=$$(grep -rn 'X-BSS-Service-Identity' --include='*.py' \
+		services/ packages/ orchestrator/ portals/ cli/ 2>/dev/null \
+		| grep -v '/tests/' \
+		| grep -v '# noqa: service-identity-header' \
+		|| true); \
+	if [ -n "$$hits" ]; then \
+		echo "✗ caller-asserted X-BSS-Service-Identity header leaked:"; \
+		echo "$$hits"; \
+		exit 1; \
+	fi; \
+	echo "✓ no caller-asserted service-identity header"
+	@# v0.9+ — tokens are loaded once at startup and cached. Per-request
+	@# os.environ reads of any BSS_*_API_TOKEN are forbidden outside the
+	@# centralized loader (api_token.py), the AuthProvider classes
+	@# (auth.py / auth_provider.py / clients.py), test fixtures (conftest.py,
+	@# test_*.py), and the orchestrator session (which resolves identity
+	@# tokens for astream_once).
+	@hits=$$(grep -rnE 'os\.environ.*BSS_.*API_TOKEN' --include='*.py' \
+		services/ packages/ orchestrator/ portals/ cli/ 2>/dev/null \
+		| grep -v 'packages/bss-middleware/bss_middleware/api_token\.py' \
+		| grep -v 'packages/bss-clients/bss_clients/auth\.py' \
+		| grep -v 'orchestrator/bss_orchestrator/session\.py' \
+		| grep -v '/conftest\.py' \
+		| grep -v '/test_[^/]*\.py' \
+		| grep -v '# noqa: token-runtime-read' \
+		|| true); \
+	if [ -n "$$hits" ]; then \
+		echo "✗ request-time os.environ token reads forbidden:"; \
+		echo "$$hits"; \
+		exit 1; \
+	fi; \
+	echo "✓ tokens loaded once at startup, cached"
 
 fmt:
 	uv run ruff format .
@@ -151,10 +188,10 @@ seed:
 	@$(ENV_SOURCE); uv run --package bss-seed python -m bss_seed.main
 
 scenarios:
-	@uv run bss scenario run-all scenarios
+	@$(ENV_SOURCE); uv run bss scenario run-all scenarios
 
 scenarios-hero:
-	@uv run bss scenario run-all scenarios --tag hero
+	@$(ENV_SOURCE); uv run bss scenario run-all scenarios --tag hero
 
 reset-db:
 	@$(ENV_SOURCE); \

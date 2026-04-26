@@ -47,6 +47,12 @@ class DomainEvent(Base):
     actor: Mapped[str | None] = mapped_column(Text)
     channel: Mapped[str | None] = mapped_column(Text)
     tenant_id: Mapped[str] = mapped_column(Text, nullable=False, default="DEFAULT", server_default="DEFAULT")
+    # v0.9 — resolved at the BSS perimeter from validated token (never
+    # from a separate header). "default" / "portal_self_serve" /
+    # "partner_<name>". Backfilled to "default" for pre-v0.9 rows.
+    service_identity: Mapped[str] = mapped_column(
+        Text, nullable=False, default="default", server_default="default"
+    )
     payload: Mapped[dict | None] = mapped_column(JSONB)
     schema_version: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1)
     published_to_mq: Mapped[bool] = mapped_column(
