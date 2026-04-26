@@ -146,6 +146,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         msisdn_picker,
         session_api,
         signup,
+        top_up,
         welcome,
     )
 
@@ -158,6 +159,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(confirmation.router)
     app.include_router(agent_events.router)
     app.include_router(session_api.router)
+    # v0.10 — post-login self-serve writes go direct (no orchestrator).
+    app.include_router(top_up.router)
 
     return app
 

@@ -30,9 +30,13 @@ from bss_self_serve.main import create_app
 @dataclass
 class FakeCatalog:
     offerings: list[dict[str, Any]] = field(default_factory=list)
+    vas_offerings: list[dict[str, Any]] = field(default_factory=list)
 
     async def list_offerings(self) -> list[dict[str, Any]]:
         return list(self.offerings)
+
+    async def list_vas(self) -> list[dict[str, Any]]:
+        return list(self.vas_offerings)
 
 
 @dataclass
@@ -40,6 +44,10 @@ class FakeSubscription:
     records: dict[str, dict[str, Any]] = field(default_factory=dict)
     by_customer: dict[str, list[str]] = field(default_factory=dict)
     balances: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    purchase_vas_calls: list[tuple[str, str]] = field(default_factory=list)
+    # v0.10 — tests pre-seed an exception here to simulate a server-side
+    # PolicyViolation on the next call to ``purchase_vas`` etc.
+    next_error: Exception | None = None
 
     async def get(self, subscription_id: str) -> dict[str, Any]:
         if subscription_id not in self.records:
@@ -52,6 +60,18 @@ class FakeSubscription:
 
     async def get_balance(self, subscription_id: str) -> list[dict[str, Any]]:
         return [dict(b) for b in self.balances.get(subscription_id, [])]
+
+    async def purchase_vas(
+        self, subscription_id: str, vas_offering_id: str
+    ) -> dict[str, Any]:
+        if self.next_error is not None:
+            err = self.next_error
+            self.next_error = None
+            raise err
+        self.purchase_vas_calls.append((subscription_id, vas_offering_id))
+        if subscription_id in self.records:
+            return dict(self.records[subscription_id])
+        raise KeyError(subscription_id)
 
 
 @dataclass
@@ -101,6 +121,40 @@ class FakeClientsBundle:
     crm: Any = None
 
 
+SAMPLE_VAS = [
+    {
+        "id": "VAS_DATA_1GB",
+        "name": "Data Top-Up 1GB",
+        "priceAmount": 3.00,
+        "currency": "SGD",
+        "allowanceType": "data",
+        "allowanceQuantity": 1024,
+        "allowanceUnit": "mb",
+        "expiryHours": None,
+    },
+    {
+        "id": "VAS_DATA_5GB",
+        "name": "Data Top-Up 5GB",
+        "priceAmount": 12.00,
+        "currency": "SGD",
+        "allowanceType": "data",
+        "allowanceQuantity": 5120,
+        "allowanceUnit": "mb",
+        "expiryHours": None,
+    },
+    {
+        "id": "VAS_UNLIMITED_DAY",
+        "name": "Unlimited Data Day Pass",
+        "priceAmount": 5.00,
+        "currency": "SGD",
+        "allowanceType": "data",
+        "allowanceQuantity": -1,
+        "allowanceUnit": "mb",
+        "expiryHours": 24,
+    },
+]
+
+
 SAMPLE_OFFERINGS = [
     {
         "id": "PLAN_S",
@@ -145,6 +199,7 @@ SAMPLE_OFFERINGS = [
 def fake_clients() -> FakeClientsBundle:
     bundle = FakeClientsBundle()
     bundle.catalog.offerings = list(SAMPLE_OFFERINGS)
+    bundle.catalog.vas_offerings = list(SAMPLE_VAS)
     bundle.inventory.msisdns = [
         {"msisdn": f"9000000{i}", "status": "available", "reserved_at": None}
         for i in range(2, 8)
@@ -167,7 +222,8 @@ def client(fake_clients: FakeClientsBundle):
          patch("bss_self_serve.routes.activation.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.confirmation.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.msisdn_picker.get_clients", return_value=fake_clients), \
-         patch("bss_self_serve.routes.landing.get_clients", return_value=fake_clients):
+         patch("bss_self_serve.routes.landing.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.top_up.get_clients", return_value=fake_clients):
         app = create_app(Settings())
         with TestClient(app) as c:
             yield c
@@ -250,7 +306,8 @@ def authed_client(fake_clients: FakeClientsBundle):
          patch("bss_self_serve.routes.activation.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.confirmation.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.msisdn_picker.get_clients", return_value=fake_clients), \
-         patch("bss_self_serve.routes.landing.get_clients", return_value=fake_clients):
+         patch("bss_self_serve.routes.landing.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.top_up.get_clients", return_value=fake_clients):
         app = create_app(Settings())
         with TestClient(app) as c:
             c.cookies.set(PORTAL_SESSION_COOKIE, session_id)

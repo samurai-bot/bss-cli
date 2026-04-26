@@ -86,18 +86,33 @@ check-clock:
 
 doctrine-check: check-clock
 	@# v0.6 wrapper around all grep-guard doctrine checks.
-	@# Adds: portal-handlers don't write via bss-clients (v0.4+),
-	@# and OTel imports stay out of business-logic services/policies (v0.2).
+	@# Adds: portal-handlers don't write via bss-clients on the
+	@# signup + chat surfaces (v0.4–v0.9 doctrine, retained for those
+	@# routes), and OTel imports stay out of services/policies (v0.2).
+	@#
+	@# v0.10+ — post-login self-serve writes go direct via bss-clients
+	@# (CLAUDE.md "v0.10+ / authenticated post-login customer self-serve"
+	@# anti-pattern split). The route files below are the carve-out;
+	@# they enforce ownership + step-up server-side. Adding a new
+	@# post-login direct-write route requires extending this list AND
+	@# the SENSITIVE_ACTION_LABELS catalogue in security.py.
 	@hits=$$(grep -rnE '\.(create|charge|purchase_vas|terminate|add_card|remove_method|cancel)\(' \
 		--include='*.py' portals/*/bss_*/routes/ 2>/dev/null \
 		| grep -v 'session_store.create\|store.create\|ask_about_customer' \
+		| grep -v 'portals/self-serve/bss_self_serve/routes/top_up\.py' \
+		| grep -v 'portals/self-serve/bss_self_serve/routes/payment_methods\.py' \
+		| grep -v 'portals/self-serve/bss_self_serve/routes/esim\.py' \
+		| grep -v 'portals/self-serve/bss_self_serve/routes/cancel\.py' \
+		| grep -v 'portals/self-serve/bss_self_serve/routes/profile\.py' \
+		| grep -v 'portals/self-serve/bss_self_serve/routes/billing\.py' \
+		| grep -v 'portals/self-serve/bss_self_serve/routes/plan_change\.py' \
 		|| true); \
 	if [ -n "$$hits" ]; then \
-		echo "✗ portal route handlers must not call mutating bss-clients:"; \
+		echo "✗ portal route handlers must not call mutating bss-clients (signup + chat):"; \
 		echo "$$hits"; \
 		exit 1; \
 	fi; \
-	echo "✓ portal handlers route writes through agent_bridge"
+	echo "✓ signup + chat routes go through agent_bridge; v0.10 post-login routes carved out"
 	@hits=$$(grep -rn 'from opentelemetry' --include='*.py' \
 		services/*/app/services/ services/*/app/policies/ 2>/dev/null \
 		|| true); \

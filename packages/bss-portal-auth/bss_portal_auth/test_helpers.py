@@ -16,15 +16,16 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bss_clock import now as clock_now
-from bss_models import Identity, Session
+from bss_models import Identity, LoginToken, Session
 
 from .config import Settings
 from .email import NoopEmailAdapter
-from .service import _identity_id, _to_identity_view, _to_session_view
-from .tokens import generate_session_id
+from .service import _identity_id, _login_token_id, _to_identity_view, _to_session_view
+from .tokens import generate_session_id, generate_step_up_grant, hash_token
 from .types import IdentityView, SessionView
 
 
@@ -88,3 +89,43 @@ async def create_test_session(
     db.add(sess)
     await db.flush()
     return _to_session_view(sess), _to_identity_view(identity)
+
+
+async def mint_step_up_grant(
+    db: AsyncSession,
+    *,
+    session_id: str,
+    action_label: str,
+) -> str:
+    """Insert a fresh ``step_up_grant`` row + return the plaintext token.
+
+    v0.10 — post-login route tests need a valid grant cookie to exercise
+    the ``requires_step_up`` path without driving the full OTP flow each
+    time. Production callers reach this state by calling
+    ``verify_step_up`` after the customer enters the OTP they received
+    via the email adapter; tests skip the round-trip.
+
+    The hashed token is what's stored; the plaintext is what the test
+    sets as the ``bss_portal_step_up`` cookie. ``consume_step_up_token``
+    reads the cookie and matches against the stored hash + action_label.
+    """
+    settings = Settings()
+    sess = (
+        await db.execute(select(Session).where(Session.id == session_id))
+    ).scalar_one()
+
+    now = clock_now()
+    grant = generate_step_up_grant()
+    db.add(
+        LoginToken(
+            id=_login_token_id(),
+            identity_id=sess.identity_id,
+            kind="step_up_grant",
+            code_hash=hash_token(grant),
+            action_label=action_label,
+            issued_at=now,
+            expires_at=now + timedelta(seconds=settings.BSS_PORTAL_STEPUP_GRANT_TTL_S),
+        )
+    )
+    await db.flush()
+    return grant
