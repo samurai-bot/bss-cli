@@ -103,6 +103,20 @@ class SubscriptionRepository:
 
         Serializes concurrent decrement attempts per (subscription, allowance).
         See DECISIONS.md Phase 8 for why Option A was chosen over B/C.
+
+        ``populate_existing=True`` is load-bearing here: the caller almost
+        always reaches this method via ``handle_usage_rated``, which first
+        calls ``self._repo.get(sub_id)`` — and that method ``selectinload``s
+        ``Subscription.balances``, populating the session's identity map
+        with this same row. Without ``populate_existing``, SQLAlchemy
+        returns the CACHED Python object (with ``consumed`` from before
+        any concurrent transaction's commit), even though the SQL query
+        DOES re-hit Postgres and the DB lock IS held. Result: two
+        concurrent ``handle_usage_rated`` events for the same balance
+        each read ``consumed=0``, both write their delta on top of zero,
+        and the second commit overwrites the first instead of accumulating.
+        See ``customer_signup_and_exhaust`` flake history for the
+        reproducer pattern (back-to-back usage events, prefetch_count=5).
         """
         from sqlalchemy import select
 
@@ -111,6 +125,7 @@ class SubscriptionRepository:
             .where(BundleBalance.subscription_id == sub_id)
             .where(BundleBalance.allowance_type == allowance_type)
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
         result = await self._s.execute(stmt)
         return result.scalar_one_or_none()

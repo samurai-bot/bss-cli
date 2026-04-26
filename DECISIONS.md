@@ -1261,3 +1261,36 @@ during signup (MSISDN picker step) — never at the auth boundary.
 Lost-email recovery is manual via human CSR (open a Case); self-serve
 recovery for a lost-email-account is too footgun-prone for v0.8 and
 is documented out of scope.
+
+## 2026-04-26 — bugfix — `populate_existing=True` on FOR UPDATE balance reads
+**Context:** `customer_signup_and_exhaust` hero scenario flaked
+intermittently — two `usage.rated` events for the same subscription
+arriving back-to-back occasionally produced `consumed=second_qty`
+instead of `first_qty + second_qty`, causing the bundle to never
+exhaust. The Phase 8 design (`SELECT ... FOR UPDATE` in
+`get_balance_for_update`) was intended to serialize concurrent
+decrements; verification showed the DB-side lock IS acquired
+correctly. The bug was at the SQLAlchemy layer.
+**Decision:** Add `.execution_options(populate_existing=True)` to
+the `get_balance_for_update` SELECT. The Phase 8 lock semantics are
+preserved (one-row pessimistic lock) and the cached Python object
+is now overwritten with the fresh DB read after the lock is
+acquired.
+**Alternatives:** (a) `prefetch_count=1` on the consumer to remove
+concurrency at the source — rejected; reduces throughput, doesn't
+fix the underlying bug for any future caller of this repo method.
+(b) Optimistic locking with compare-and-set + retry — rejected;
+more code, harder to reason about, no net benefit. (c) Don't
+selectinload `Subscription.balances` in `_repo.get` — rejected;
+breaks every other call site that legitimately wants the eagerly-
+loaded relationship.
+**Consequences:** The fix is one line. Identity-map staleness vs
+acquired-lock is a subtle SQLAlchemy trap — without
+`populate_existing`, a SELECT FOR UPDATE that re-hits the DB still
+returns the cached Python object with stale attributes, defeating
+the lock at the application layer even though the DB is doing the
+right thing. New regression test
+`services/subscription/tests/test_usage_rated_race.py` reproduces
+the cache-staleness mechanism in a single session and would FAIL
+without the fix (verified). Documented inline in
+`subscription_repo.py:get_balance_for_update`.
