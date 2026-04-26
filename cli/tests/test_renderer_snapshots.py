@@ -8,6 +8,7 @@ See docs/runbooks/snapshot-regeneration.md.
 from __future__ import annotations
 
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Make the conftest helpers importable without pytest's rootdir magic.
@@ -100,11 +101,17 @@ def _sub_blocked() -> dict:
     return s
 
 
+# Pinned reference moment so "Renews in: N days" is deterministic across hosts.
+# Snapshot was generated with this `now` against `nextRenewalAt=2026-05-01`.
+_SNAPSHOT_NOW = datetime(2026, 4, 24, 0, 0, 0, tzinfo=timezone.utc)
+
+
 def test_subscription_show_active() -> None:
     out = render_subscription(
         _sub_active(),
         customer={"name": "Ck Demo"},
         offering={"name": "Plan M", "price": 25},
+        now=_SNAPSHOT_NOW,
     )
     assert_snapshot("subscription_show_active", out)
 
@@ -114,6 +121,7 @@ def test_subscription_show_blocked() -> None:
         _sub_blocked(),
         customer={"name": "Ck Demo"},
         offering={"name": "Plan M", "price": 25},
+        now=_SNAPSHOT_NOW,
     )
     assert_snapshot("subscription_show_blocked", out)
 

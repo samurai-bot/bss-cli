@@ -10,7 +10,7 @@ def test_session_api_returns_404_for_unknown(client):  # type: ignore[no-untyped
 def test_session_api_returns_projection(client):  # type: ignore[no-untyped-def]
     import asyncio
     store = client.app.state.session_store
-    sig = asyncio.get_event_loop().run_until_complete(
+    sig = asyncio.run(
         store.create(
             plan="PLAN_M",
             name="n",
@@ -25,7 +25,7 @@ def test_session_api_returns_projection(client):  # type: ignore[no-untyped-def]
     sig.subscription_id = "SUB-007"
     sig.activation_code = "LPA:1$smdp.example$abc"
     sig.done = True
-    asyncio.get_event_loop().run_until_complete(store.update(sig))
+    asyncio.run(store.update(sig))
 
     resp = client.get(f"/api/session/{sig.session_id}")
     assert resp.status_code == 200

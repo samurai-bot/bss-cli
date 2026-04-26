@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+
 
 def test_activation_redirects_to_confirmation_when_subscription_known(client):  # type: ignore[no-untyped-def]
     # Seed a session with a subscription_id as if the agent had finished.
-    import asyncio
     store = client.app.state.session_store
-    sig = asyncio.get_event_loop().run_until_complete(
+    sig = asyncio.run(
         store.create(
             plan="PLAN_M",
             name="n",
@@ -19,7 +20,7 @@ def test_activation_redirects_to_confirmation_when_subscription_known(client):  
     )
     sig.subscription_id = "SUB-007"
     sig.order_id = "ORD-014"
-    asyncio.get_event_loop().run_until_complete(store.update(sig))
+    asyncio.run(store.update(sig))
 
     resp = client.get(
         f"/activation/ORD-014?session={sig.session_id}",
@@ -30,9 +31,8 @@ def test_activation_redirects_to_confirmation_when_subscription_known(client):  
 
 
 def test_activation_renders_polling_shell_when_subscription_pending(client):  # type: ignore[no-untyped-def]
-    import asyncio
     store = client.app.state.session_store
-    sig = asyncio.get_event_loop().run_until_complete(
+    sig = asyncio.run(
         store.create(
             plan="PLAN_M",
             name="n",
@@ -44,7 +44,7 @@ def test_activation_renders_polling_shell_when_subscription_pending(client):  # 
     )
     sig.order_id = "ORD-014"
     # subscription_id deliberately unset
-    asyncio.get_event_loop().run_until_complete(store.update(sig))
+    asyncio.run(store.update(sig))
 
     resp = client.get(f"/activation/ORD-014?session={sig.session_id}")
     assert resp.status_code == 200
@@ -61,9 +61,8 @@ def test_activation_unknown_session_404s(client):  # type: ignore[no-untyped-def
 
 
 def test_activation_status_hx_redirects_once_subscription_arrives(client):  # type: ignore[no-untyped-def]
-    import asyncio
     store = client.app.state.session_store
-    sig = asyncio.get_event_loop().run_until_complete(
+    sig = asyncio.run(
         store.create(
             plan="PLAN_M",
             name="n",
@@ -74,7 +73,7 @@ def test_activation_status_hx_redirects_once_subscription_arrives(client):  # ty
         )
     )
     sig.subscription_id = "SUB-007"
-    asyncio.get_event_loop().run_until_complete(store.update(sig))
+    asyncio.run(store.update(sig))
 
     resp = client.get(f"/activation/ORD-014/status?session={sig.session_id}")
     assert resp.status_code == 200

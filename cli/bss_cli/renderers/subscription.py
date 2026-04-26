@@ -54,6 +54,7 @@ def render_subscription(
     customer: dict[str, Any] | None = None,
     offering: dict[str, Any] | None = None,
     esim: dict[str, Any] | None = None,
+    now: datetime | None = None,
 ) -> str:
     """Render the subscription hero view.
 
@@ -105,7 +106,7 @@ def render_subscription(
         f"Plan:      {plan_name} ({plan_id}){price_str}",
         f"State:     {state_dot(state)}",
         f"Activated: {activated}",
-        f"Renews in: {_days_to(next_renewal)}",
+        f"Renews in: {_days_to(next_renewal, now=now)}",
         "",
         "── Bundle " + "─" * 50,
         *rows,

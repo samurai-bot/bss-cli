@@ -6,7 +6,7 @@ from __future__ import annotations
 def _seed_session_and_subscription(client, fake_clients, *, with_activation_on_session=True):  # type: ignore[no-untyped-def]
     import asyncio
     store = client.app.state.session_store
-    sig = asyncio.get_event_loop().run_until_complete(
+    sig = asyncio.run(
         store.create(
             plan="PLAN_M",
             name="Ada",
@@ -55,7 +55,7 @@ def _seed_session_and_subscription(client, fake_clients, *, with_activation_on_s
             "is_error": False,
         },
     ]
-    asyncio.get_event_loop().run_until_complete(store.update(sig))
+    asyncio.run(store.update(sig))
 
     fake_clients.subscription.records["SUB-007"] = {
         "id": "SUB-007",

@@ -158,7 +158,7 @@ def test_sse_stream_populates_session_with_harvested_ids(client_with_agent_mock)
     # IDs are there. Harder-facing assertion: scrape the rendered HTML.
     store = client_with_agent_mock.app.state.session_store
     import asyncio
-    sig = asyncio.get_event_loop().run_until_complete(store.get(session_id))
+    sig = asyncio.run(store.get(session_id))
     assert sig is not None
     assert sig.customer_id == "CUST-042"
     assert sig.order_id == "ORD-014"
@@ -187,7 +187,7 @@ def test_sse_stream_snapshots_event_log_on_session(client_with_agent_mock):  # t
 
     import asyncio
     store = client_with_agent_mock.app.state.session_store
-    sig = asyncio.get_event_loop().run_until_complete(store.get(session_id))
+    sig = asyncio.run(store.get(session_id))
     assert sig is not None
     kinds = [e["kind"] for e in sig.event_log]
     assert kinds == [

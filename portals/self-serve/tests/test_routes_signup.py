@@ -62,7 +62,7 @@ def test_signup_post_creates_session_and_redirects(client):  # type: ignore[no-u
     # The chosen number stuck in the session.
     import asyncio
     store = client.app.state.session_store
-    sig = asyncio.get_event_loop().run_until_complete(store.get(session_id))
+    sig = asyncio.run(store.get(session_id))
     assert sig.msisdn == "90000042"
 
     progress = client.get(location)
