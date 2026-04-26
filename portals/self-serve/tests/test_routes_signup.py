@@ -28,6 +28,22 @@ def test_signup_form_without_msisdn_query_param_422s(authed_client):  # type: ig
     assert resp.status_code == 422
 
 
+def test_authed_pages_show_logout_form_in_nav(authed_client):  # type: ignore[no-untyped-def]
+    """Every authed page renders a sign-out POST in the header so a
+    logged-in visitor can always log out without hunting for the
+    dashboard. Pre-v0.8.1 the only logout entry point was the dashboard
+    sign-out button, which the operator complained about."""
+    resp = authed_client.get("/signup/PLAN_M?msisdn=90000042")
+    assert resp.status_code == 200
+    body = resp.text
+    assert 'action="/auth/logout"' in body
+    assert "sign out" in body.lower()
+    # Email pill in the nav makes it obvious which account is signed in.
+    assert "ada@example.sg" in body
+    # Stale "unauthenticated" footer copy is gone.
+    assert "unauthenticated" not in body
+
+
 def test_signup_form_does_not_ask_for_email_again(authed_client):  # type: ignore[no-untyped-def]
     """v0.8: signup-form must read the email from the verified session
     instead of letting the visitor type it again. Letting it be
