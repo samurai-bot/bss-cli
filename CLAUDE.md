@@ -127,6 +127,17 @@ v0.3 introduces the smallest possible auth story: a single shared API token that
 
 When Phase 12 ships, the BSSApiTokenMiddleware swap (token → JWT validator) is the change per service. `auth_context.py` then reads claims from the JWT instead of headers. Business logic stays untouched.
 
+### What v0.8 ships (self-serve portal only)
+
+v0.8 puts a login wall in front of the self-serve portal. CSR console retains its v0.5 pre-baked-admin pattern.
+
+- **`packages/bss-portal-auth/`** — email-based identity. Public API: `start_email_login`, `verify_email_login`, `current_session`, `rotate_if_due`, `revoke_session`, `link_to_customer`, `start_step_up`, `verify_step_up`, `consume_step_up_token`. Sessions are server-side; cookies carry the session id only. Step-up auth is required for sensitive actions (defined in v0.10+ as scope expands). Per-principal OAuth2/JWT remains a Phase 12 concern.
+- **`portal_auth` schema** (migration 0008): `identity`, `login_token`, `session`, `login_attempt`. Tokens stored as HMAC-SHA-256 with the server pepper from `BSS_PORTAL_TOKEN_PEPPER` env. Comparison is timing-safe (`hmac.compare_digest`). Pepper validated at portal startup (`validate_pepper_present`).
+- **Email delivery** is pluggable. v0.8 ships `LoggingEmailAdapter` (writes OTPs + magic links to `BSS_PORTAL_DEV_MAILBOX_PATH`) and `NoopEmailAdapter` (tests). `SmtpEmailAdapter` is reserved for v1.0.
+- **`PortalSessionMiddleware`** on self-serve resolves the cookie, attaches `request.state.session`/`identity`/`customer_id`, and rotates session ids past TTL/2.
+- **Public-route allowlist** (`bss_self_serve.security`): `/welcome`, `/plans`, `/auth/*`, `/static/*`, `/portal-ui/static/*`. Adding a new public route requires an entry in the allowlist plus a test.
+- **Account-first signup funnel** (`/signup/{plan}` and friends are gated on `requires_verified_email`). The agent stream calls `link_to_customer` the moment `customer.create` returns a CUST-* id, atomically binding the verified identity to the customer record.
+
 ### Phase 12 model (not in v0.1, documented for architectural intent)
 
 - **Service-to-service:** OAuth2 client credentials, short-lived JWTs via bss-clients
@@ -229,6 +240,10 @@ See `ARCHITECTURE.md` for the full container topology, compose profiles, and the
 - **(v0.5+) Don't call `datetime.now()` / `datetime.utcnow()` in business-logic paths.** Use `bss_clock.now()`. The grep guard (`make doctrine-check`) added in v0.6 enforces it.
 - **(v0.7+) Don't call catalog active-price queries at renewal time — read the snapshot off the subscription.** Catalog at renewal silently changes prices on existing customers and breaks the snapshot doctrine.
 - **(v0.7+) Don't schedule a plan change as terminate-and-recreate.** Pending fields + renewal-time pivot is the only correct path. Terminate-recreate loses VAS top-ups, mis-attributes voluntary churn in the audit log, and leaves the customer without a line.
+- **(v0.8+) Don't accept a user-controllable `customer_id` in any post-login route handler.** Read it from `request.state.customer_id`, which is bound from the verified session by `PortalSessionMiddleware`. Trusting form/query input here is how account-takeover slips in.
+- **(v0.8+) Don't store login OTPs or magic-link tokens in plaintext.** HMAC-SHA-256 with the server pepper, timing-safe compare. The `bss_portal_auth` helpers are the only path. Greppable: `rg 'log\.(info|debug|warning).*(otp|magic_link|token)' packages/bss-portal-auth/` must stay empty.
+- **(v0.8+) Don't route public marketing pages through session-required middleware.** `/welcome` and `/plans` are explicitly public; `/auth/*` is the gate; everything else gates on session via the deps in `bss_self_serve.security`. Adding a new public route requires both an allowlist entry and a test.
+- **(v0.8+) Don't read cookies from a portal route handler.** `PortalSessionMiddleware` is the only path that touches the cookie header off the ASGI scope; route handlers consume `request.state.session` / `request.state.identity` instead. Greppable: `rg 'request\.cookies\[' portals/self-serve/` must stay empty.
 
 ## Project meta
 

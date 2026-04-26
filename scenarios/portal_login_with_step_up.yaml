@@ -1,0 +1,123 @@
+name: portal_login_with_step_up
+description: |
+  v0.8 hero #2: drives the email-login flow + the step-up flow without
+  any agent/LLM hop. Proves:
+
+    - /auth/login -> dev mailbox -> /auth/check-email establishes a
+      verified session.
+    - GET /auth/step-up?action=...&next=... renders the form.
+    - POST /auth/step-up/start emits a step-up OTP scoped to action.
+    - POST /auth/step-up consumes the OTP and sets a 60s
+      bss_portal_step_up cookie carrying the one-shot grant.
+
+  No agent, no LLM, no downstream BSS write — this is purely the auth
+  surface. Sister scenario portal_self_serve_signup_v0_8.yaml covers
+  the end-to-end signup with the agent.
+
+tags: [hero, portal, regression]
+
+setup:
+  reset_operational_data: true
+  freeze_clock_at: "2026-05-05T09:00:00+08:00"
+
+variables:
+  customer_email: "stepup-demo-{{ run_id }}@bss-cli.local"
+  portal_base: "http://localhost:9001"
+  dev_mailbox: "./.dev-mailbox/portal-mailbox.log"
+
+steps:
+  # ── 1. Email login → session cookie ─────────────────────────────────────
+
+  - name: POST /auth/login emits OTP
+    http: POST /auth/login
+    base_url: "{{ portal_base }}"
+    form:
+      email: "{{ customer_email }}"
+      next: "/"
+    expect:
+      status: 303
+
+  - name: read login OTP from dev mailbox
+    file: "{{ dev_mailbox }}"
+    capture_regex:
+      login_otp:
+        source: body_text
+        pattern: 'OTP: (\d{6})'
+    poll:
+      interval_ms: 200
+      timeout_seconds: 10
+
+  - name: POST /auth/check-email -> session cookie
+    http: POST /auth/check-email
+    base_url: "{{ portal_base }}"
+    form:
+      email: "{{ customer_email }}"
+      code: "{{ login_otp }}"
+      next: "/"
+    expect:
+      status: 303
+    capture_regex:
+      session_cookie:
+        source: headers.set-cookie
+        pattern: 'bss_portal_session=([^;]+)'
+
+  # ── 2. Step-up form renders for the verified session ───────────────────
+
+  - name: GET /auth/step-up renders pre-issue form
+    http: GET /auth/step-up?action=demo.terminate&next=/
+    base_url: "{{ portal_base }}"
+    cookies: { bss_portal_session: "{{ session_cookie }}" }
+    expect:
+      status: 200
+      body_contains: ["demo.terminate", "Email me a code"]
+
+  # ── 3. Issue + verify the step-up OTP ──────────────────────────────────
+
+  - name: POST /auth/step-up/start emits step-up OTP
+    http: POST /auth/step-up/start
+    base_url: "{{ portal_base }}"
+    cookies: { bss_portal_session: "{{ session_cookie }}" }
+    form:
+      action: "demo.terminate"
+      next: "/"
+    expect:
+      status: 200
+      body_contains: ["Code sent"]
+
+  - name: read step-up OTP from dev mailbox
+    file: "{{ dev_mailbox }}"
+    capture_regex:
+      step_up_otp:
+        # Match by the action label that's in the same email block as
+        # the OTP — guards against picking up the earlier login OTP.
+        source: body_text
+        pattern: 'OTP: (\d{6})\nAction: demo.terminate'
+    poll:
+      interval_ms: 200
+      timeout_seconds: 10
+
+  - name: POST /auth/step-up consumes OTP, sets grant cookie, redirects
+    http: POST /auth/step-up
+    base_url: "{{ portal_base }}"
+    cookies: { bss_portal_session: "{{ session_cookie }}" }
+    form:
+      action: "demo.terminate"
+      code: "{{ step_up_otp }}"
+      next: "/"
+    expect:
+      status: 303
+      headers_match:
+        location: "/"
+    capture_regex:
+      step_up_cookie:
+        source: headers.set-cookie
+        pattern: 'bss_portal_step_up=([^;]+)'
+
+  # The capture_regex above is the assertion: if the bss_portal_step_up
+  # cookie isn't present in the Set-Cookie header, the step fails. The
+  # one-shot consume + scope-by-action_label invariants are exercised
+  # by packages/bss-portal-auth/tests/test_step_up.py against the real
+  # DB. The hero scenario's job is to confirm the routes wire end-to-end.
+
+teardown:
+  unfreeze_clock: true
