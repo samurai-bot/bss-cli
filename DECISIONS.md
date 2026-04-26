@@ -1454,3 +1454,50 @@ wrong customer" test that asserts 403 + audit row. Future deliverables
 that propose extending the carve-out (e.g., "make the chat direct
 because it'd be faster") require their own DECISIONS entry; they
 don't ride on this one.
+
+## 2026-04-27 — v0.10.0 — Default LLM model swapped from MiMo v2 Flash to google/gemma-4-26b-a4b-it
+**Context:** Phase 9 picked `xiaomi/mimo-v2-flash` as the default
+dev/hero-scenario model: $0.09/M prompt, $0.29/M completion, 262K
+context, clean instruction-following on the Phase 8 pre-flight.
+That choice held through v0.9. During v0.10 development the LLM
+hero scenarios (`llm_troubleshoot_blocked_subscription`,
+`portal_csr_blocked_diagnosis`, `portal_self_serve_signup_v0_8`)
+started spiking from steady ~10–17s/run to 50–180s/run, with
+intermittent failures (10/11, 14/15 step-passes — never the same
+scenario twice in a row, never the same step). The pattern was a
+provider-side latency / availability hiccup on Mimo, not a portal
+or scenario regression: re-running with no code changes flipped
+results, and the failures landed on different scenarios across
+runs. Hero "three runs in a row green" stopped being a deterministic
+ship gate.
+**Decision:** Switch the default model in `.env` (and `.env.example`)
+to `google/gemma-4-26b-a4b-it`, also via OpenRouter. Three back-to-back
+hero runs immediately after the swap: 9/9 PASS each, with steady
+durations (LLM steps 10–15s, no spikes). The phase-doc historical
+record (PHASE_09 / PHASE_10 / V0_2 / V0_4 / V0_5 / V0_11) keeps the
+MiMo references — those are *frozen* records of decisions made at
+the time, not a living description. Live surfaces (`CLAUDE.md` tech
+stack, `.env.example`, the operational diagnostic comment in the
+LLM hero scenario YAML) are updated to point at the current
+default.
+**Alternatives:** (a) Keep MiMo and absorb the flakes via retries —
+rejected; the doctrine "if the LLM scenario is flaky, the fix is the
+semantic layer, not the test" (PHASE_10) means we don't paper over
+provider hiccups with retry loops. (b) Swap to Sonnet 4.6 / Opus
+4.7 — rejected for the *default*; reserved as the explicit override
+for cases where tool-call quality matters more than cost. The
+`BSS_LLM_MODEL` env var is and remains the single switch; no code
+hardcodes a model name. (c) Backfill the historical phase docs to
+say "Gemma" — rejected; phase docs are append-only frozen records
+and rewriting them would lie to future readers about what was true
+when. The DECISIONS log is the running history; this entry is the
+canonical "swap happened on 2026-04-27".
+**Consequences:** Hero-scenario flakes stop. Cost / latency / context
+properties are comparable to MiMo for our workload (small number of
+tool calls per scenario). The swap is reversible — flip
+`BSS_LLM_MODEL` back, restart, done. If Gemma later develops its own
+issues, the next switch is a one-line env change and another
+DECISIONS entry; the abstraction layer (OpenRouter via openai SDK)
+absorbs it. The Phase-9 design doctrine "code never hardcodes a
+model name — only `.env` does" is what makes this swap a one-line
+change in production, not a refactor.

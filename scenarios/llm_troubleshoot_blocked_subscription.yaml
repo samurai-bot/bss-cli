@@ -14,9 +14,10 @@ description: |
     - the LLM's actions appear on the customer's interaction log
       attributed to an llm-* actor.
 
-  If this fails with the default MiMo v2 Flash model, one of:
-  semantic layer is too loose, system prompt drifts, or we need a stronger
-  model. v0.1 does NOT ship until this is green three runs in a row.
+  If this fails against the default model (google/gemma-4-26b-a4b-it as
+  of v0.10.0; previously xiaomi/mimo-v2-flash), one of: semantic layer
+  is too loose, system prompt drifts, or we need a stronger model. v0.1
+  did NOT ship until this was green three runs in a row.
 
 tags: [hero, llm, ship_gate, reasoning]
 

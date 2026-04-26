@@ -200,7 +200,7 @@ Two distinct planes:
 - **Messaging:** RabbitMQ via `aio-pika`
 - **CLI:** Typer + Rich
 - **LLM orchestrator:** LangGraph
-- **LLM gateway:** OpenRouter via the openai SDK (no LiteLLM hop) → MiMo v2 Flash
+- **LLM gateway:** OpenRouter via the openai SDK (no LiteLLM hop) → `google/gemma-4-26b-a4b-it` (v0.10.0+; previously MiMo v2 Flash, swapped due to tool-call latency regression — see DECISIONS 2026-04-27)
 - **Database:** PostgreSQL 16, **single instance**, schema-per-domain (see ARCHITECTURE.md for future split path)
 - **Vector DB (post-v0.1):** pgvector extension on the same Postgres instance (schema `knowledge`)
 - **Reporting:** Metabase
