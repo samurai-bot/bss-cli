@@ -21,10 +21,20 @@ Pepper rotation invalidates **every in-flight login token**. That's an acceptabl
 Procedure:
 
 1. Generate the new pepper (`openssl rand -hex 32`).
-2. Stop the portal: `docker compose stop portal-self-serve`.
-3. Replace `BSS_PORTAL_TOKEN_PEPPER` in `.env`.
-4. Start the portal: `docker compose up -d portal-self-serve`.
-5. Verify: tail the portal logs for `portal_auth.pepper.validated length=64`.
+2. Replace `BSS_PORTAL_TOKEN_PEPPER` in `.env`.
+3. **Force-recreate** the portal so the new `.env` is re-read at create-time:
+   ```bash
+   docker compose up -d --force-recreate portal-self-serve
+   ```
+   `docker compose up -d` alone keeps the existing container if image +
+   compose config hash haven't changed; an env-only edit doesn't trip a
+   recreate, and the running container will keep its old baked-in env.
+4. Verify: tail the portal logs for `portal_auth.pepper.validated length=64`,
+   then `curl -sf http://localhost:9001/health`.
+
+Same rule applies the **first time** you set the pepper after pulling
+v0.8 — the portal container brought up before the pepper landed in
+`.env` will crash-loop on the unset guard. Force-recreate clears it.
 
 Existing customer sessions remain valid because the cookie value is just the `session` row id; only login-token verification (start → verify) is affected. Customers with active sessions don't notice. Customers mid-login (between "I clicked send-code" and "I entered the OTP") need to start over.
 
