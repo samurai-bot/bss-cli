@@ -93,17 +93,24 @@ async def signup_submit(
     request: Request,
     plan: str = Form(...),
     name: str = Form(...),
-    email: str = Form(...),
     phone: str = Form(...),
     msisdn: str = Form(...),
     card_pan: str = Form(...),
     identity: IdentityView = Depends(requires_verified_email),
 ) -> RedirectResponse:
+    """Email comes from the verified session (request.state.identity) —
+    NEVER from the form. Accepting form-side email here would let the
+    visitor create a CRM customer under a different address than the
+    identity they verified, breaking the (identity, customer) link
+    invariant and silently divergent the email of record between
+    portal_auth.identity and crm.contact_medium. Same anti-pattern as
+    user-controllable customer_id in CLAUDE.md §Anti-patterns (v0.8+).
+    """
     store = request.app.state.session_store
     session = await store.create(
         plan=plan,
         name=name,
-        email=email,
+        email=identity.email,
         phone=phone,
         msisdn=msisdn,
         card_pan=card_pan,

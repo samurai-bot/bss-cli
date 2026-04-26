@@ -196,8 +196,14 @@ def test_is_public_path_matches_exact_and_prefix():
 # ── Cookie builder (no DB) ───────────────────────────────────────────────
 
 
-def test_session_cookie_has_secure_attrs_by_default(monkeypatch):
-    monkeypatch.delenv("BSS_PORTAL_DEV_INSECURE_COOKIE", raising=False)
+def test_session_cookie_has_secure_attrs_when_insecure_cookie_off(monkeypatch):
+    """Production-shape: BSS_PORTAL_DEV_INSECURE_COOKIE=0 -> Secure flag on.
+
+    Setenv-explicit (not delenv) because pydantic-settings reads .env
+    which now defaults the var to 1 for compose dev. Production
+    deployments override to 0; this test pins that path.
+    """
+    monkeypatch.setenv("BSS_PORTAL_DEV_INSECURE_COOKIE", "0")
     cookie = build_session_cookie("abc123")
     assert "bss_portal_session=abc123" in cookie
     assert "HttpOnly" in cookie

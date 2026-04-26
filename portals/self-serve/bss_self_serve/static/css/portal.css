@@ -2,6 +2,24 @@
    Palette, layout, header/footer, and the agent log widget live in
    bss_portal_ui/static/css/portal_base.css (loaded first via base.html). */
 
+/* ─── Signup form — verified-email banner (v0.8) ──────────────── */
+
+.signed-in-as {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.signed-in-as-label { color: var(--fg-muted); }
+.signed-in-as-email { font-family: var(--mono); color: var(--accent); font-weight: 600; }
+.signed-in-as-note  { color: var(--fg-muted); }
+
 /* ─── Dashboard (v0.8 placeholder, v0.10 fills it in) ─────────── */
 
 .dashboard,
