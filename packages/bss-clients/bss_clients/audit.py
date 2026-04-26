@@ -34,6 +34,7 @@ class AuditClient(BSSClient):
         event_type_prefix: str | None = None,
         occurred_since: str | None = None,
         occurred_until: str | None = None,
+        service_identity: str | None = None,
         limit: int = 100,
     ) -> list[dict[str, Any]]:
         """GET /audit-api/v1/events with optional filters.
@@ -41,6 +42,9 @@ class AuditClient(BSSClient):
         Returns the event list (unwrapped from the envelope) ordered by
         ``occurredAt`` ascending. Each event is a dict with the
         camelCase fields the router emits.
+
+        ``service_identity`` (v0.9+) scopes results to a single
+        perimeter-resolved identity, e.g. ``"portal_self_serve"``.
         """
         params: dict[str, Any] = {"limit": limit}
         if aggregate_type is not None:
@@ -55,6 +59,8 @@ class AuditClient(BSSClient):
             params["occurredSince"] = occurred_since
         if occurred_until is not None:
             params["occurredUntil"] = occurred_until
+        if service_identity is not None:
+            params["serviceIdentity"] = service_identity
 
         resp = await self._request("GET", "/audit-api/v1/events", params=params)
         body = resp.json()

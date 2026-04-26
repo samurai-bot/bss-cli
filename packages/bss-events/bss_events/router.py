@@ -47,6 +47,12 @@ def audit_events_router() -> APIRouter:
         event_type_prefix: Annotated[str | None, Query(alias="eventTypePrefix")] = None,
         occurred_since: Annotated[str | None, Query(alias="occurredSince")] = None,
         occurred_until: Annotated[str | None, Query(alias="occurredUntil")] = None,
+        # v0.9 — filter by perimeter-resolved identity. "default" /
+        # "portal_self_serve" / "partner_<name>". Lets the new hero
+        # scenario assert per-surface attribution.
+        service_identity: Annotated[
+            str | None, Query(alias="serviceIdentity")
+        ] = None,
         limit: Annotated[int, Query(ge=1, le=_MAX_LIMIT)] = _DEFAULT_LIMIT,
     ) -> dict:
         since_dt = _parse_iso_or_400(occurred_since, "occurredSince")
@@ -72,6 +78,9 @@ def audit_events_router() -> APIRouter:
         if until_dt is not None:
             where.append("occurred_at <= :until")
             params["until"] = until_dt
+        if service_identity is not None:
+            where.append("service_identity = :service_identity")
+            params["service_identity"] = service_identity
 
         clause = "WHERE " + " AND ".join(where) if where else ""
         params["limit"] = limit
@@ -80,7 +89,8 @@ def audit_events_router() -> APIRouter:
             f"""
             SELECT
                 event_id, event_type, aggregate_type, aggregate_id,
-                occurred_at, trace_id, actor, channel, tenant_id, payload,
+                occurred_at, trace_id, actor, channel, tenant_id,
+                service_identity, payload,
                 schema_version, published_to_mq
             FROM audit.domain_event
             {clause}
@@ -104,6 +114,7 @@ def audit_events_router() -> APIRouter:
                 "actor": r["actor"],
                 "channel": r["channel"],
                 "tenantId": r["tenant_id"],
+                "serviceIdentity": r["service_identity"],
                 "payload": r["payload"] or {},
                 "schemaVersion": r["schema_version"],
                 "publishedToMq": r["published_to_mq"],

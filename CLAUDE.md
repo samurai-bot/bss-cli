@@ -127,6 +127,16 @@ v0.3 introduces the smallest possible auth story: a single shared API token that
 
 When Phase 12 ships, the BSSApiTokenMiddleware swap (token → JWT validator) is the change per service. `auth_context.py` then reads claims from the JWT instead of headers. Business logic stays untouched.
 
+### What v0.9 ships (named tokens at the BSS perimeter)
+
+v0.9 splits the v0.3 single-token model. Each external-facing surface carries its own named identity at the perimeter; the receiving services derive `service_identity` from validated token map lookup. `BSS_PORTAL_API_TOKEN` is the self-serve portal's token (identity `"portal_self_serve"`); `BSS_API_TOKEN` remains the default identity used by orchestrator and CSR. Phase 12 swaps each named token for an OAuth2 client-credentials JWT through the same middleware seam.
+
+- **`bss_middleware.TokenMap`** loads at startup from any `BSS_*_API_TOKEN` env var. Identity is derived from the env-var name (`BSS_PORTAL_API_TOKEN` → `"portal"`, etc.). Tokens stored hashed (HMAC-SHA-256, fixed salt) so the in-memory map is safe to log at debug level.
+- **`BSSApiTokenMiddleware` upgraded** to validate against the map and attach `service_identity` to ASGI scope on hit. v0.3 single-token deployments work unchanged (resolve to identity `"default"`).
+- **`bss_clients.NamedTokenAuthProvider`** for outbound calls from external-facing surfaces. The self-serve portal builds its `bss-clients` bundle with this provider against `BSS_PORTAL_API_TOKEN` (with `BSS_API_TOKEN` fallback for staged rollout).
+- **`auth_context.AuthContext.service_identity`** field flows through every service. RequestIdMiddleware reads `scope["service_identity"]` (set by perimeter token validation) and stamps it. `audit.domain_event.service_identity` column captures it on every write. structlog and OTel server spans carry it too. `bss trace` swimlane surfaces it as a per-span column.
+- **`astream_once(service_identity=...)`** parameter added (used by v0.11 portal chat). Sets a per-Context `X-BSS-API-Token` override so a single agent run can attribute its tool calls to a different surface than the orchestrator's default identity.
+
 ### What v0.8 ships (self-serve portal only)
 
 v0.8 puts a login wall in front of the self-serve portal. CSR console retains its v0.5 pre-baked-admin pattern.
@@ -244,6 +254,9 @@ See `ARCHITECTURE.md` for the full container topology, compose profiles, and the
 - **(v0.8+) Don't store login OTPs or magic-link tokens in plaintext.** HMAC-SHA-256 with the server pepper, timing-safe compare. The `bss_portal_auth` helpers are the only path. Greppable: `rg 'log\.(info|debug|warning).*(otp|magic_link|token)' packages/bss-portal-auth/` must stay empty.
 - **(v0.8+) Don't route public marketing pages through session-required middleware.** `/welcome` and `/plans` are explicitly public; `/auth/*` is the gate; everything else gates on session via the deps in `bss_self_serve.security`. Adding a new public route requires both an allowlist entry and a test.
 - **(v0.8+) Don't read cookies from a portal route handler.** `PortalSessionMiddleware` is the only path that touches the cookie header off the ASGI scope; route handlers consume `request.state.session` / `request.state.identity` instead. Greppable: `rg 'request\.cookies\[' portals/self-serve/` must stay empty.
+- **(v0.9+) Don't trust an `X-BSS-Service-Identity` (or any sibling) header.** The resolved `service_identity` comes from token validation against the `TokenMap`, never from a separate caller-asserted header. A header is forgeable; the validated map is not. Greppable: `rg 'X-BSS-Service-Identity' --type py` must stay empty.
+- **(v0.9+) Don't share a named token across surfaces.** Each external-facing surface (portal, partner client) gets its own `BSS_<NAME>_API_TOKEN`. Sharing one token defeats the blast-radius reduction that named tokens exist to provide — a leaked credential rotates one surface, not the union of every surface that happened to use it.
+- **(v0.9+) Don't read `os.environ` for tokens at request time.** Load once at startup, cache, rotate by restart. Per-request env reads are slow and obscure the contract that tokens are immutable across the process lifetime. Greppable: `rg 'os\.environ.*BSS_.*API_TOKEN' --glob '!**/api_token.py' --glob '!**/auth.py' --glob '!**/conftest.py' --glob '!**/test_*.py' --glob '!**/session.py'` must stay empty.
 
 ## Project meta
 

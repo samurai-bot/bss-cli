@@ -4,6 +4,8 @@ The LangGraph orchestrator exposes ~65 tools. Every tool is a thin async functio
 
 Every write tool goes through the service's policy layer. A tool call that violates a policy returns a structured `PolicyViolation` observation — the LLM reads the `rule` field and can retry or ask the user.
 
+**v0.9 audit attribution.** Every tool's audit row in `audit.domain_event` now carries a `service_identity` column resolved by the BSS perimeter middleware from the validated `X-BSS-API-Token`. Operators filtering "which surface initiated this write?" can pivot on `service_identity` directly: `default` for orchestrator / CSR / scenario callers, `portal_self_serve` for self-serve portal callers (when the v0.11 portal chat surface uses `astream_once(service_identity=...)`), `partner_<name>` for future partner integrations. The tools themselves are unchanged — attribution happens at the perimeter, transparent to tool implementations.
+
 ## Tool type legend
 
 - **read** — free, no permission gate (post-auth: still auditable)
