@@ -1405,3 +1405,52 @@ including historical rows. The v0.9 phase doc's "audit by surface"
 queries (in the rotation runbook) work correctly against pre-v0.9
 data: a leak detection query on the past 90 days returns sane
 counts because the historical baseline is `'default'`, not `NULL`.
+
+## 2026-04-27 — v0.10.0 — Post-login self-serve writes go direct via `bss-clients` (doctrine carve-out)
+**Context:** v0.4 established "every portal write goes through the
+LLM orchestrator via `agent_bridge` → `astream_once`" as a blanket
+rule. That rule existed because the v0.4 demo's purpose was to show
+the agent pattern works end-to-end on a customer-facing surface. By
+v0.10 the purpose has shifted: the post-login dashboard, top-up,
+COF management, eSIM redownload, cancel, contact update, charge
+history, and plan change are routine flows a customer performs
+daily. Routing each of those through an LLM round-trip costs ~2–5s
+of latency, burns tokens for deterministic operations, and obscures
+the audit trail (the LLM's tool call vs. the customer's intent). The
+doctrine question: do we keep the v0.4 blanket rule, or carve out
+authenticated post-login self-serve as a direct-API surface?
+**Decision:** Carve out authenticated post-login customer self-serve
+as a direct-API surface. Route handlers behind `requires_linked_customer`
+may call `bss-clients` directly. The customer principal is bound
+from `request.state.customer_id` (verified session, never form/query
+input); per-resource ownership policies (`check_subscription_owned_by`,
+`check_service_owned_by`, `check_payment_method_owned_by`) gate every
+cross-resource access; sensitive writes require step-up auth via the
+`requires_step_up(label)` dependency, with `SENSITIVE_ACTION_LABELS`
+as the greppable source of truth. One route = one `bss-clients` write
+(or zero) — no composition. The signup funnel (v0.4 / v0.8) and the
+chat surface (v0.4–v0.11) continue going through the orchestrator;
+they remain the surfaces where the LLM is a feature, not a tax.
+**Alternatives:** (a) Keep the v0.4 blanket rule — rejected; the
+latency cost on a daily-use page like the dashboard is large and
+visible, and the LLM adds nothing on a deterministic top-up. (b)
+Make everything direct, including signup and chat — rejected; that
+collapses the v0.4 demo's signature artifact (the agent log
+streaming during signup) and pre-empts v0.11's chat scoping work.
+(c) Allow composition in route handlers — rejected; route-handler
+composition is how silent data drift sneaks in (commit A succeeds,
+commit B fails, no rollback). Service-side composite operations or
+the orchestrator are the right place for "do A then B".
+**Consequences:** Eight new self-serve pages run sub-second and
+deterministic. The doctrine is narrower than "everything direct" —
+it explicitly preserves orchestrator-mediation for signup and chat,
+and Phase 12's per-principal OAuth2 swap still lands at the same
+seam (`auth_context.py`). Greppable doctrine guards enforce the
+boundary: `rg 'astream_once' portals/self-serve/bss_self_serve/routes/`
+must match only chat + signup; `rg 'customer_id\s*=\s*(form|body|query|path)'`
+must stay empty in post-login routes. The cross-customer attempt
+suite is non-negotiable — every sensitive route gets a "try as the
+wrong customer" test that asserts 403 + audit row. Future deliverables
+that propose extending the carve-out (e.g., "make the chat direct
+because it'd be faster") require their own DECISIONS entry; they
+don't ride on this one.
