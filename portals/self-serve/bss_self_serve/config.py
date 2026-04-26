@@ -31,5 +31,10 @@ class Settings(BaseSettings):
     bss_portal_self_serve_port: int = 9001
     bss_portal_self_serve_session_ttl: int = 600  # seconds; refresh-during-signup = lost
 
+    # v0.8 — DB connection used for portal_auth identity / session storage.
+    # Same `BSS_DB_URL` env every BSS service reads. The portal does not
+    # write to BSS-core schemas (CRM, catalog, etc.) — only to portal_auth.
+    bss_db_url: str = ""
+
 
 settings = Settings()

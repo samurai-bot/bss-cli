@@ -18,6 +18,9 @@ dependencies = [
     "bss-telemetry",
     "bss-middleware",
     "bss-portal-ui",
+    "bss-portal-auth",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.29",
 ]
 
 [dependency-groups]
@@ -43,6 +46,7 @@ bss-orchestrator = { workspace = true }
 bss-telemetry = { workspace = true }
 bss-middleware = { workspace = true }
 bss-portal-ui = { workspace = true }
+bss-portal-auth = { workspace = true }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -5,9 +5,20 @@ by mutating ``fake_clients.catalog.offerings`` before the request.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Any
 from unittest.mock import patch
+
+# v0.8 — portal lifespan calls ``validate_pepper_present()``. Set a
+# fixed test pepper BEFORE importing the app modules so the lifespan
+# doesn't fail when TestClient(app) runs the startup hooks.
+os.environ.setdefault(
+    "BSS_PORTAL_TOKEN_PEPPER",
+    "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+)
+# Tests use the in-memory NoopEmailAdapter — no file I/O on /tmp.
+os.environ.setdefault("BSS_PORTAL_EMAIL_ADAPTER", "noop")
 
 import pytest
 from fastapi.testclient import TestClient
