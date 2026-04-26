@@ -107,6 +107,7 @@ def _mock_catalog() -> AsyncMock:
         "id": "PLAN_M",
         "name": "Standard",
         "productOfferingPrice": [{
+            "id": "PRICE_PLAN_M",
             "priceType": "recurring",
             "price": {
                 "taxIncludedAmount": {"value": "25.00", "unit": "SGD"},
@@ -117,6 +118,21 @@ def _mock_catalog() -> AsyncMock:
             {"allowanceType": "voice", "quantity": -1, "unit": "minutes"},
             {"allowanceType": "sms", "quantity": -1, "unit": "count"},
         ],
+    })
+    mock.list_active_offerings = AsyncMock(return_value=[
+        {"id": "PLAN_S", "name": "Lite"},
+        {"id": "PLAN_M", "name": "Standard"},
+        {"id": "PLAN_L", "name": "Max"},
+    ])
+    mock.get_active_price = AsyncMock(return_value={
+        "id": "PRICE_PLAN_L",
+        "priceType": "recurring",
+        "price": {"taxIncludedAmount": {"value": "45.00", "unit": "SGD"}},
+    })
+    mock.get_offering_price = AsyncMock(return_value={
+        "id": "PRICE_PLAN_L",
+        "priceType": "recurring",
+        "price": {"taxIncludedAmount": {"value": "45.00", "unit": "SGD"}},
     })
     mock.get_vas = AsyncMock(return_value={
         "id": "VAS_DATA_1GB",

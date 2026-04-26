@@ -87,6 +87,12 @@ ProductOfferingId = Annotated[
     "Plan offering ID — MUST be one of PLAN_S, PLAN_M, PLAN_L. "
     "No other plans exist in v0.1.",
 ]
+ProductOfferingPriceId = Annotated[
+    str,
+    "Product offering price ID, e.g. PRICE_PLAN_M or PRICE_PLAN_M_V2. "
+    "Get from catalog.list_offerings (each offering carries its prices) — "
+    "never fabricate. Used by snapshot-bound flows like price migration.",
+]
 VasOfferingId = Annotated[
     str,
     "VAS offering ID, e.g. VAS_DATA_5GB, VAS_DATA_DAYPASS. "

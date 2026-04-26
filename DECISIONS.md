@@ -1066,3 +1066,88 @@ states both numbers ("73 registered, 13 planned/non-tool").
 Strangers reading the doc cold immediately see what's live vs
 what's specced. The `_LLM_HIDDEN_TOOLS` mechanism unchanged.
 
+## 2026-04-26 — v0.7.0 — Snapshot-at-order-time for subscription pricing
+**Context:** v0.6 had subscription renewal read the price off the
+catalog at renewal time. That looked fine while we never repriced
+anything, but the moment an operator wanted to (a) run a CNY promo,
+(b) raise PLAN_M from $25 to $30, or (c) add a PLAN_XS tier at $5,
+existing customers' renewals would have silently changed price the
+next billing cycle — a customer-trust violation, and in some
+jurisdictions a regulatory one.
+**Decision:** Each subscription row carries a price snapshot
+(`price_amount`, `price_currency`, `price_offering_price_id`)
+captured at order-creation time. Renewal charges the snapshot,
+never the catalog. Catalog repricings only affect *new* orders.
+Existing subscriptions move via an explicit operator-initiated
+flow (`subscription.migrate_to_new_price`) with regulatory notice
+(`notice_days`, default 30). A grep guard
+(`rg 'get_active_price|get_offering_price' renewal_service.py`
+returns empty) is part of the v0.7 doctrine sweep.
+**Alternatives:** (a) Bump catalog version on each repricing and
+rebuild every existing subscription — rejected; loses audit trail
+of "what did the customer agree to at signup". (b) Re-quote on
+every renewal and email the customer — rejected; the doctrine is
+"bundled prepaid, no surprise charges" and re-quote is a surprise.
+(c) Force the customer to re-acknowledge the new price each
+renewal — rejected; UX nightmare and outside scope of "lightweight
+MVNO".
+**Consequences:** Migration 0007 backfills the snapshot for every
+existing subscription before flipping the columns to NOT NULL.
+Plan changes (Track 4) and operator price migrations (Track 5)
+share the same renewal-time application path because they share
+the same shape (pending offering + pending price + pending
+effective_at).
+
+## 2026-04-26 — v0.7.0 — Plan change applied at next renewal only (no proration)
+**Context:** Real MVNOs let customers switch plans. Industry
+default is some combination of: (a) prorate the remaining days of
+the old plan, (b) charge a difference at switch, (c) reset the
+allowance pool partially. All three paths add complexity, all
+three add edge cases (what about a subscription mid-VAS-top-up?),
+and none of them ship a better experience than "your switch takes
+effect at next renewal, here's what your new bill will be".
+**Decision:** `subscription.schedule_plan_change` records pending
+fields. The next time `subscription.renew` fires after
+`pending_effective_at`, it charges the new plan's snapshot,
+swaps the offering, resets allowances per the new plan, and
+clears pending. No proration, no immediate effect, no shortcut.
+The customer's right-now allowance (from VAS top-ups, the
+existing bundle) carries to the period boundary unchanged.
+**Alternatives:** (a) Immediate switch with prorated refund —
+rejected; the bundled-prepaid doctrine doesn't permit refunds,
+and proration adds rating-engine complexity we explicitly avoid.
+(b) Immediate switch with surcharge — rejected; surprise charges.
+(c) "Switch plus VAS top-up" hybrid for "I want more data RIGHT
+NOW and to switch plans" — rejected; that's two separate
+operations, both already supported.
+**Consequences:** Plan change is one tool call, idempotent only
+in the cancel direction (one pending change at a time, customer
+must `cancel_pending_plan_change` before scheduling a different
+target). Renewal-time payment failure leaves pending intact so
+manual retry / VAS-then-renew is still possible.
+
+## 2026-04-26 — v0.7.0 — Lowest-active-price-wins for overlapping promo rows
+**Context:** When promotional pricing lands, the natural shape is
+a windowed `product_offering_price` row that overlaps the base
+row temporarily. `get_active_price` then has to choose. The
+choice is non-obvious: highest-priority promo? Most recently
+inserted? Sum/aggregate? A coupon-engine could enforce any rule.
+**Decision:** Lowest amount wins. Period. If a customer is
+inside the promo window, they pay promo; outside, they pay base.
+No priority field, no stack, no exclusion list, no eligibility
+check. Two simultaneously active rows for the same offering are
+fine and a documented pattern.
+**Alternatives:** (a) Most recently inserted wins — rejected;
+silent regression risk (a typo on a base-price update could
+"promo" everyone to a new high). (b) Explicit promo flag with
+priority — rejected; that's a coupon engine, out of scope. (c)
+Reject any overlap as a configuration error — rejected; overlap
+*is* the discount mechanism in v0.7.
+**Consequences:** Operators run promos by inserting a windowed
+price row at the discount amount. Misconfigured catalog (two
+unintended overlapping rows) silently picks the lower; the
+runbook for setting up a promo (`docs/runbooks/cny-promo.md`)
+ends with "verify with `bss admin catalog show --at <window>`".
+Future phases that introduce real campaigns / coupons revisit
+this rule.
+

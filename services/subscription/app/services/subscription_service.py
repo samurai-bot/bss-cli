@@ -26,6 +26,14 @@ from app.domain.bundle import (
 from app.domain.state_machine import get_next_state, is_valid_transition
 from app.events import publisher
 from app.policies.base import PolicyViolation
+from app.policies.plan_change import (
+    check_admin_role,
+    check_no_pending_change,
+    check_not_same_offering,
+    check_offering_sellable_now,
+    check_subscription_active_or_pending_renewal,
+    fetch_active_price_for_target,
+)
 from app.policies.subscription import (
     check_customer_exists,
     check_msisdn_and_esim_reserved,
@@ -71,6 +79,7 @@ class SubscriptionService:
         msisdn: str,
         iccid: str,
         payment_method_id: str,
+        price_snapshot: dict | None = None,
     ) -> Subscription:
         # Policy: customer exists and is active/pending
         await check_customer_exists(customer_id, self._crm)
@@ -78,11 +87,36 @@ class SubscriptionService:
         # Policy: MSISDN and eSIM are reserved
         await check_msisdn_and_esim_reserved(msisdn, iccid, self._inventory)
 
-        # Fetch offering from catalog for price + allowances
+        # Fetch offering from catalog for allowances. Price snapshot is
+        # provided by the COM/SOM event flow (v0.7); we still fetch the
+        # offering for bundle allowances.
         offering = await self._catalog.get_offering(offering_id)
-        prices = offering.get("productOfferingPrice", [])
-        recurring = next((p for p in prices if p.get("priceType") == "recurring"), None)
-        amount = Decimal(str(recurring["price"]["taxIncludedAmount"]["value"])) if recurring else Decimal("0")
+
+        if price_snapshot is not None:
+            amount = Decimal(str(price_snapshot["priceAmount"]))
+            currency = price_snapshot["priceCurrency"]
+            offering_price_id = price_snapshot["priceOfferingPriceId"]
+        else:
+            # Legacy / direct create path — read price off the offering payload.
+            prices = offering.get("productOfferingPrice", [])
+            recurring = next((p for p in prices if p.get("priceType") == "recurring"), None)
+            amount = (
+                Decimal(str(recurring["price"]["taxIncludedAmount"]["value"]))
+                if recurring
+                else Decimal("0")
+            )
+            currency = (
+                recurring["price"]["taxIncludedAmount"].get("unit", "SGD")
+                if recurring
+                else "SGD"
+            )
+            offering_price_id = recurring.get("id") if recurring else None
+            if not offering_price_id:
+                raise PolicyViolation(
+                    rule="subscription.create.requires_active_price",
+                    message=f"Offering {offering_id} has no recurring price row to snapshot",
+                    context={"offering_id": offering_id},
+                )
 
         # Policy: payment must succeed
         payment_result = await self._payment.charge(
@@ -123,6 +157,9 @@ class SubscriptionService:
             msisdn=msisdn,
             iccid=iccid,
             state="pending",
+            price_amount=amount,
+            price_currency=currency,
+            price_offering_price_id=offering_price_id,
         )
         await self._repo.create(sub)
 
@@ -417,6 +454,14 @@ class SubscriptionService:
             return await self._repo.get(sub_id)
 
     async def renew(self, sub_id: str) -> Subscription:
+        """Renew a subscription, charging the price snapshot stored on the row.
+
+        v0.7 doctrine — renewal **never** reads the catalog price. The
+        snapshot (`subscription.price_amount` / `price_currency`) is the
+        contract; catalog changes don't disturb existing customers. The
+        catalog is still consulted for *bundle allowances* because we don't
+        version those in v0.7 — see DECISIONS.md.
+        """
         sub = await self._repo.get(sub_id)
         if not sub:
             raise PolicyViolation(
@@ -427,11 +472,39 @@ class SubscriptionService:
 
         check_renew_allowed(sub.state)
 
-        # Fetch offering for price + allowances
-        offering = await self._catalog.get_offering(sub.offering_id)
-        prices = offering.get("productOfferingPrice", [])
-        recurring = next((p for p in prices if p.get("priceType") == "recurring"), None)
-        amount = Decimal(str(recurring["price"]["taxIncludedAmount"]["value"])) if recurring else Decimal("0")
+        # ── Plan-change / price-migration pivot ────────────────────────
+        # If pending fields are set and the effective date has arrived, the
+        # customer is renewing onto a different plan (or a new price for the
+        # same plan). The renewal flow below applies the switch atomically:
+        # the new snapshot drives the charge, the new offering's allowances
+        # reset the bundle, and on success the pending fields are cleared.
+        now = clock_now()
+        applying_pending = (
+            sub.pending_offering_id is not None
+            and sub.pending_effective_at is not None
+            and sub.pending_effective_at <= now
+        )
+
+        if applying_pending:
+            # Resolve the snapshot row directly — no time filter, the
+            # snapshot remembers history even if the row is now retired.
+            new_price = await self._catalog.get_offering_price(
+                sub.pending_offering_price_id
+            )
+            amount = Decimal(str(new_price["price"]["taxIncludedAmount"]["value"]))
+            currency = new_price["price"]["taxIncludedAmount"].get("unit", "SGD")
+            offering_price_id = sub.pending_offering_price_id
+            target_offering_id = sub.pending_offering_id
+        else:
+            # Snapshot drives the charge — never the catalog.
+            amount = sub.price_amount
+            currency = sub.price_currency
+            offering_price_id = sub.price_offering_price_id
+            target_offering_id = sub.offering_id
+
+        # Allowances come from the *target* offering — for plan changes that's
+        # the new plan, for vanilla renewals that's the current plan.
+        offering = await self._catalog.get_offering(target_offering_id)
 
         # Find payment method
         methods = await self._payment.list_methods(sub.customer_id)
@@ -449,12 +522,14 @@ class SubscriptionService:
             customer_id=sub.customer_id,
             payment_method_id=default_method["id"],
             amount=amount,
-            currency="SGD",
+            currency=currency,
             purpose="renewal",
         )
 
         if payment_result.get("status") != "approved":
-            # Renewal failed → block
+            # Renewal failed → block. If we were attempting a pending plan
+            # change, the pending fields are intentionally **not cleared** —
+            # operator could retry via top-up + manual renewal.
             await self._transition(sub, "renew_fail", reason="renewal_payment_declined")
             await publisher.publish(
                 self._session,
@@ -467,6 +542,19 @@ class SubscriptionService:
                     "paymentAttemptId": payment_result.get("id", ""),
                 },
             )
+            if applying_pending:
+                await publisher.publish(
+                    self._session,
+                    event_type="subscription.plan_change_payment_failed",
+                    aggregate_type="subscription",
+                    aggregate_id=sub_id,
+                    payload={
+                        "subscriptionId": sub_id,
+                        "currentOfferingId": sub.offering_id,
+                        "pendingOfferingId": sub.pending_offering_id,
+                        "paymentAttemptId": payment_result.get("id", ""),
+                    },
+                )
             await publisher.publish(
                 self._session,
                 event_type="subscription.blocked",
@@ -478,7 +566,6 @@ class SubscriptionService:
             return await self._repo.get(sub_id)
 
         # Renewal succeeded — reset balances
-        now = clock_now()
         period_end = now + timedelta(days=30)
         allowances = offering.get("bundleAllowance", [])
         specs = [
@@ -487,8 +574,13 @@ class SubscriptionService:
         ]
         new_snapshots = reset_for_new_period(specs)
 
-        # Update existing balances
+        # Update existing balances. For plan changes, replace the row set
+        # with whatever the new offering specifies — old allowance types
+        # the new plan doesn't have are zeroed out so they no longer count.
         balances = await self._repo.get_balances(sub_id)
+        existing_types = {b.allowance_type for b in balances}
+        new_types = {s.allowance_type for s in new_snapshots}
+
         for bal in balances:
             matching = next(
                 (s for s in new_snapshots if s.allowance_type == bal.allowance_type),
@@ -500,6 +592,45 @@ class SubscriptionService:
                 bal.period_start = now
                 bal.period_end = period_end
                 await self._repo.update_balance(bal)
+            elif applying_pending:
+                # Allowance type from old plan that's not in new plan: zero it.
+                bal.total = 0
+                bal.consumed = 0
+                bal.period_start = now
+                bal.period_end = period_end
+                await self._repo.update_balance(bal)
+
+        if applying_pending:
+            for spec in new_snapshots:
+                if spec.allowance_type in existing_types:
+                    continue
+                # New allowance type the previous plan didn't have — add it.
+                bal_id = f"{sub_id}-{spec.allowance_type.upper()}"
+                await self._repo.add_balance(
+                    BundleBalance(
+                        id=bal_id,
+                        subscription_id=sub_id,
+                        allowance_type=spec.allowance_type,
+                        total=spec.total,
+                        consumed=0,
+                        unit=spec.unit,
+                        period_start=now,
+                        period_end=period_end,
+                    )
+                )
+
+        # ── Apply pending pivot: swap offering + snapshot, clear pending ──
+        was_price_migration = False
+        previous_offering_id = sub.offering_id
+        if applying_pending:
+            was_price_migration = sub.pending_offering_id == sub.offering_id
+            sub.offering_id = sub.pending_offering_id
+            sub.price_amount = amount
+            sub.price_currency = currency
+            sub.price_offering_price_id = offering_price_id
+            sub.pending_offering_id = None
+            sub.pending_offering_price_id = None
+            sub.pending_effective_at = None
 
         await self._transition(sub, "renew", reason="renewal_payment_approved")
         sub.current_period_start = now
@@ -517,11 +648,261 @@ class SubscriptionService:
                 "paymentAttemptId": payment_result.get("id", ""),
                 "periodStart": now.isoformat(),
                 "periodEnd": period_end.isoformat(),
+                "priceSnapshot": {
+                    "priceAmount": str(amount),
+                    "priceCurrency": currency,
+                    "priceOfferingPriceId": offering_price_id,
+                },
+            },
+        )
+
+        if applying_pending:
+            event_name = (
+                "subscription.price_migrated"
+                if was_price_migration
+                else "subscription.plan_changed"
+            )
+            await publisher.publish(
+                self._session,
+                event_type=event_name,
+                aggregate_type="subscription",
+                aggregate_id=sub_id,
+                payload={
+                    "subscriptionId": sub_id,
+                    "previousOfferingId": previous_offering_id,
+                    "newOfferingId": sub.offering_id,
+                    "newPriceAmount": str(amount),
+                    "newPriceCurrency": currency,
+                    "newPriceOfferingPriceId": offering_price_id,
+                },
+            )
+
+        await self._session.commit()
+        return await self._repo.get(sub_id)
+
+    async def schedule_plan_change(
+        self, sub_id: str, new_offering_id: str
+    ) -> Subscription:
+        """Record a pending offering switch on the subscription.
+
+        Applied at the next renewal — see `renew()`. No state change here;
+        pending fields are advisory until renewal-time pivot. Idempotent
+        only insofar as the policy bars a second pending change; to
+        replace, the customer must cancel first.
+        """
+        sub = await self._repo.get(sub_id)
+        if not sub:
+            raise PolicyViolation(
+                rule="subscription.not_found",
+                message=f"Subscription {sub_id} not found",
+                context={"subscription_id": sub_id},
+            )
+
+        check_subscription_active_or_pending_renewal(sub.state)
+        check_not_same_offering(sub.offering_id, new_offering_id)
+        check_no_pending_change(sub.pending_offering_id)
+        await check_offering_sellable_now(self._catalog, new_offering_id)
+        new_price = await fetch_active_price_for_target(self._catalog, new_offering_id)
+
+        sub.pending_offering_id = new_offering_id
+        sub.pending_offering_price_id = new_price["id"]
+        sub.pending_effective_at = sub.next_renewal_at
+
+        await publisher.publish(
+            self._session,
+            event_type="subscription.plan_change_scheduled",
+            aggregate_type="subscription",
+            aggregate_id=sub_id,
+            payload={
+                "subscriptionId": sub_id,
+                "currentOfferingId": sub.offering_id,
+                "newOfferingId": new_offering_id,
+                "newPriceAmount": str(
+                    new_price["price"]["taxIncludedAmount"]["value"]
+                ),
+                "newPriceCurrency": new_price["price"]["taxIncludedAmount"].get(
+                    "unit", "SGD"
+                ),
+                "effectiveAt": (
+                    sub.pending_effective_at.isoformat()
+                    if sub.pending_effective_at
+                    else None
+                ),
             },
         )
 
         await self._session.commit()
+        log.info(
+            "subscription.plan_change.scheduled",
+            subscription_id=sub_id,
+            new_offering_id=new_offering_id,
+        )
         return await self._repo.get(sub_id)
+
+    async def cancel_pending_plan_change(self, sub_id: str) -> Subscription:
+        """Clear pending plan-change fields. No-op if nothing is pending."""
+        sub = await self._repo.get(sub_id)
+        if not sub:
+            raise PolicyViolation(
+                rule="subscription.not_found",
+                message=f"Subscription {sub_id} not found",
+                context={"subscription_id": sub_id},
+            )
+
+        if sub.pending_offering_id is None:
+            log.info("subscription.plan_change.cancel.noop", subscription_id=sub_id)
+            return sub
+
+        previous_pending = {
+            "offeringId": sub.pending_offering_id,
+            "offeringPriceId": sub.pending_offering_price_id,
+            "effectiveAt": (
+                sub.pending_effective_at.isoformat()
+                if sub.pending_effective_at
+                else None
+            ),
+        }
+        sub.pending_offering_id = None
+        sub.pending_offering_price_id = None
+        sub.pending_effective_at = None
+
+        await publisher.publish(
+            self._session,
+            event_type="subscription.plan_change_cancelled",
+            aggregate_type="subscription",
+            aggregate_id=sub_id,
+            payload={
+                "subscriptionId": sub_id,
+                "previousPending": previous_pending,
+            },
+        )
+
+        await self._session.commit()
+        log.info("subscription.plan_change.cancelled", subscription_id=sub_id)
+        return await self._repo.get(sub_id)
+
+    async def migrate_subscriptions_to_price(
+        self,
+        *,
+        filter: dict,
+        new_price_id: str,
+        effective_from: datetime,
+        notice_days: int,
+        initiated_by: str,
+    ) -> dict:
+        """Operator-initiated price migration with notice.
+
+        Each affected subscription gets its own pending fields and its own
+        per-subscription event — no batch UPDATE that loses the audit trail.
+        Subscriptions terminated during the notice window simply skip the
+        renewal-time pivot. Admin role required.
+
+        Args:
+            filter: Currently only ``{"offering_id": "PLAN_X"}`` is supported.
+            new_price_id: Target ``product_offering_price.id``. Must belong
+                to the subscription's current offering.
+            effective_from: Earliest moment the new price may be applied.
+                ``effective_from + notice_days`` becomes ``pending_effective_at``.
+            notice_days: Regulatory notice (Singapore: 30 days for upward
+                price moves).
+            initiated_by: Operator identity for audit + downstream
+                notifications.
+
+        Returns:
+            ``{count: N, subscriptionIds: [...]}``.
+        """
+        check_admin_role()
+
+        offering_filter = filter.get("offering_id")
+        if not offering_filter:
+            raise PolicyViolation(
+                rule="subscription.migrate_price.unsupported_filter",
+                message="filter must include an 'offering_id' key (only filter v0.7 supports)",
+                context={"filter": filter},
+            )
+
+        # Resolve the target price row and validate the offering match.
+        new_price = await self._catalog.get_offering_price(new_price_id)
+        if new_price is None:
+            raise PolicyViolation(
+                rule="subscription.migrate_price.unknown_price",
+                message=f"Price {new_price_id} not found in catalog",
+                context={"new_price_id": new_price_id},
+            )
+        # Catalog returns the price's offering id under the camelCase shape we use.
+        # The TMF mapping doesn't expose offering_id; resolve via offering lookup.
+        offering = await self._catalog.get_offering(offering_filter)
+        offering_prices = {p["id"] for p in offering.get("productOfferingPrice", [])}
+        if new_price_id not in offering_prices:
+            raise PolicyViolation(
+                rule="subscription.migrate_price.price_not_on_offering",
+                message=(
+                    f"Price {new_price_id} does not belong to offering {offering_filter}"
+                ),
+                context={
+                    "new_price_id": new_price_id,
+                    "offering_id": offering_filter,
+                },
+            )
+
+        new_amount = Decimal(str(new_price["price"]["taxIncludedAmount"]["value"]))
+        new_currency = new_price["price"]["taxIncludedAmount"].get("unit", "SGD")
+        effective_at = effective_from + timedelta(days=notice_days)
+
+        affected = await self._repo.list_active_for_offering(offering_filter)
+        affected_ids: list[str] = []
+
+        for sub in affected:
+            old_amount = sub.price_amount
+            sub.pending_offering_id = sub.offering_id  # same plan
+            sub.pending_offering_price_id = new_price_id
+            sub.pending_effective_at = effective_at
+
+            await publisher.publish(
+                self._session,
+                event_type="subscription.price_migration_scheduled",
+                aggregate_type="subscription",
+                aggregate_id=sub.id,
+                payload={
+                    "subscriptionId": sub.id,
+                    "offeringId": sub.offering_id,
+                    "oldAmount": str(old_amount),
+                    "newAmount": str(new_amount),
+                    "newCurrency": new_currency,
+                    "effectiveAt": effective_at.isoformat(),
+                    "initiatedBy": initiated_by,
+                },
+            )
+            await publisher.publish(
+                self._session,
+                event_type="notification.requested",
+                aggregate_type="subscription",
+                aggregate_id=sub.id,
+                payload={
+                    "customerId": sub.customer_id,
+                    "channel": "email",
+                    "template": "price_migration_notice",
+                    "templateArgs": {
+                        "subscriptionId": sub.id,
+                        "offeringId": sub.offering_id,
+                        "oldAmount": str(old_amount),
+                        "newAmount": str(new_amount),
+                        "currency": new_currency,
+                        "effectiveAt": effective_at.isoformat(),
+                    },
+                },
+            )
+            affected_ids.append(sub.id)
+
+        await self._session.commit()
+        log.info(
+            "subscription.price_migration.scheduled",
+            offering_id=offering_filter,
+            new_price_id=new_price_id,
+            count=len(affected_ids),
+            initiated_by=initiated_by,
+        )
+        return {"count": len(affected_ids), "subscriptionIds": affected_ids}
 
     async def terminate(self, sub_id: str) -> Subscription:
         sub = await self._repo.get(sub_id)

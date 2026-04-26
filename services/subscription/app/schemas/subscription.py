@@ -11,6 +11,16 @@ from bss_models.subscription import BundleBalance, Subscription, VasPurchase
 SUBSCRIPTION_PATH = "/subscription-api/v1/subscription"
 
 
+class PriceSnapshot(BaseModel):
+    """Price row captured at order-creation time, persisted for renewal."""
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    price_amount: Decimal
+    price_currency: str
+    price_offering_price_id: str
+
+
 class SubscriptionCreateRequest(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
@@ -19,6 +29,9 @@ class SubscriptionCreateRequest(BaseModel):
     msisdn: str
     iccid: str
     payment_method_id: str
+    # v0.7 — optional during the COM/SOM rollout. When omitted, the service
+    # falls back to the catalog's recurring price (legacy path).
+    price_snapshot: PriceSnapshot | None = None
 
 
 class VasPurchaseRequest(BaseModel):
@@ -72,6 +85,13 @@ class SubscriptionResponse(BaseModel):
     next_renewal_at: datetime | None = None
     terminated_at: datetime | None = None
     balances: list[BundleBalanceResponse] = []
+    # v0.7 — price snapshot + pending plan-change fields.
+    price_amount: Decimal | None = None
+    price_currency: str | None = None
+    price_offering_price_id: str | None = None
+    pending_offering_id: str | None = None
+    pending_offering_price_id: str | None = None
+    pending_effective_at: datetime | None = None
     at_type: str = "Subscription"
 
 
@@ -106,6 +126,12 @@ def to_subscription_response(sub: Subscription) -> SubscriptionResponse:
         next_renewal_at=sub.next_renewal_at,
         terminated_at=sub.terminated_at,
         balances=[to_balance_response(b) for b in sub.balances] if sub.balances else [],
+        price_amount=sub.price_amount,
+        price_currency=sub.price_currency,
+        price_offering_price_id=sub.price_offering_price_id,
+        pending_offering_id=sub.pending_offering_id,
+        pending_offering_price_id=sub.pending_offering_price_id,
+        pending_effective_at=sub.pending_effective_at,
     )
 
 

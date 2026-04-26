@@ -5,7 +5,14 @@ from __future__ import annotations
 from typing import Any
 
 from ..clients import get_clients
-from ..types import CustomerId, SubscriptionId, VasOfferingId
+from ..types import (
+    CustomerId,
+    IsoDatetime,
+    ProductOfferingId,
+    ProductOfferingPriceId,
+    SubscriptionId,
+    VasOfferingId,
+)
 from ._registry import register
 
 
@@ -133,6 +140,108 @@ async def subscription_renew_now(subscription_id: SubscriptionId) -> dict[str, A
               with ``payment.add_card`` then retry.
     """
     return await get_clients().subscription.renew(subscription_id)
+
+
+@register("subscription.schedule_plan_change")
+async def subscription_schedule_plan_change(
+    subscription_id: SubscriptionId,
+    new_offering_id: ProductOfferingId,
+) -> dict[str, Any]:
+    """Schedule a plan change to take effect at the next renewal boundary.
+
+    The new offering's price is snapshotted *now* (the customer commits to
+    that price even if the catalog re-prices later). At the next renewal,
+    the new amount is charged, the offering is swapped, and the bundle is
+    reset per the new plan's allowances. There is no proration and no
+    immediate effect — that's the doctrine.
+
+    Args:
+        subscription_id: Subscription ID in SUB-NNN format.
+        new_offering_id: Target offering (e.g. ``PLAN_L``). Must be in the
+            active catalog and different from the current plan.
+
+    Returns:
+        Updated subscription dict with ``pendingOfferingId`` /
+        ``pendingOfferingPriceId`` / ``pendingEffectiveAt`` populated.
+
+    Raises:
+        PolicyViolationFromServer:
+            - ``subscription.plan_change.not_eligible_state``: only active
+              subscriptions can schedule changes.
+            - ``subscription.plan_change.same_offering``: target equals current.
+            - ``subscription.plan_change.target_not_sellable_now``: target
+              is not in the live catalog right now.
+            - ``subscription.plan_change.already_pending``: cancel the
+              existing pending change first.
+    """
+    return await get_clients().subscription.schedule_plan_change(
+        subscription_id, new_offering_id
+    )
+
+
+@register("subscription.migrate_to_new_price")
+async def subscription_migrate_to_new_price(
+    offering_id: ProductOfferingId,
+    new_price_id: ProductOfferingPriceId,
+    effective_from: IsoDatetime,
+    notice_days: int = 30,
+    initiated_by: str = "ops",
+) -> dict[str, Any]:
+    """Operator-initiated price migration with notice. Admin-only.
+
+    Schedules ``new_price_id`` against every active subscription on
+    ``offering_id`` such that ``effective_from + notice_days`` becomes the
+    effective moment. The renewal flow applies the change atomically per
+    subscription. Subscriptions that terminate during the notice window
+    skip the migration without manual cleanup.
+
+    Args:
+        offering_id: The offering to retag (e.g. ``PLAN_M``).
+        new_price_id: New ``product_offering_price.id`` belonging to that
+            same offering (validated server-side).
+        effective_from: ISO-8601 instant — earliest moment the new price
+            may be applied. ``effective_from + notice_days`` is the actual
+            apply boundary.
+        notice_days: Regulatory notice (Singapore: 30 for upward moves).
+        initiated_by: Operator identity stamped into the audit trail.
+
+    Returns:
+        ``{count, subscriptionIds}`` — the affected subscriptions.
+
+    Raises:
+        PolicyViolationFromServer:
+            - ``subscription.admin_only``: caller lacks the admin role.
+            - ``subscription.migrate_price.unknown_price``: no such price row.
+            - ``subscription.migrate_price.price_not_on_offering``: target
+              price belongs to a different offering than the filter.
+    """
+    from datetime import datetime
+
+    return await get_clients().subscription.migrate_to_new_price(
+        offering_id=offering_id,
+        new_price_id=new_price_id,
+        effective_from=datetime.fromisoformat(effective_from),
+        notice_days=notice_days,
+        initiated_by=initiated_by,
+    )
+
+
+@register("subscription.cancel_pending_plan_change")
+async def subscription_cancel_pending_plan_change(
+    subscription_id: SubscriptionId,
+) -> dict[str, Any]:
+    """Cancel a pending plan change. Idempotent — no-op if nothing is pending.
+
+    Args:
+        subscription_id: Subscription ID in SUB-NNN format.
+
+    Returns:
+        Updated subscription dict with pending fields cleared.
+
+    Raises:
+        NotFound: unknown subscription.
+    """
+    return await get_clients().subscription.cancel_plan_change(subscription_id)
 
 
 @register("subscription.get_esim_activation")

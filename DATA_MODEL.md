@@ -257,6 +257,31 @@ Seed: `SPEC_MOBILE_PREPAID`.
 | recurring_period_type | TEXT | `month` |
 | amount | NUMERIC(12,2) | |
 | currency | CHAR(3) | `SGD` |
+| valid_from | TIMESTAMPTZ | v0.7+ — NULL = always-active |
+| valid_to | TIMESTAMPTZ | v0.7+ — exclusive boundary; NULL = no end |
+
+### Catalog versioning (v0.7+)
+
+Both `product_offering` and `product_offering_price` are **time-bounded**.
+A NULL `valid_from` means "active since the dawn of time"; a NULL
+`valid_to` means "active until further notice". Active queries
+(`list_active_offerings`, `get_active_price`) filter rows where
+`valid_from IS NULL OR valid_from <= now` AND `valid_to IS NULL OR
+valid_to > now`. The `valid_to` boundary is **exclusive** so two rows
+can be set up "back-to-back" without overlap.
+
+When multiple price rows are simultaneously active for the same
+offering (e.g. base $25 + windowed promo $20), **lowest amount wins**.
+This is the only discount semantic v0.7 supports — coupons, stacked
+discounts, and A/B price tests are out of scope.
+
+The renewal stack **never** queries active prices. Each subscription
+carries a price snapshot (see `subscription.subscription` columns
+`price_amount`, `price_currency`, `price_offering_price_id`) captured
+at order-creation time. Catalog repricings do not silently affect
+existing customers; explicit operator-initiated migrations
+(`subscription.migrate_to_new_price`) carry a notice period and
+emit per-subscription `notification.requested` events.
 
 ### `catalog.bundle_allowance`
 | column | type | notes |
@@ -356,6 +381,9 @@ Seed: all three plans → same CFS + two RFS.
 | offering_id | TEXT | |
 | state | TEXT | |
 | target_subscription_id | TEXT | nullable |
+| price_amount | NUMERIC(10,2) | v0.7+ — snapshot stamped at create_order |
+| price_currency | TEXT | v0.7+ |
+| price_offering_price_id | TEXT | v0.7+ — copied to subscription on activation |
 
 ### `order_mgmt.order_state_history`
 Standard state history shape.
@@ -447,6 +475,12 @@ Seed: 6 rules covering HLR_PROVISION, PCRF_POLICY_PUSH, OCS_BALANCE_INIT, ESIM_P
 | current_period_end | TIMESTAMPTZ | |
 | next_renewal_at | TIMESTAMPTZ | |
 | terminated_at | TIMESTAMPTZ | |
+| price_amount | NUMERIC(10,2) NOT NULL | v0.7+ snapshot — drives renewal charge |
+| price_currency | TEXT NOT NULL | v0.7+ snapshot |
+| price_offering_price_id | TEXT NOT NULL FK→catalog.product_offering_price | v0.7+ snapshot |
+| pending_offering_id | TEXT | v0.7+ — set when a plan change / price migration is scheduled |
+| pending_offering_price_id | TEXT | v0.7+ — same |
+| pending_effective_at | TIMESTAMPTZ | v0.7+ — earliest moment renewal applies the pending pivot |
 
 ### `subscription.bundle_balance`
 | column | type | notes |

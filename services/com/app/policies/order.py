@@ -19,7 +19,7 @@ async def check_customer_exists(customer_id: str, crm_client):
 
 
 async def check_offering_exists(offering_id: str, catalog_client):
-    """Offering must exist in catalog."""
+    """Offering must exist in catalog (read paths only — no time filter)."""
     try:
         offering = await catalog_client.get_offering(offering_id)
     except NotFound:
@@ -29,6 +29,28 @@ async def check_offering_exists(offering_id: str, catalog_client):
             context={"offering_id": offering_id},
         )
     return offering
+
+
+async def check_offering_currently_sellable(offering_id: str, catalog_client):
+    """Offering must exist AND be sellable at the current moment.
+
+    Used by the create-order path: it both validates existence and confirms
+    the offering is inside its `valid_from / valid_to` window. Catalog rejects
+    with `catalog.price.no_active_row` if there's no live price; we surface
+    that as `policy.offering.not_sellable_now`.
+    """
+    from bss_clients.errors import PolicyViolationFromServer
+
+    offering = await check_offering_exists(offering_id, catalog_client)
+    try:
+        price = await catalog_client.get_active_price(offering_id)
+    except PolicyViolationFromServer as exc:
+        raise PolicyViolation(
+            rule="policy.offering.not_sellable_now",
+            message=f"Offering {offering_id} is not sellable at this time",
+            context={"offering_id": offering_id, "underlying": exc.rule},
+        )
+    return offering, price
 
 
 async def check_customer_has_payment_method(customer_id: str, payment_client):

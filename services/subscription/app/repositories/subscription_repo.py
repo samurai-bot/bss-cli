@@ -64,6 +64,19 @@ class SubscriptionRepository:
         result = await self._s.execute(stmt)
         return list(result.scalars().all())
 
+    async def list_active_for_offering(self, offering_id: str) -> list[Subscription]:
+        """Subscriptions on `offering_id` that are still in a renewable state."""
+        from sqlalchemy import select
+
+        stmt = (
+            select(Subscription)
+            .where(Subscription.offering_id == offering_id)
+            .where(Subscription.state.in_(["active", "blocked"]))
+            .order_by(Subscription.id)
+        )
+        result = await self._s.execute(stmt)
+        return list(result.scalars().all())
+
     async def update(self, sub: Subscription) -> Subscription:
         await self._s.flush()
         return sub

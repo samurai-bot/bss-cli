@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from bss_catalog.deps import get_repo
 from bss_catalog.repository import CatalogRepository
@@ -10,15 +12,26 @@ router = APIRouter(tags=["productOffering"])
 @router.get("/productOffering", response_model=list[Tmf620ProductOffering], response_model_by_alias=True)
 async def list_offerings(
     lifecycleStatus: str | None = None,
+    activeAt: datetime | None = Query(
+        default=None,
+        description=(
+            "ISO-8601 moment to filter time-bound rows. When supplied, only "
+            "offerings sellable at that instant are returned and they are "
+            "ordered by lowest active recurring price."
+        ),
+    ),
     limit: int = 20,
     offset: int = 0,
     repo: CatalogRepository = Depends(get_repo),
 ) -> list[Tmf620ProductOffering]:
-    models = await repo.list_offerings(
-        lifecycle_status=lifecycleStatus,
-        limit=limit,
-        offset=offset,
-    )
+    if activeAt is not None:
+        models = await repo.list_active_offerings(at=activeAt, limit=limit, offset=offset)
+    else:
+        models = await repo.list_offerings(
+            lifecycle_status=lifecycleStatus,
+            limit=limit,
+            offset=offset,
+        )
     return [to_tmf620_offering(m) for m in models]
 
 

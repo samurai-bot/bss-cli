@@ -5,7 +5,9 @@ subscription, bundle_balance, vas_purchase, subscription_state_history.
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Computed, ForeignKey, Text, func
+from decimal import Decimal
+
+from sqlalchemy import BigInteger, Computed, ForeignKey, Numeric, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base, TZDateTime, TenantMixin, TimestampMixin
@@ -30,6 +32,18 @@ class Subscription(Base, TenantMixin, TimestampMixin):
     current_period_end: Mapped[datetime | None] = mapped_column(TZDateTime)
     next_renewal_at: Mapped[datetime | None] = mapped_column(TZDateTime)
     terminated_at: Mapped[datetime | None] = mapped_column(TZDateTime)
+
+    # v0.7 — price snapshot copied at order time. Renewal charges this, not catalog.
+    price_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    price_currency: Mapped[str] = mapped_column(Text, nullable=False)
+    price_offering_price_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("catalog.product_offering_price.id"), nullable=False
+    )
+
+    # v0.7 — pending plan change / price migration. Applied on next renewal.
+    pending_offering_id: Mapped[str | None] = mapped_column(Text)
+    pending_offering_price_id: Mapped[str | None] = mapped_column(Text)
+    pending_effective_at: Mapped[datetime | None] = mapped_column(TZDateTime)
 
     balances: Mapped[list["BundleBalance"]] = relationship(back_populates="subscription")
     vas_purchases: Mapped[list["VasPurchase"]] = relationship(back_populates="subscription")

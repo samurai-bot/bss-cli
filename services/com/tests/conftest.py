@@ -86,11 +86,19 @@ def _mock_catalog() -> AsyncMock:
         "id": "PLAN_M",
         "name": "Standard",
         "productOfferingPrice": [{
+            "id": "PRICE_PLAN_M",
             "priceType": "recurring",
             "price": {
                 "taxIncludedAmount": {"value": "25.00", "unit": "SGD"},
             },
         }],
+    })
+    mock.get_active_price = AsyncMock(return_value={
+        "id": "PRICE_PLAN_M",
+        "priceType": "recurring",
+        "price": {
+            "taxIncludedAmount": {"value": "25.00", "unit": "SGD"},
+        },
     })
     mock.close = AsyncMock()
     return mock

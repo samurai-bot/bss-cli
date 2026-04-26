@@ -1,0 +1,219 @@
+name: catalog_versioning_and_plan_change
+description: |
+  v0.7 hero scenario. Drives every catalog-versioning + plan-change path
+  end-to-end against a live stack:
+
+    1. Customer signs up on PLAN_M while a $20 promo price window is open
+       → subscription snapshot captures $20.
+    2. Promo window ends; catalog reverts to base $25 → existing
+       subscription is grandfathered (snapshot intact).
+    3. Customer schedules a plan change to PLAN_L; pending fields land,
+       no immediate effect.
+    4. Clock advances past `pending_effective_at`; manual renewal
+       applies the pivot, charges PLAN_L's snapshot price, swaps
+       offering, resets allowances per PLAN_L.
+    5. Same-plan price migration: schedule PLAN_L → new $50 price row
+       with notice; renewal after the notice fires updates only the
+       price, emits `subscription.price_migrated` (not `plan_changed`).
+
+  Every step is a direct tool call — no LLM.
+
+tags: [hero, smoke, regression, deterministic, v0.7]
+
+setup:
+  reset_operational_data: true
+  freeze_clock_at: "2026-02-15T09:00:00+00:00"
+
+variables:
+  customer_email: "ck-{{ run_id }}@bss-cli.local"
+  customer_phone: "+6590005678"
+  promo_price_id: "PRICE_PLAN_M_CNY_{{ run_id }}"
+  plan_l_v2_price_id: "PRICE_PLAN_L_V2_{{ run_id }}"
+
+steps:
+  # ── 1. Open a windowed promo on PLAN_M ($20 instead of $25) ────────────
+  - name: open PLAN_M promo window
+    action: catalog.add_price
+    args:
+      offering_id: PLAN_M
+      price_id: "{{ promo_price_id }}"
+      amount: "20.00"
+      currency: SGD
+      valid_from: "2026-02-10T00:00:00+00:00"
+      valid_to: "2026-02-24T00:00:00+00:00"
+
+  - name: verify PLAN_M's active price during window is the promo
+    assert:
+      tool: catalog.get_active_price
+      args: {offering_id: PLAN_M}
+      expect:
+        id: {starts_with: "PRICE_PLAN_M_CNY_"}
+        price.taxIncludedAmount.value: 20.0
+
+  # ── 2. Customer signs up — subscription snapshots $20 ──────────────────
+  - name: create customer
+    action: customer.create
+    args:
+      name: "Ck CNY"
+      email: "{{ customer_email }}"
+      phone: "{{ customer_phone }}"
+    capture:
+      customer_id: "$.id"
+
+  - name: attest KYC
+    action: customer.attest_kyc
+    args:
+      customer_id: "{{ customer_id }}"
+      provider: myinfo
+      attestation_token: "stub-signed-jwt-{{ run_id }}"
+
+  - name: add card on file
+    action: payment.add_card
+    args:
+      customer_id: "{{ customer_id }}"
+      card_number: "4242424242424242"
+
+  - name: place PLAN_M order during the promo window
+    action: order.create
+    args:
+      customer_id: "{{ customer_id }}"
+      offering_id: PLAN_M
+    capture:
+      order_id: "$.id"
+
+  - name: wait for activation
+    action: order.wait_until
+    args:
+      order_id: "{{ order_id }}"
+      target_state: completed
+      timeout_s: 30
+
+  - name: locate the new subscription
+    action: subscription.list_for_customer
+    args:
+      customer_id: "{{ customer_id }}"
+    capture:
+      subscription_id: "$[0].id"
+      msisdn: "$[0].msisdn"
+
+  - name: verify subscription snapshot captured the promo price
+    assert:
+      tool: subscription.get
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        offeringId: PLAN_M
+        priceAmount: "20.00"
+        priceOfferingPriceId: {starts_with: "PRICE_PLAN_M_CNY_"}
+
+  # ── 3. Advance past the promo window ──────────────────────────────────
+  - name: advance clock past promo end
+    action: clock.advance
+    args:
+      duration: "20d"  # 2026-02-15 + 20d = 2026-03-07 (window closed 2026-02-24)
+
+  - name: verify PLAN_M is now back to base $25 for new orders
+    assert:
+      tool: catalog.get_active_price
+      args: {offering_id: PLAN_M}
+      expect:
+        id: PRICE_PLAN_M
+        price.taxIncludedAmount.value: 25.0
+
+  - name: verify existing subscription is grandfathered (still 20.00)
+    assert:
+      tool: subscription.get
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        priceAmount: "20.00"
+
+  # ── 4. Schedule a plan change to PLAN_L ────────────────────────────────
+  - name: schedule plan change PLAN_M → PLAN_L
+    action: subscription.schedule_plan_change
+    args:
+      subscription_id: "{{ subscription_id }}"
+      new_offering_id: PLAN_L
+
+  - name: verify pending fields land (no immediate effect)
+    assert:
+      tool: subscription.get
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        offeringId: PLAN_M           # still on M
+        priceAmount: "20.00"          # still snapshot
+        pendingOfferingId: PLAN_L
+        pendingOfferingPriceId: PRICE_PLAN_L
+
+  # ── 5. Advance past the next renewal boundary, manually renew, verify pivot ──
+  - name: advance to next renewal boundary
+    action: clock.advance
+    args:
+      duration: "30d"
+
+  - name: trigger manual renewal — applies the pending plan change
+    action: subscription.renew_now
+    args:
+      subscription_id: "{{ subscription_id }}"
+
+  - name: verify subscription is now on PLAN_L at PLAN_L's price
+    assert:
+      tool: subscription.get
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        offeringId: PLAN_L
+        priceAmount: "45.00"
+        priceOfferingPriceId: PRICE_PLAN_L
+        pendingOfferingId: null
+
+  # ── 6. Operator-initiated price migration on PLAN_L ────────────────────
+  - name: add new $50 price row for PLAN_L
+    action: catalog.add_price
+    args:
+      offering_id: PLAN_L
+      price_id: "{{ plan_l_v2_price_id }}"
+      amount: "50.00"
+      currency: SGD
+      valid_from: "2026-04-01T00:00:00+00:00"
+      retire_current: true
+
+  - name: schedule the migration with 30-day notice
+    action: subscription.migrate_to_new_price
+    args:
+      offering_id: PLAN_L
+      new_price_id: "{{ plan_l_v2_price_id }}"
+      effective_from: "2026-04-01T00:00:00+00:00"
+      notice_days: 30
+      initiated_by: ops-hero
+
+  - name: verify pending fields are populated for the migration
+    assert:
+      tool: subscription.get
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        offeringId: PLAN_L
+        priceAmount: "45.00"          # not yet applied
+        pendingOfferingId: PLAN_L     # same plan = price migration
+        pendingOfferingPriceId: {starts_with: "PRICE_PLAN_L_V2_"}
+
+  # ── 7. Advance past notice + next renewal, then verify migration applied ─
+  - name: advance past notice + renewal boundary
+    action: clock.advance
+    args:
+      duration: "60d"
+
+  - name: trigger manual renewal — applies the price migration
+    action: subscription.renew_now
+    args:
+      subscription_id: "{{ subscription_id }}"
+
+  - name: verify subscription is on the new $50 price (same plan)
+    assert:
+      tool: subscription.get
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        offeringId: PLAN_L
+        priceAmount: "50.00"
+        priceOfferingPriceId: {starts_with: "PRICE_PLAN_L_V2_"}
+        pendingOfferingId: null
+
+teardown:
+  unfreeze_clock: true

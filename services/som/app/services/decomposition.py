@@ -37,6 +37,7 @@ async def decompose_order(
     svc_repo: ServiceRepository,
     inventory_client: InventoryClient,
     exchange: aio_pika.abc.AbstractExchange | None,
+    price_snapshot: dict | None = None,
 ) -> ServiceOrder:
     """Decompose a commercial order into ServiceOrder -> CFS -> RFS + inventory."""
 
@@ -149,7 +150,7 @@ async def decompose_order(
 
         # ── 8. Store resources + pending tasks in CFS characteristics ──────
         pending_tasks = {t: "pending" for t in _TASK_TYPES}
-        cfs.characteristics = {
+        characteristics = {
             "msisdn": msisdn,
             "iccid": iccid,
             "imsi": imsi,
@@ -160,6 +161,9 @@ async def decompose_order(
             "offeringId": offering_id,
             "paymentMethodId": payment_method_id,
         }
+        if price_snapshot is not None:
+            characteristics["priceSnapshot"] = price_snapshot
+        cfs.characteristics = characteristics
 
         # ── 9. CFS: designed → reserved ────────────────────────────────────
         check_service_transition(cfs.state, "reserved")

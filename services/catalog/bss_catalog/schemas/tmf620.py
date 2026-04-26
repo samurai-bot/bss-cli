@@ -11,6 +11,7 @@ from pydantic.alias_generators import to_camel
 
 from bss_models.catalog import (
     ProductOffering as ProductOfferingModel,
+    ProductOfferingPrice as ProductOfferingPriceModel,
     ProductSpecification as ProductSpecificationModel,
 )
 
@@ -42,6 +43,7 @@ class Tmf620ProductOfferingPrice(TmfBase):
     recurring_charge_period_length: int | None = None
     recurring_charge_period_type: str | None = None
     price: ProductPrice
+    valid_for: TimePeriod | None = None
     at_type: str = Field(default="ProductOfferingPrice", serialization_alias="@type")
 
 
@@ -87,7 +89,27 @@ class Tmf620ProductSpecification(TmfBase):
 # --- Mapping functions: ORM model → TMF schema ---
 
 TMF_OFFERING_PATH = "/tmf-api/productCatalogManagement/v4/productOffering"
+TMF_OFFERING_PRICE_PATH = "/tmf-api/productCatalogManagement/v4/productOfferingPrice"
 TMF_SPEC_PATH = "/tmf-api/productCatalogManagement/v4/productSpecification"
+
+
+def to_tmf620_price(model: ProductOfferingPriceModel) -> Tmf620ProductOfferingPrice:
+    valid_for = None
+    if model.valid_from or model.valid_to:
+        valid_for = TimePeriod(
+            start_date_time=model.valid_from,
+            end_date_time=model.valid_to,
+        )
+    return Tmf620ProductOfferingPrice(
+        id=model.id,
+        price_type=model.price_type,
+        recurring_charge_period_length=model.recurring_period_length,
+        recurring_charge_period_type=model.recurring_period_type,
+        price=ProductPrice(
+            tax_included_amount=Money(value=float(model.amount), unit=model.currency),
+        ),
+        valid_for=valid_for,
+    )
 
 
 def to_tmf620_offering(model: ProductOfferingModel) -> Tmf620ProductOffering:
@@ -99,18 +121,7 @@ def to_tmf620_offering(model: ProductOfferingModel) -> Tmf620ProductOffering:
             name=model.specification.name,
         )
 
-    prices = [
-        Tmf620ProductOfferingPrice(
-            id=p.id,
-            price_type=p.price_type,
-            recurring_charge_period_length=p.recurring_period_length,
-            recurring_charge_period_type=p.recurring_period_type,
-            price=ProductPrice(
-                tax_included_amount=Money(value=float(p.amount), unit=p.currency),
-            ),
-        )
-        for p in model.prices
-    ]
+    prices = [to_tmf620_price(p) for p in model.prices]
 
     allowances = [
         BundleAllowanceItem(

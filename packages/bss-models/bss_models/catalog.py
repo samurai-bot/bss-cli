@@ -69,6 +69,8 @@ class ProductOfferingPrice(Base, TenantMixin, TimestampMixin):
     recurring_period_type: Mapped[str | None] = mapped_column(Text)
     amount: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
     currency: Mapped[str] = mapped_column(Text, nullable=False, default="SGD")
+    valid_from: Mapped[datetime | None] = mapped_column(TZDateTime)
+    valid_to: Mapped[datetime | None] = mapped_column(TZDateTime)
 
     offering: Mapped["ProductOffering"] = relationship(back_populates="prices")
 

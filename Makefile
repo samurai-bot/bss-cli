@@ -93,6 +93,20 @@ doctrine-check: check-clock
 		exit 1; \
 	fi; \
 	echo "✓ campaign OS untouched"
+	@# v0.7+ — renewal must read the price snapshot, never query the active catalog.
+	@# `get_active_price` is the active-aware lookup forbidden in the renewal stack.
+	@# `get_offering_price` (no `_active_`) is the snapshot resolve and is allowed —
+	@# it fetches a price row by id without any time filter.
+	@hits=$$(awk '/async def renew\b/,/^    async def [a-z]/' \
+		services/subscription/app/services/subscription_service.py 2>/dev/null \
+		| grep -nE 'get_active_price' \
+		|| true); \
+	if [ -n "$$hits" ]; then \
+		echo "✗ subscription.renew() must not query catalog active-price APIs:"; \
+		echo "$$hits"; \
+		exit 1; \
+	fi; \
+	echo "✓ renewal reads snapshot, not catalog"
 
 fmt:
 	uv run ruff format .
