@@ -148,6 +148,7 @@ def client(fake_clients: FakeClientsBundle):
     # Patch get_clients at every import site the routes use. Using
     # ``create=False`` so we don't accidentally create missing attrs.
     with patch("bss_self_serve.routes.landing.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.welcome.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.signup.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.activation.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.confirmation.get_clients", return_value=fake_clients), \
@@ -155,3 +156,90 @@ def client(fake_clients: FakeClientsBundle):
         app = create_app(Settings())
         with TestClient(app) as c:
             yield c
+
+
+@pytest.fixture
+def authed_client(fake_clients: FakeClientsBundle):
+    """TestClient with a pre-attached verified-email session cookie.
+
+    v0.8 — the signup funnel routes (/signup/*, /agent/events/*) require
+    an identity. This fixture seeds one via a separate setup engine, then
+    attaches the session id as a cookie. Tests that hit gated routes
+    use this fixture; tests for public surfaces use ``client``.
+
+    Implementation note: we have to seed the session on a different
+    engine than the app's lifespan engine because TestClient spins each
+    test on a fresh asyncio loop and asyncpg connections are loop-bound.
+    """
+    import asyncio
+    import os
+    from pathlib import Path
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from pydantic_settings import BaseSettings, SettingsConfigDict
+
+    from bss_portal_auth.test_helpers import create_test_session
+    from bss_self_serve.middleware import PORTAL_SESSION_COOKIE
+
+    repo_root = Path(__file__).resolve().parents[3]
+
+    class _DbSettings(BaseSettings):
+        BSS_DB_URL: str = ""
+        model_config = SettingsConfigDict(
+            env_file=repo_root / ".env",
+            env_file_encoding="utf-8",
+            extra="ignore",
+        )
+
+    db_url = _DbSettings().BSS_DB_URL or os.environ.get("BSS_DB_URL", "")
+    if not db_url:
+        pytest.fail("BSS_DB_URL is not set. Export it or add to .env.")
+    os.environ["BSS_DB_URL"] = db_url
+
+    async def _seed():
+        engine = create_async_engine(db_url)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as s:
+            await s.execute(text(
+                "TRUNCATE portal_auth.login_attempt, portal_auth.session, "
+                "portal_auth.login_token, portal_auth.identity RESTART IDENTITY CASCADE"
+            ))
+            await s.commit()
+        async with factory() as s:
+            sess, identity = await create_test_session(
+                s, email="ada@example.sg", verified=True
+            )
+            await s.commit()
+            sid = sess.id
+            iid = identity.id
+        await engine.dispose()
+        return sid, iid
+
+    async def _scrub():
+        engine = create_async_engine(db_url)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as s:
+            await s.execute(text(
+                "TRUNCATE portal_auth.login_attempt, portal_auth.session, "
+                "portal_auth.login_token, portal_auth.identity RESTART IDENTITY CASCADE"
+            ))
+            await s.commit()
+        await engine.dispose()
+
+    session_id, identity_id = asyncio.run(_seed())
+
+    with patch("bss_self_serve.routes.landing.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.welcome.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.signup.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.activation.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.confirmation.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.msisdn_picker.get_clients", return_value=fake_clients):
+        app = create_app(Settings())
+        with TestClient(app) as c:
+            c.cookies.set(PORTAL_SESSION_COOKIE, session_id)
+            # Stash for tests that want to assert against the seeded ids.
+            c.app.state.test_identity_id = identity_id
+            c.app.state.test_session_id = session_id
+            yield c
+
+    asyncio.run(_scrub())

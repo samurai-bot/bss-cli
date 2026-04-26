@@ -143,9 +143,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         msisdn_picker,
         session_api,
         signup,
+        welcome,
     )
 
     app.include_router(auth.router)
+    app.include_router(welcome.router)
     app.include_router(landing.router)
     app.include_router(msisdn_picker.router)
     app.include_router(signup.router)

@@ -24,6 +24,7 @@ from bss_orchestrator.session import (
     AgentEventFinalMessage,
     AgentEventToolCallCompleted,
 )
+from bss_portal_auth import link_to_customer
 from bss_portal_ui.agent_log import project, render_html
 from bss_portal_ui.sse import format_frame as _sse_frame
 from bss_portal_ui.sse import status_html as _status_html
@@ -43,6 +44,11 @@ async def agent_events(request: Request, session_id: str) -> StreamingResponse:
     sig = await store.get(session_id)
     if sig is None:
         raise HTTPException(status_code=404, detail="Unknown or expired session.")
+    # v0.8 — agent stream needs to call link_to_customer the moment a
+    # CUST-* id is harvested. Capture the factory off the app state
+    # here so the inner async generator doesn't try to pull it from a
+    # stale request after the response handle has detached.
+    db_session_factory = getattr(request.app.state, "db_session_factory", None)
 
     async def stream() -> AsyncIterator[bytes]:
         # If the session already finished, close the stream cleanly
@@ -68,7 +74,39 @@ async def agent_events(request: Request, session_id: str) -> StreamingResponse:
                 msisdn=sig.msisdn,
                 card_pan=sig.card_pan,
             ):
+                customer_was_set = sig.customer_id
                 _harvest(sig, event)
+                # The moment customer.create returns CUST-*, bind the
+                # portal-auth identity to it. Doing it here (rather than
+                # in a "final message" hook) keeps the link atomic with
+                # the customer's existence — abandoning mid-flow still
+                # leaves a linked identity, so a returning visitor sees
+                # their customer record under the same email.
+                if (
+                    not customer_was_set
+                    and sig.customer_id
+                    and sig.identity_id
+                    and db_session_factory is not None
+                ):
+                    try:
+                        async with db_session_factory() as db:
+                            await link_to_customer(
+                                db,
+                                identity_id=sig.identity_id,
+                                customer_id=sig.customer_id,
+                            )
+                            await db.commit()
+                    except ValueError as exc:
+                        # Identity already linked to a different customer
+                        # is the only way link_to_customer raises here.
+                        # Surface as an error event but don't block the
+                        # rest of the stream — the customer still exists.
+                        log.warning(
+                            "portal_auth.link_failed",
+                            identity_id=sig.identity_id,
+                            customer_id=sig.customer_id,
+                            error=str(exc),
+                        )
                 # Snapshot the rendered event on the session so the
                 # confirmation page can replay the transcript without
                 # reopening this stream.

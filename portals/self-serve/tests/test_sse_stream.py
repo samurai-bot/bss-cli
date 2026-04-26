@@ -47,8 +47,15 @@ def _parse_sse(text: str) -> list[tuple[str, str]]:
 
 
 @pytest.fixture
-def client_with_agent_mock(fake_clients):  # type: ignore[no-untyped-def]
-    """TestClient with get_clients + agent_bridge.drive_signup patched."""
+def client_with_agent_mock(fake_clients, authed_client):  # type: ignore[no-untyped-def]
+    """TestClient with get_clients + agent_bridge.drive_signup patched.
+
+    v0.8: piggybacks on the ``authed_client`` fixture so the signup
+    POST passes ``Depends(requires_verified_email)``. The seeded
+    identity_id flows through into the in-memory signup session, which
+    in turn lets the agent_events stream call link_to_customer when a
+    CUST-* id is harvested.
+    """
     canned = [
         AgentEventPromptReceived(prompt="Create customer Ck on PLAN_M…"),
         AgentEventToolCallStarted(
@@ -79,12 +86,8 @@ def client_with_agent_mock(fake_clients):  # type: ignore[no-untyped-def]
         for e in canned:
             yield e
 
-    with patch("bss_self_serve.routes.landing.get_clients", return_value=fake_clients), \
-         patch("bss_self_serve.routes.signup.get_clients", return_value=fake_clients), \
-         patch("bss_self_serve.routes.agent_events.drive_signup", new=fake_drive_signup):
-        app = create_app(Settings())
-        with TestClient(app) as c:
-            yield c
+    with patch("bss_self_serve.routes.agent_events.drive_signup", new=fake_drive_signup):
+        yield authed_client
 
 
 def test_unknown_session_returns_404(client_with_agent_mock):  # type: ignore[no-untyped-def]
