@@ -9,7 +9,7 @@ on every outgoing request.
   ``BSSApiTokenMiddleware`` accepts the request.
 - ``NamedTokenAuthProvider`` — v0.9+ for external-facing surfaces (the
   self-serve portal today; partner clients later). Reads its token from
-  a named env var (``BSS_PORTAL_API_TOKEN`` etc.) and carries an
+  a named env var (``BSS_PORTAL_SELF_SERVE_API_TOKEN`` etc.) and carries an
   informational identity label for log fields. The actual
   ``service_identity`` resolved on the receiving side comes from token
   validation, not the label — the label exists only so the *outbound*
@@ -65,7 +65,7 @@ class TokenAuthProvider:
 class NamedTokenAuthProvider:
     """v0.9 — outbound auth provider for an external-facing surface.
 
-    Loads its token from ``env_var`` (e.g. ``BSS_PORTAL_API_TOKEN``)
+    Loads its token from ``env_var`` (e.g. ``BSS_PORTAL_SELF_SERVE_API_TOKEN``)
     once at construction and caches it. ``identity`` is an
     informational label used in log fields ("which provider sent this
     call") — it is **not** stamped onto the outbound request as a
@@ -79,7 +79,7 @@ class NamedTokenAuthProvider:
     fallback token to whatever identity it maps to (typically
     ``"default"`` when ``fallback_env_var=BSS_API_TOKEN``). This lets
     a portal continue to function during a staged rollout where
-    ``BSS_PORTAL_API_TOKEN`` hasn't been provisioned yet.
+    ``BSS_PORTAL_SELF_SERVE_API_TOKEN`` hasn't been provisioned yet.
 
     If neither env is populated, raises at construction so the
     portal's lifespan fails fast (matches the v0.3 fail-fast pattern).

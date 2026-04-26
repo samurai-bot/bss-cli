@@ -48,19 +48,19 @@ def test_loader_single_default_token():
 
 
 def test_loader_default_plus_portal():
-    env = {"BSS_API_TOKEN": TEST_TOKEN, "BSS_PORTAL_API_TOKEN": PORTAL_TOKEN}
+    env = {"BSS_API_TOKEN": TEST_TOKEN, "BSS_PORTAL_SELF_SERVE_API_TOKEN": PORTAL_TOKEN}
     m = load_token_map_from_env(env)
-    assert m.identities == ("default", "portal")
+    assert m.identities == ("default", "portal_self_serve")
     assert m.lookup(TEST_TOKEN) == "default"
-    assert m.lookup(PORTAL_TOKEN) == "portal"
+    assert m.lookup(PORTAL_TOKEN) == "portal_self_serve"
 
 
 def test_loader_named_token_only_no_default():
     """Loader records what's there; validator is what enforces 'default required'."""
-    env = {"BSS_PORTAL_API_TOKEN": PORTAL_TOKEN}
+    env = {"BSS_PORTAL_SELF_SERVE_API_TOKEN": PORTAL_TOKEN}
     m = load_token_map_from_env(env)
-    assert m.identities == ("portal",)
-    assert m.lookup(PORTAL_TOKEN) == "portal"
+    assert m.identities == ("portal_self_serve",)
+    assert m.lookup(PORTAL_TOKEN) == "portal_self_serve"
     assert m.lookup(TEST_TOKEN) is None
 
 
@@ -100,7 +100,7 @@ def test_loader_ignores_unrelated_env_vars():
 
 
 def test_loader_skips_empty_named_value():
-    env = {"BSS_API_TOKEN": TEST_TOKEN, "BSS_PORTAL_API_TOKEN": ""}
+    env = {"BSS_API_TOKEN": TEST_TOKEN, "BSS_PORTAL_SELF_SERVE_API_TOKEN": ""}
     m = load_token_map_from_env(env)
     assert m.identities == ("default",)
 
@@ -123,7 +123,7 @@ def test_loader_named_tokens_sorted_for_determinism():
 
 
 def test_token_map_stores_hashed_values_not_raw():
-    env = {"BSS_API_TOKEN": TEST_TOKEN, "BSS_PORTAL_API_TOKEN": PORTAL_TOKEN}
+    env = {"BSS_API_TOKEN": TEST_TOKEN, "BSS_PORTAL_SELF_SERVE_API_TOKEN": PORTAL_TOKEN}
     m = load_token_map_from_env(env)
     raw_test = TEST_TOKEN.encode("utf-8")
     raw_portal = PORTAL_TOKEN.encode("utf-8")
@@ -169,7 +169,7 @@ def test_hash_is_one_way_in_practice():
 
 
 def test_validate_requires_default_identity():
-    env = {"BSS_PORTAL_API_TOKEN": PORTAL_TOKEN}
+    env = {"BSS_PORTAL_SELF_SERVE_API_TOKEN": PORTAL_TOKEN}
     m = load_token_map_from_env(env)
     with pytest.raises(TokenMapInvalid, match="BSS_API_TOKEN is unset"):
         validate_token_map(m, env=env)
@@ -184,9 +184,9 @@ def test_validate_rejects_sentinel_in_default():
 
 
 def test_validate_rejects_sentinel_in_named():
-    env = {"BSS_API_TOKEN": TEST_TOKEN, "BSS_PORTAL_API_TOKEN": "changeme"}
+    env = {"BSS_API_TOKEN": TEST_TOKEN, "BSS_PORTAL_SELF_SERVE_API_TOKEN": "changeme"}
     m = load_token_map_from_env(env)
-    with pytest.raises(TokenMapInvalid, match="BSS_PORTAL_API_TOKEN.*sentinel"):
+    with pytest.raises(TokenMapInvalid, match="BSS_PORTAL_SELF_SERVE_API_TOKEN.*sentinel"):
         validate_token_map(m, env=env)
 
 
@@ -204,9 +204,9 @@ def test_validate_accepts_32_char_token():
 
 
 def test_validate_rejects_short_named_token():
-    env = {"BSS_API_TOKEN": TEST_TOKEN, "BSS_PORTAL_API_TOKEN": "a" * 31}
+    env = {"BSS_API_TOKEN": TEST_TOKEN, "BSS_PORTAL_SELF_SERVE_API_TOKEN": "a" * 31}
     m = load_token_map_from_env(env)
-    with pytest.raises(TokenMapInvalid, match="BSS_PORTAL_API_TOKEN.*too short"):
+    with pytest.raises(TokenMapInvalid, match="BSS_PORTAL_SELF_SERVE_API_TOKEN.*too short"):
         validate_token_map(m, env=env)
 
 
@@ -214,7 +214,7 @@ def test_validate_rejects_shared_token_across_identities():
     """Two identities must never share a token value (defeats blast-radius)."""
     env = {
         "BSS_API_TOKEN": TEST_TOKEN,
-        "BSS_PORTAL_API_TOKEN": TEST_TOKEN,  # same as default — REJECT
+        "BSS_PORTAL_SELF_SERVE_API_TOKEN": TEST_TOKEN,  # same as default — REJECT
     }
     m = load_token_map_from_env(env)
     with pytest.raises(TokenMapInvalid, match="sharing a token"):
@@ -223,7 +223,7 @@ def test_validate_rejects_shared_token_across_identities():
 
 def test_validate_does_not_echo_raw_token_in_error():
     """Error messages must not leak the offending token value."""
-    env = {"BSS_API_TOKEN": TEST_TOKEN, "BSS_PORTAL_API_TOKEN": "a" * 31}
+    env = {"BSS_API_TOKEN": TEST_TOKEN, "BSS_PORTAL_SELF_SERVE_API_TOKEN": "a" * 31}
     m = load_token_map_from_env(env)
     with pytest.raises(TokenMapInvalid) as exc_info:
         validate_token_map(m, env=env)
@@ -238,11 +238,11 @@ def test_validate_does_not_echo_raw_token_in_error():
 
 
 def test_validate_present_returns_validated_map():
-    env = {"BSS_API_TOKEN": TEST_TOKEN, "BSS_PORTAL_API_TOKEN": PORTAL_TOKEN}
+    env = {"BSS_API_TOKEN": TEST_TOKEN, "BSS_PORTAL_SELF_SERVE_API_TOKEN": PORTAL_TOKEN}
     m = validate_token_map_present(env=env)
     assert isinstance(m, TokenMap)
     assert m.lookup(TEST_TOKEN) == "default"
-    assert m.lookup(PORTAL_TOKEN) == "portal"
+    assert m.lookup(PORTAL_TOKEN) == "portal_self_serve"
 
 
 def test_validate_present_raises_on_missing_default():

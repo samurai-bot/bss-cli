@@ -2,7 +2,7 @@
 
 Locks in:
 - The factory uses ``NamedTokenAuthProvider("portal_self_serve",
-  "BSS_PORTAL_API_TOKEN", fallback_env_var="BSS_API_TOKEN")``.
+  "BSS_PORTAL_SELF_SERVE_API_TOKEN", fallback_env_var="BSS_API_TOKEN")``.
 - It returns a cached PortalClients bundle.
 - The auth provider on every constructed client is the same named
   provider instance (so rotation propagates uniformly).
@@ -31,7 +31,7 @@ def _clear_clients_cache():
 
 
 def test_factory_uses_named_token_provider(monkeypatch):
-    monkeypatch.setenv("BSS_PORTAL_API_TOKEN", PORTAL_TOKEN)
+    monkeypatch.setenv("BSS_PORTAL_SELF_SERVE_API_TOKEN", PORTAL_TOKEN)
     bundle = portal_clients.get_clients()
     # The auth provider on each client is a NamedTokenAuthProvider
     # carrying the portal_self_serve identity. We poke at the private
@@ -45,27 +45,27 @@ def test_factory_uses_named_token_provider(monkeypatch):
 
 
 def test_factory_caches_bundle(monkeypatch):
-    monkeypatch.setenv("BSS_PORTAL_API_TOKEN", PORTAL_TOKEN)
+    monkeypatch.setenv("BSS_PORTAL_SELF_SERVE_API_TOKEN", PORTAL_TOKEN)
     a = portal_clients.get_clients()
     b = portal_clients.get_clients()
     assert a is b
 
 
 def test_factory_uses_named_env_when_set(monkeypatch):
-    monkeypatch.setenv("BSS_PORTAL_API_TOKEN", PORTAL_TOKEN)
+    monkeypatch.setenv("BSS_PORTAL_SELF_SERVE_API_TOKEN", PORTAL_TOKEN)
     monkeypatch.setenv("BSS_API_TOKEN", DEFAULT_TOKEN)
     bundle = portal_clients.get_clients()
     provider = bundle.catalog._auth
-    assert provider.source_env == "BSS_PORTAL_API_TOKEN"
+    assert provider.source_env == "BSS_PORTAL_SELF_SERVE_API_TOKEN"
 
 
 def test_factory_falls_back_to_default_token(monkeypatch):
-    """When BSS_PORTAL_API_TOKEN is unset, fall back to BSS_API_TOKEN.
+    """When BSS_PORTAL_SELF_SERVE_API_TOKEN is unset, fall back to BSS_API_TOKEN.
 
     Receiving service will resolve service_identity=default for these
     calls, but the portal still functions during a staged rollout.
     """
-    monkeypatch.delenv("BSS_PORTAL_API_TOKEN", raising=False)
+    monkeypatch.delenv("BSS_PORTAL_SELF_SERVE_API_TOKEN", raising=False)
     monkeypatch.setenv("BSS_API_TOKEN", DEFAULT_TOKEN)
     bundle = portal_clients.get_clients()
     provider = bundle.catalog._auth
@@ -74,7 +74,7 @@ def test_factory_falls_back_to_default_token(monkeypatch):
 
 
 def test_factory_raises_when_neither_env_set(monkeypatch):
-    monkeypatch.delenv("BSS_PORTAL_API_TOKEN", raising=False)
+    monkeypatch.delenv("BSS_PORTAL_SELF_SERVE_API_TOKEN", raising=False)
     monkeypatch.delenv("BSS_API_TOKEN", raising=False)
     with pytest.raises(RuntimeError):
         portal_clients.get_clients()
@@ -82,7 +82,7 @@ def test_factory_raises_when_neither_env_set(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_factory_outbound_headers_carry_named_token(monkeypatch):
-    monkeypatch.setenv("BSS_PORTAL_API_TOKEN", PORTAL_TOKEN)
+    monkeypatch.setenv("BSS_PORTAL_SELF_SERVE_API_TOKEN", PORTAL_TOKEN)
     bundle = portal_clients.get_clients()
     provider = bundle.catalog._auth
     headers = await provider.get_headers()
@@ -93,7 +93,7 @@ async def test_factory_outbound_headers_carry_named_token(monkeypatch):
 
 def test_portal_clients_bundle_includes_required_clients(monkeypatch):
     """Document the read surface the portal currently uses."""
-    monkeypatch.setenv("BSS_PORTAL_API_TOKEN", PORTAL_TOKEN)
+    monkeypatch.setenv("BSS_PORTAL_SELF_SERVE_API_TOKEN", PORTAL_TOKEN)
     bundle = portal_clients.get_clients()
     # Expand this list deliberately when v0.10+ adds new portal-side reads.
     assert hasattr(bundle, "catalog")

@@ -157,7 +157,7 @@ The hero artifact on every portal page is the **Agent Activity** log widget — 
 
 ### Named-token perimeter (v0.9)
 
-v0.9 splits the v0.3 single-token model so each external-facing surface carries its own identity at the BSS perimeter. The diagram below shows the post-v0.9 token flow; the orchestrator and CSR keep using `BSS_API_TOKEN` (default identity), while the self-serve portal carries `BSS_PORTAL_API_TOKEN` (`portal_self_serve` identity).
+v0.9 splits the v0.3 single-token model so each external-facing surface carries its own identity at the BSS perimeter. The diagram below shows the post-v0.9 token flow; the orchestrator and CSR keep using `BSS_API_TOKEN` (default identity), while the self-serve portal carries `BSS_PORTAL_SELF_SERVE_API_TOKEN` (`portal_self_serve` identity).
 
 ```
                 ┌─────────────┐
@@ -168,7 +168,7 @@ v0.9 splits the v0.3 single-token model so each external-facing surface carries 
    ┌──────────────────────────┐         ┌──────────────────────────┐
    │ portal-self-serve (9001) │         │ csr-console (9002)       │
    │  outbound: NamedToken    │         │  outbound: TokenAuth     │
-   │  → BSS_PORTAL_API_TOKEN  │         │  → BSS_API_TOKEN         │
+   │  → BSS_PORTAL_SELF_SERVE_API_TOKEN  │         │  → BSS_API_TOKEN         │
    │  identity: portal_self_  │         │  identity: default       │
    │            serve         │         │                          │
    └──────────────┬───────────┘         └──────────────┬───────────┘
@@ -563,7 +563,7 @@ Cost estimate: **~$4,000-8,000/month**.
 | Zero-downtime deploys | ⚠️ | Needs graceful SIGTERM handler (wired in Phase 3 reference slice) |
 | TLS termination | ➖ | Expected at ALB / ingress layer, not per-service |
 | Auth between services | ⚠️ | Shared API token (v0.3) via `BSSApiTokenMiddleware` + `TokenAuthProvider`. Per-principal OAuth2 + JWT is Phase 12. `auth_context.py` seam unchanged — Phase 12 fills the principal from JWT claims. |
-| Per-portal named tokens | ✅ | v0.9 splits the perimeter into a `TokenMap` of named tokens. Self-serve portal carries `BSS_PORTAL_API_TOKEN` → `service_identity="portal_self_serve"`; orchestrator + CSR keep `BSS_API_TOKEN` (default identity). `service_identity` flows into `audit.domain_event`, structlog, OTel spans. Rotation is per-token, restart-based. |
+| Per-portal named tokens | ✅ | v0.9 splits the perimeter into a `TokenMap` of named tokens. Self-serve portal carries `BSS_PORTAL_SELF_SERVE_API_TOKEN` → `service_identity="portal_self_serve"`; orchestrator + CSR keep `BSS_API_TOKEN` (default identity). `service_identity` flows into `audit.domain_event`, structlog, OTel spans. Rotation is per-token, restart-based. |
 | Operator-facing portal | ⚠️ | CSR console (v0.5) on port 9002 ships with stub login (NOT real auth). Real OAuth Phase 12. Trusted-network deploy only. |
 | Customer-facing portal | ⚠️ | Self-serve signup (v0.4) on port 9001 ships with no inbound auth (it's a public signup surface by design). Network exposure control required. |
 | Rate limiting per principal | ❌ | Phase 12 |

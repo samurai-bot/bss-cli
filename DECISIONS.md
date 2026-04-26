@@ -1310,7 +1310,7 @@ the map at startup, validates incoming `X-BSS-API-Token` against it
 in constant time, and attaches the resolved `service_identity` to
 the ASGI scope. Receiving services derive `service_identity` from
 the token, never from a separate header. The self-serve portal in
-v0.9 carries `BSS_PORTAL_API_TOKEN` → `service_identity = "portal_self_serve"`.
+v0.9 carries `BSS_PORTAL_SELF_SERVE_API_TOKEN` → `service_identity = "portal_self_serve"`.
 The CSR console stays on the default token until v0.12.
 **Alternatives:** (a) Jump straight to OAuth2/JWT — rejected, that's
 Phase 12's full per-principal auth story and lifts roles/permissions

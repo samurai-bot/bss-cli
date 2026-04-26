@@ -164,13 +164,13 @@ async def test_service_identity_attached_for_default_token() -> None:
 
 
 async def test_service_identity_attached_for_named_token() -> None:
-    env = {"BSS_API_TOKEN": TEST_TOKEN, "BSS_PORTAL_API_TOKEN": PORTAL_TOKEN}
+    env = {"BSS_API_TOKEN": TEST_TOKEN, "BSS_PORTAL_SELF_SERVE_API_TOKEN": PORTAL_TOKEN}
     app = _make_app_with_map(load_token_map_from_env(env))
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         r = await c.get("/", headers={"X-BSS-API-Token": PORTAL_TOKEN})
         assert r.status_code == 200
-        assert r.json()["identity"] == "portal"
+        assert r.json()["identity"] == "portal_self_serve"
 
 
 async def test_unknown_token_returns_401_no_identity_attached() -> None:
@@ -189,7 +189,7 @@ async def test_separate_service_identity_header_is_not_trusted() -> None:
     Even if a request carries ``X-BSS-Service-Identity: portal``, the
     middleware must derive identity from the validated token alone.
     """
-    env = {"BSS_API_TOKEN": TEST_TOKEN, "BSS_PORTAL_API_TOKEN": PORTAL_TOKEN}
+    env = {"BSS_API_TOKEN": TEST_TOKEN, "BSS_PORTAL_SELF_SERVE_API_TOKEN": PORTAL_TOKEN}
     app = _make_app_with_map(load_token_map_from_env(env))
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
@@ -214,7 +214,7 @@ async def test_middleware_no_args_loads_from_env(monkeypatch) -> None:
     pass a TokenMap explicitly today.
     """
     monkeypatch.setenv("BSS_API_TOKEN", TEST_TOKEN)
-    monkeypatch.delenv("BSS_PORTAL_API_TOKEN", raising=False)
+    monkeypatch.delenv("BSS_PORTAL_SELF_SERVE_API_TOKEN", raising=False)
 
     app = FastAPI()
     app.add_middleware(BSSApiTokenMiddleware)

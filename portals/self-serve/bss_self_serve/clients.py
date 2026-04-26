@@ -1,13 +1,13 @@
 """bss-clients factory for the self-serve portal (v0.9+).
 
 The portal is a customer-facing surface; v0.9 gives it its own
-identity at the BSS perimeter via ``BSS_PORTAL_API_TOKEN``. Outbound
+identity at the BSS perimeter via ``BSS_PORTAL_SELF_SERVE_API_TOKEN``. Outbound
 calls from this factory carry that token, so receiving services
 resolve ``service_identity = "portal_self_serve"`` from token
 validation. Audit / log / OTel see writes initiated through the
 portal as distinct from orchestrator/CSR/scenario traffic.
 
-Backwards compat: if ``BSS_PORTAL_API_TOKEN`` is unset (rolling out
+Backwards compat: if ``BSS_PORTAL_SELF_SERVE_API_TOKEN`` is unset (rolling out
 the named-token model staged across environments), the provider
 falls back to ``BSS_API_TOKEN``. Receiving services then resolve
 ``service_identity = "default"`` for those calls. Logging surfaces
@@ -42,7 +42,7 @@ from .config import settings
 # only used in caller-side log fields. Doctrine: distinct external
 # surface = distinct named token.
 PORTAL_IDENTITY = "portal_self_serve"
-PORTAL_TOKEN_ENV = "BSS_PORTAL_API_TOKEN"
+PORTAL_TOKEN_ENV = "BSS_PORTAL_SELF_SERVE_API_TOKEN"
 FALLBACK_TOKEN_ENV = "BSS_API_TOKEN"
 
 
@@ -67,7 +67,7 @@ def get_clients() -> PortalClients:
     """Return the process-wide PortalClients bundle (constructed once).
 
     Wired with ``NamedTokenAuthProvider("portal_self_serve",
-    "BSS_PORTAL_API_TOKEN", fallback_env_var="BSS_API_TOKEN")`` — every
+    "BSS_PORTAL_SELF_SERVE_API_TOKEN", fallback_env_var="BSS_API_TOKEN")`` — every
     outbound call carries the portal's named token (or falls back to
     the default token during rollout).
     """

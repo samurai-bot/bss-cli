@@ -6,7 +6,7 @@ Per V0_4_0.md §8 / V0_8_0.md §2.2:
   portal is a customer-facing surface protected by the v0.8 portal-auth
   layer (PortalSessionMiddleware below). Outbound calls carry the
   portal's named token via ``bss_self_serve.clients.get_clients()``
-  (v0.9+: ``BSS_PORTAL_API_TOKEN`` → ``service_identity = "portal_self_serve"``
+  (v0.9+: ``BSS_PORTAL_SELF_SERVE_API_TOKEN`` → ``service_identity = "portal_self_serve"``
   on the receiving side; falls back to ``BSS_API_TOKEN`` if the named
   token is not provisioned).
 - ``configure_telemetry(service_name="portal-self-serve")`` runs in

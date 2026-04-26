@@ -21,7 +21,7 @@ Design notes:
 
 - Identity is derived from the env-var name (convention over
   configuration). ``BSS_API_TOKEN`` → ``"default"``,
-  ``BSS_PORTAL_API_TOKEN`` → ``"portal"``,
+  ``BSS_PORTAL_SELF_SERVE_API_TOKEN`` → ``"portal"``,
   ``BSS_PARTNER_API_TOKEN_ACME`` → ``"partner_acme"``.
 
 - Comparison is constant-time (``hmac.compare_digest``) regardless of
@@ -180,7 +180,7 @@ def load_token_map_from_env(env: Mapping[str, str] | None = None) -> TokenMap:
         identity = _identity_from_env_var(name)
         if identity in seen_identities:
             # Two env vars resolve to the same identity (e.g. someone
-            # set both BSS_PORTAL_API_TOKEN and BSS_PORTAL_API_TOKEN_).
+            # set both BSS_PORTAL_SELF_SERVE_API_TOKEN and BSS_PORTAL_SELF_SERVE_API_TOKEN_).
             # Reject at validation time, not load time, so the error
             # message can include all conflicts at once.
             pairs.append((_hash_token(value), identity))

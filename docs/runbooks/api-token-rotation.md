@@ -5,7 +5,7 @@
 ## Token model (v0.3 → v0.9)
 
 - **v0.3** introduced a single `BSS_API_TOKEN` carried by every internal caller (orchestrator, CSR, scenarios). Every BSS service validates it.
-- **v0.9** splits the perimeter into named tokens. Each external-facing surface gets its own. The middleware loads a `TokenMap` from env vars matching `BSS_API_TOKEN` and `BSS_<NAME>_API_TOKEN`; identity is derived from the env-var name (`BSS_PORTAL_API_TOKEN` → `"portal"` — wired up as `"portal_self_serve"` from the portal client side).
+- **v0.9** splits the perimeter into named tokens. Each external-facing surface gets its own. The middleware loads a `TokenMap` from env vars matching `BSS_API_TOKEN` and `BSS_<NAME>_API_TOKEN`; identity is derived from the env-var name (`BSS_PORTAL_SELF_SERVE_API_TOKEN` → `"portal_self_serve"`, `BSS_PARTNER_ACME_API_TOKEN` → `"partner_acme"`).
 - A successful match attaches `service_identity` to the request. Audit, structlog, and OTel spans carry it. Operators can answer "which surface initiated this?" by reading the audit log.
 
 A leaked named token now rotates independently of the orchestrator's token. Same restart-based procedure; smaller blast radius.
@@ -69,7 +69,7 @@ It doesn't — the CLI reads `BSS_API_TOKEN` per process via `bss_middleware.api
 
 ---
 
-## Rotating BSS_PORTAL_API_TOKEN (v0.9+)
+## Rotating BSS_PORTAL_SELF_SERVE_API_TOKEN (v0.9+)
 
 The self-serve portal carries its own named token. Rotating it does **not** require restarting the BSS services or the orchestrator/CSR — only the portal container needs the new value, because only the portal carries this token outbound. The BSS services' middleware loads the token map at startup; if the rotated value is in their env too (it should be), they'll accept it without restart of their own only if you happened to leave the new value already loaded — otherwise the portal's outbound calls will 401 until the BSS services pick up the new map.
 
@@ -78,7 +78,7 @@ The self-serve portal carries its own named token. Rotating it does **not** requ
 NEW_PORTAL_TOKEN=$(openssl rand -hex 32)
 
 # 2. Update .env on every host that loads it (services host + portal host).
-sed -i.bak "s/^BSS_PORTAL_API_TOKEN=.*/BSS_PORTAL_API_TOKEN=$NEW_PORTAL_TOKEN/" .env
+sed -i.bak "s/^BSS_PORTAL_SELF_SERVE_API_TOKEN=.*/BSS_PORTAL_SELF_SERVE_API_TOKEN=$NEW_PORTAL_TOKEN/" .env
 
 # 3. Restart containers that need the new value.
 #    Order matters: services first (so they accept the new token in

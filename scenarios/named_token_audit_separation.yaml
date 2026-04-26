@@ -16,7 +16,7 @@ description: |
      against BSS_API_TOKEN). Receiving services resolve
      service_identity="default".
   3. Portal-named-identity write: add a contact medium to that
-     customer using NamedTokenAuthProvider against BSS_PORTAL_API_TOKEN.
+     customer using NamedTokenAuthProvider against BSS_PORTAL_SELF_SERVE_API_TOKEN.
      Receiving services resolve service_identity="portal_self_serve".
   4. Query audit.domain_event with the new ?serviceIdentity= filter
      and assert:
@@ -27,7 +27,7 @@ description: |
 
   Three runs in a row green is the v0.9 ship gate.
 
-  Prerequisite: BSS_PORTAL_API_TOKEN must be set in the env, and the
+  Prerequisite: BSS_PORTAL_SELF_SERVE_API_TOKEN must be set in the env, and the
   BSS services must have been started with that same value in their
   TokenMap (either by env-file or compose env_file). Without that the
   portal write step 401s and the scenario fails loud — which is the
@@ -74,53 +74,66 @@ steps:
   # ─── Audit attribution assertions ───────────────────────────────────
   # 1. Default-identity rows include the customer.created + kyc_attested
   #    events for this customer.
-  - name: default-identity audit rows include customer.created
+  - name: default-identity audit count for this customer is at least 2
     assert:
-      tool: audit.events_by_identity
+      tool: audit.count_by_identity
       args:
         service_identity: default
         aggregate_id: "{{ customer_id }}"
       expect:
         identity: default
         count: { gte: 2 }
-        events:
-          any_match:
-            eventType: customer.created
-            serviceIdentity: default
 
-  - name: default-identity audit rows include customer.kyc_attested
+  - name: default-identity audit list includes customer.created
     assert:
       tool: audit.events_by_identity
       args:
         service_identity: default
         aggregate_id: "{{ customer_id }}"
       expect:
-        events:
-          any_match:
-            eventType: customer.kyc_attested
-            serviceIdentity: default
+        any_match:
+          eventType: customer.created
+          serviceIdentity: default
 
-  # 2. Portal-identity rows include the contact_medium_added event.
-  - name: portal-identity audit row for contact_medium_added
+  - name: default-identity audit list includes customer.kyc_attested
     assert:
       tool: audit.events_by_identity
+      args:
+        service_identity: default
+        aggregate_id: "{{ customer_id }}"
+      expect:
+        any_match:
+          eventType: customer.kyc_attested
+          serviceIdentity: default
+
+  # 2. Portal-identity rows include the contact_medium_added event.
+  - name: portal-identity audit count for this customer is at least 1
+    assert:
+      tool: audit.count_by_identity
       args:
         service_identity: portal_self_serve
         aggregate_id: "{{ customer_id }}"
       expect:
         identity: portal_self_serve
         count: { gte: 1 }
-        events:
-          any_match:
-            eventType: customer.contact_medium_added
-            serviceIdentity: portal_self_serve
+
+  - name: portal-identity audit list includes contact_medium_added
+    assert:
+      tool: audit.events_by_identity
+      args:
+        service_identity: portal_self_serve
+        aggregate_id: "{{ customer_id }}"
+      expect:
+        any_match:
+          eventType: customer.contact_medium_added
+          serviceIdentity: portal_self_serve
 
   # 3. Negative control: portal-identity rows must NOT include the
   #    initial customer.created event (it predates the portal write
   #    AND was issued by the orchestrator's default token).
   - name: portal-identity rows do NOT include customer.created
     assert:
-      tool: audit.events_by_identity
+      tool: audit.count_by_identity
       args:
         service_identity: portal_self_serve
         aggregate_id: "{{ customer_id }}"
