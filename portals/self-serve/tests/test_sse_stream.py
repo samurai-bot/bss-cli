@@ -47,8 +47,15 @@ def _parse_sse(text: str) -> list[tuple[str, str]]:
 
 
 @pytest.fixture
-def client_with_agent_mock(fake_clients):  # type: ignore[no-untyped-def]
-    """TestClient with get_clients + agent_bridge.drive_signup patched."""
+def client_with_agent_mock(fake_clients, authed_client):  # type: ignore[no-untyped-def]
+    """TestClient with get_clients + agent_bridge.drive_signup patched.
+
+    v0.8: piggybacks on the ``authed_client`` fixture so the signup
+    POST passes ``Depends(requires_verified_email)``. The seeded
+    identity_id flows through into the in-memory signup session, which
+    in turn lets the agent_events stream call link_to_customer when a
+    CUST-* id is harvested.
+    """
     canned = [
         AgentEventPromptReceived(prompt="Create customer Ck on PLAN_M…"),
         AgentEventToolCallStarted(
@@ -79,12 +86,8 @@ def client_with_agent_mock(fake_clients):  # type: ignore[no-untyped-def]
         for e in canned:
             yield e
 
-    with patch("bss_self_serve.routes.landing.get_clients", return_value=fake_clients), \
-         patch("bss_self_serve.routes.signup.get_clients", return_value=fake_clients), \
-         patch("bss_self_serve.routes.agent_events.drive_signup", new=fake_drive_signup):
-        app = create_app(Settings())
-        with TestClient(app) as c:
-            yield c
+    with patch("bss_self_serve.routes.agent_events.drive_signup", new=fake_drive_signup):
+        yield authed_client
 
 
 def test_unknown_session_returns_404(client_with_agent_mock):  # type: ignore[no-untyped-def]
@@ -158,7 +161,7 @@ def test_sse_stream_populates_session_with_harvested_ids(client_with_agent_mock)
     # IDs are there. Harder-facing assertion: scrape the rendered HTML.
     store = client_with_agent_mock.app.state.session_store
     import asyncio
-    sig = asyncio.get_event_loop().run_until_complete(store.get(session_id))
+    sig = asyncio.run(store.get(session_id))
     assert sig is not None
     assert sig.customer_id == "CUST-042"
     assert sig.order_id == "ORD-014"
@@ -187,7 +190,7 @@ def test_sse_stream_snapshots_event_log_on_session(client_with_agent_mock):  # t
 
     import asyncio
     store = client_with_agent_mock.app.state.session_store
-    sig = asyncio.get_event_loop().run_until_complete(store.get(session_id))
+    sig = asyncio.run(store.get(session_id))
     assert sig is not None
     kinds = [e["kind"] for e in sig.event_log]
     assert kinds == [

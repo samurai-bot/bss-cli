@@ -22,10 +22,12 @@ lock-and-hold, by design; it's a demo.
 from __future__ import annotations
 
 from bss_orchestrator.clients import get_clients
-from fastapi import APIRouter, HTTPException, Query, Request
+from bss_portal_auth import IdentityView
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 
 from ..offerings import find_plan, flatten_offerings
+from ..security import requires_verified_email
 from ..templating import templates
 
 router = APIRouter()
@@ -37,6 +39,7 @@ async def msisdn_picker(
     plan_id: str,
     prefix: str | None = Query(default=None, pattern=r"^[0-9]+$"),
     limit: int = Query(default=12, ge=1, le=40),
+    _identity: IdentityView = Depends(requires_verified_email),
 ) -> HTMLResponse:
     clients = get_clients()
     plan = find_plan(flatten_offerings(await clients.catalog.list_offerings()), plan_id)

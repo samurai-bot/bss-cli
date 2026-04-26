@@ -1151,3 +1151,146 @@ ends with "verify with `bss admin catalog show --at <window>`".
 Future phases that introduce real campaigns / coupons revisit
 this rule.
 
+
+## 2026-04-26 — v0.8.0 — Account-first signup funnel (no anonymous purchase)
+**Context:** v0.4 shipped an anonymous funnel: visitor fills the form,
+the agent runs `customer.create` + `payment.add_card` + `order.create`
+in one stream, and the customer record exists for the first time at
+the bottom of that stream. v0.8 needs a login wall in front of the
+portal. Inverting the funnel (identity first, customer second) is
+strictly more work than gating the existing form, so the question
+was whether the work was worth it.
+**Decision:** Account-first. The visitor verifies their email at
+`/auth/login` BEFORE the signup form is rendered. A `portal_auth.identity`
+row exists from the moment they verify. The BSS-core customer record
+is created later by the agent stream, and `bss_portal_auth.link_to_customer`
+binds the identity to the customer the moment `customer.create` returns
+a CUST-* id — atomic with the customer's existence, not gated on the
+agent emitting a final message.
+**Alternatives:** (a) Anonymous funnel + behind-the-scenes account
+creation on submit — rejected; loses idempotency, identity continuity,
+and the abandoned-cart hygiene that comes from having a verified-email
+identity as the long-lived anchor. (b) Login wall at the activation
+page only — rejected; activation already creates a customer row, so
+this just shifts the same UX problem one step later. (c) Optional
+"create account?" checkbox — rejected; conflates two flows and
+encourages duplicate accounts.
+**Consequences:** A returning visitor under the same email reuses
+their existing identity (and customer, if previously linked). Mid-flow
+bail leaves a linked identity, so the "I came back next week" path
+just works. The anti-pattern "anonymous-with-deferred-account" is
+banned in CLAUDE.md so future drift toward it requires an explicit
+new decision. Hero scenario `portal_self_serve_signup_v0_8.yaml`
+renamed from the v0.4 file and rewritten end-to-end. v0.4 file kept
+as `portal_self_serve_signup_v0_4.yaml` (deprecated tag, no `hero`)
+until v0.11 cleans up.
+
+## 2026-04-26 — v0.8.0 — Magic-link + OTP, no passwords
+**Context:** Login factors for the self-serve portal. Most signup
+forms in the wild ask for a password; a few do passwordless.
+Both are well-trodden paths. The decision had to weigh dev / ops
+ergonomics for a tiny MVNO against customer expectation.
+**Decision:** Magic-link + OTP only. No password field anywhere.
+Both factors share the same login token store; verifying either
+consumes the matched row and mints a session. Step-up auth re-uses
+the same OTP shape, scoped to an `action_label`.
+**Alternatives:** (a) Password + reset-via-email — rejected;
+biggest breach surface, biggest support load (forgot-password
+tickets), no operational upside for an MVNO that doesn't have a
+password culture established. (b) SMS OTP — rejected; phone is
+the product (the customer's line), so SMS-OTP is broken when the
+line is blocked. Email is the one identity factor independent
+of the BSS state. (c) Passkeys / WebAuthn — interesting for v1.x
+stickiness; out of scope for v0.8.
+**Consequences:** Smaller breach surface, no "forgot password"
+ticket category, simpler runbook (rotate the pepper if a leak is
+suspected; that invalidates in-flight tokens but not sessions).
+Customers accustomed to password fields may be surprised — copy
+on `/auth/login` ("No password — we'll email you a code") sets
+expectations explicitly. Real MFA beyond step-up (authenticator
+app, hardware key) is a v1.x story tied to the OAuth migration.
+
+## 2026-04-26 — v0.8.0 — Server-side sessions over JWT
+**Context:** The session token has to be revocable (logout, suspected
+compromise, abuse) and slidingly expirable (24h max age but rotate
+past TTL/2 to extend active customers). JWT can do this with a
+refresh-token dance + a revocation list, or it can punt by treating
+sessions as non-revocable. Server-side sessions can do it directly
+with a row + `revoked_at` column.
+**Decision:** Server-side sessions. The cookie carries an opaque
+session id (32 chars URL-safe); the row in `portal_auth.session`
+is the source of truth. Revocation is `UPDATE ... SET revoked_at = NOW()`.
+Sliding rotation mints a new id and revokes the old in one transaction.
+**Alternatives:** (a) JWT with short-lived access token + refresh —
+rejected; more code, more state to track (refresh-token store with
+its own revocation list), more complexity in the middleware. (b)
+JWT with long-lived non-revocable tokens — rejected; revocation is
+load-bearing for the abuse path. (c) JWT-with-blacklist — rejected;
+that's a server-side session with extra cryptographic steps.
+**Consequences:** Every authenticated request reads + updates one
+row in `portal_auth.session`. Pool sized for that read pattern. For
+the small-MVNO scale v0.8 targets, this is a non-issue; if scale
+grows past one Postgres replica it's straightforward to move sessions
+to Redis without changing the public API. JWT remains a Phase 12
+option when per-principal claims (roles, tenants) become load-bearing
+and a JWT validator is the cleaner contract for service-to-service
+trust.
+
+## 2026-04-26 — v0.8.0 — Email is identity, phone is product
+**Context:** Telco customer portals routinely confuse "the customer
+is identified by their phone number" with "logging in with the phone
+number is sensible UX". The product is mobile lines, so the customer
+inevitably has phone numbers — but using one of those numbers as the
+login factor breaks the moment the line is blocked, suspended, or
+ported.
+**Decision:** Email is the unique identity. Phone numbers are products
+the customer subscribes to via the funnel. The portal never asks
+"what's your number?" at login. SMS-based OTP is not implemented in
+v0.8 and is out of scope through v1.x; the sole verification channel
+is email.
+**Alternatives:** (a) Phone-as-login with email recovery — rejected;
+breaks under the very state transitions the portal needs to support
+(suspended / blocked subscriptions). (b) Either-or login — rejected;
+the choice between "did you mean to sign in with phone or email"
+is itself a UX problem, and the product team has been confused
+about it for fifteen years across telcos. Pick one.
+**Consequences:** A customer with a blocked subscription can still
+log in to top up. A customer who ports out can still log in to see
+their billing history. The "what's your number?" prompt only appears
+during signup (MSISDN picker step) — never at the auth boundary.
+Lost-email recovery is manual via human CSR (open a Case); self-serve
+recovery for a lost-email-account is too footgun-prone for v0.8 and
+is documented out of scope.
+
+## 2026-04-26 — bugfix — `populate_existing=True` on FOR UPDATE balance reads
+**Context:** `customer_signup_and_exhaust` hero scenario flaked
+intermittently — two `usage.rated` events for the same subscription
+arriving back-to-back occasionally produced `consumed=second_qty`
+instead of `first_qty + second_qty`, causing the bundle to never
+exhaust. The Phase 8 design (`SELECT ... FOR UPDATE` in
+`get_balance_for_update`) was intended to serialize concurrent
+decrements; verification showed the DB-side lock IS acquired
+correctly. The bug was at the SQLAlchemy layer.
+**Decision:** Add `.execution_options(populate_existing=True)` to
+the `get_balance_for_update` SELECT. The Phase 8 lock semantics are
+preserved (one-row pessimistic lock) and the cached Python object
+is now overwritten with the fresh DB read after the lock is
+acquired.
+**Alternatives:** (a) `prefetch_count=1` on the consumer to remove
+concurrency at the source — rejected; reduces throughput, doesn't
+fix the underlying bug for any future caller of this repo method.
+(b) Optimistic locking with compare-and-set + retry — rejected;
+more code, harder to reason about, no net benefit. (c) Don't
+selectinload `Subscription.balances` in `_repo.get` — rejected;
+breaks every other call site that legitimately wants the eagerly-
+loaded relationship.
+**Consequences:** The fix is one line. Identity-map staleness vs
+acquired-lock is a subtle SQLAlchemy trap — without
+`populate_existing`, a SELECT FOR UPDATE that re-hits the DB still
+returns the cached Python object with stale attributes, defeating
+the lock at the application layer even though the DB is doing the
+right thing. New regression test
+`services/subscription/tests/test_usage_rated_race.py` reproduces
+the cache-staleness mechanism in a single session and would FAIL
+without the fix (verified). Documented inline in
+`subscription_repo.py:get_balance_for_update`.

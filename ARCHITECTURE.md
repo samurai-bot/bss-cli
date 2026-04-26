@@ -134,7 +134,7 @@ A portal is a **channel** onto the BSS — a thin HTTP surface that translates a
 
 | # | Portal | Port | Audience | Writes go through… | Inbound auth |
 |---|---|---|---|---|---|
-| 1 | self-serve | 9001 | Prospect browsing / signing up | `agent_bridge.drive_signup` → `astream_once(channel="portal-self-serve")` | none (public signup) |
+| 1 | self-serve | 9001 | Prospect browsing / signing up | `agent_bridge.drive_signup` → `astream_once(channel="portal-self-serve")` | **email + magic link / OTP (v0.8)** — see "Portal authentication" below |
 | 2 | csr | 9002 | CSR operators | `agent_bridge.ask_about_customer` → `astream_once(channel="portal-csr", actor=<op>)` | stub login (cookie); Phase 12 swaps for real OAuth |
 
 The defining property of a portal is that **every write routes through the LLM orchestrator**. The route handler never imports `CustomerClient.create`, `OrderClient.create`, or any other mutating bss-clients method. It builds a natural-language instruction, passes it to `astream_once`, and streams the resulting events (tool call started, tool call completed, final message) back to the browser via Server-Sent Events.
@@ -154,6 +154,25 @@ The agent log widget, SSE plumbing helpers (`format_frame`, `status_html`), even
 Extracted in v0.5 (before the second portal was written) to prevent the agent log widget from drifting between portals — a fix landing only in self-serve when both need it would surface as a demo bug a month later. Documented in `DECISIONS.md` 2026-04-23.
 
 The hero artifact on every portal page is the **Agent Activity** log widget — a side panel streaming the LLM's tool-call sequence live. Strip it out and the portal looks like any CRUD frontend; keep it in and the viewer can see the LLM is doing the work, tool by tool. Details in `phases/V0_4_0.md` and `phases/V0_5_0.md`.
+
+### Portal authentication (self-serve, v0.8)
+
+v0.8 puts a login wall in front of the self-serve portal. CSR console retains its v0.5 stub auth (Phase 12 picks up CSR's auth story). Schema, library, and middleware live separately so Phase 12 can swap the OAuth/JWT validator without touching business logic.
+
+- **Schema:** `portal_auth` (migration `0008_v080_portal_auth`). Four tables — `identity` (email-keyed, FK-linkable to a `customer_id`), `login_token` (OTP / magic-link / step-up, all hashed), `session` (server-side; cookie carries the id only), `login_attempt` (append-only audit + rate-limit substrate).
+- **Library:** `packages/bss-portal-auth/`. Pure Python (no HTTP service of its own). Public surface: `start_email_login` / `verify_email_login` / `current_session` / `rotate_if_due` / `revoke_session` / `link_to_customer` / `start_step_up` / `verify_step_up` / `consume_step_up_token` / `validate_pepper_present`. Tokens HMAC-SHA-256-keyed by `BSS_PORTAL_TOKEN_PEPPER` (≥32 chars; sentinel + length validated at portal startup). Comparison via `hmac.compare_digest`.
+- **Middleware:** `bss_self_serve.middleware.PortalSessionMiddleware` (pure ASGI, SSE-safe). Sits between request-id middleware and route resolution. Reads the `bss_portal_session` cookie off the ASGI scope, resolves to (session, identity), attaches `request.state.session` / `.identity` / `.customer_id`, rotates session id past TTL/2 with Set-Cookie writeback. The ONLY path that touches the cookie header.
+- **Public route allowlist:** `/welcome`, `/plans`, `/auth/*`, `/static/*`, `/portal-ui/static/*`. Adding a public route requires both an entry in `bss_self_serve.security.PUBLIC_*` and a test.
+- **Step-up auth:** `requires_step_up(action_label)` dep consumes a one-shot grant carried via `X-BSS-StepUp-Token` header / `step_up_token` form field / `bss_portal_step_up` cookie (60s TTL, set by `POST /auth/step-up`). Tokens are scoped to a single `action_label` — a grant minted for `subscription.terminate` cannot satisfy a `payment.remove_method` route.
+- **Email delivery:** pluggable. v0.8 ships `LoggingEmailAdapter` (writes plaintext OTPs + magic links to `BSS_PORTAL_DEV_MAILBOX_PATH` for dev / staging; the file is the only place the plaintext lives outside the customer's inbox) and `NoopEmailAdapter` (tests). `SmtpEmailAdapter` is reserved for v1.0 and raises at construction.
+- **Account-first signup funnel:** the entry points (`/signup/{plan}`, `/signup/{plan}/msisdn`, `POST /signup`, `/signup/{plan}/progress`) are gated on `Depends(requires_verified_email)`. The agent stream calls `link_to_customer` the moment `customer.create` returns a CUST-* id, atomically binding the verified identity to the customer record. A returning visitor under the same email reuses the same `(identity, customer)` pair.
+- **Login-gated `/`:** the v0.4 anonymous landing moved to `/plans`. `/` is now the dashboard — empty for verified-but-unlinked identities, placeholder for linked (v0.10 will fill in the actual lines / balances UI).
+- **Topology placement:** for the self-serve portal,
+  ```
+  request -> RequestIdMiddleware -> PortalSessionMiddleware -> route -> agent_bridge -> astream_once -> bss-clients (token auth) -> services
+  ```
+  CSR portal: same shape minus `PortalSessionMiddleware` (its session story is the v0.5 stub-cookie path). When Phase 12 lands per-principal OAuth/JWT, both portals' inbound middleware is replaced; everything below the gate stays untouched.
+- **Runbook:** `docs/runbooks/portal-auth.md` (token pepper generation + rotation, dev mailbox tail, brute-force investigation, unverified-identity cleanup).
 
 The **Inventory sub-domain** (MSISDN pool + eSIM profile pool) lives inside the CRM service on port 8002, mounted under `/inventory-api/v1/...`. It has its own schema (`inventory`), repositories, policies, and HTTP endpoints — just no separate container. SOM and Subscription call it via `bss-clients` as if it were a distinct service. If it outgrows CRM, extraction to an 11th container is mechanical because the boundary is already enforced.
 

@@ -42,9 +42,13 @@ async def search(
                 url=f"/customer/{customer_raw['id']}",
                 status_code=303,
             )
-        # Fall through to render an empty results page for visibility.
+        # Fall through to the name-contains search. The query "looked
+        # like" an MSISDN but no number matched — operators who type an
+        # all-digit name fragment (test scenarios with hex run_ids that
+        # happen to be all-digits, customer names like '007') still
+        # deserve a real search instead of an empty page.
 
-    if q_clean and not looks_like_msisdn(q_clean):
+    if q_clean:
         raw = await get_clients().crm.list_customers(name_contains=q_clean)
         results = [flatten_customer(c) for c in raw]
 

@@ -2,6 +2,204 @@
    Palette, layout, header/footer, and the agent log widget live in
    bss_portal_ui/static/css/portal_base.css (loaded first via base.html). */
 
+/* ─── Header nav (v0.8 — sign-in / sign-out + email pill) ──────── */
+
+.portal-nav {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 13px;
+}
+.portal-nav a {
+  color: var(--fg-muted);
+  text-decoration: none;
+}
+.portal-nav a:hover { color: var(--fg); }
+.nav-email {
+  font-family: var(--mono);
+  color: var(--accent);
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 8px;
+}
+.nav-logout-form { margin: 0; }
+.nav-logout {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.nav-logout:hover { color: var(--fg); border-color: var(--fg-muted); }
+
+/* ─── Signup form — verified-email banner (v0.8) ──────────────── */
+
+.signed-in-as {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.signed-in-as-label { color: var(--fg-muted); }
+.signed-in-as-email { font-family: var(--mono); color: var(--accent); font-weight: 600; }
+.signed-in-as-note  { color: var(--fg-muted); }
+
+/* ─── Dashboard (v0.8 placeholder, v0.10 fills it in) ─────────── */
+
+.dashboard,
+.dashboard-empty {
+  max-width: 640px;
+  margin: 32px auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.dashboard-empty-cta-row,
+.dashboard-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-top: 8px;
+}
+.dashboard-placeholder {
+  background: var(--bg-inset);
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  padding: 24px;
+  color: var(--fg-muted);
+  font-size: 14px;
+}
+.dashboard-cust {
+  font-family: var(--mono);
+  color: var(--accent);
+}
+.dashboard-logout-form { margin: 0; }
+
+/* ─── Welcome page (v0.8) ────────────────────────────────────── */
+
+.welcome-card {
+  max-width: 560px;
+  margin: 48px auto;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.welcome-cta-row {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  margin-top: 8px;
+}
+.welcome-cta {
+  background: var(--bg-inset);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 12px 22px;
+  text-decoration: none;
+  font-weight: 500;
+}
+.welcome-cta--primary {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+}
+.welcome-cta:hover { filter: brightness(1.1); }
+.welcome-foot { color: var(--fg-muted); font-size: 13px; }
+
+/* ─── Auth surfaces (v0.8) ───────────────────────────────────── */
+
+.auth-card {
+  max-width: 480px;
+  margin: 32px auto;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.auth-label {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+.auth-input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 10px 12px;
+  font-size: 15px;
+  color: var(--fg);
+  font-family: var(--mono);
+}
+.auth-input:focus { outline: 2px solid var(--accent-dim); }
+.auth-input--otp {
+  letter-spacing: 0.4em;
+  font-size: 22px;
+  text-align: center;
+}
+.auth-cta {
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  border-radius: 4px;
+  padding: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.auth-cta:hover { filter: brightness(1.08); }
+.auth-hint {
+  color: var(--fg-muted);
+  font-size: 13px;
+  margin: 0;
+}
+.auth-error {
+  background: rgba(220, 80, 80, 0.12);
+  border: 1px solid rgba(220, 80, 80, 0.4);
+  color: #ff8a8a;
+  padding: 10px 12px;
+  border-radius: 4px;
+  font-size: 14px;
+}
+.auth-email {
+  font-family: var(--mono);
+  color: var(--accent);
+}
+.auth-action {
+  font-family: var(--mono);
+  color: var(--accent);
+}
+.auth-resend-form { margin-top: 8px; }
+.auth-resend {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+  border-radius: 4px;
+  padding: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  width: 100%;
+}
+.auth-resend:hover { color: var(--fg); }
+
 /* ─── Plan cards ─────────────────────────────────────────── */
 
 .plan-grid {

@@ -1,18 +1,17 @@
-name: portal_self_serve_signup
+name: portal_self_serve_signup_v0_4
 description: |
-  v0.4 hero: full self-serve portal signup driven entirely through HTTP.
-  Submits the form, triggers the SSE stream (which runs the agent to
-  completion), polls the session status endpoint until done, then
-  verifies the resulting subscription state and channel attribution
-  via backend tools.
+  v0.4 anonymous-funnel hero, kept FOR REFERENCE while we land v0.8.
 
-  Proves three things simultaneously:
-    - the portal's public HTTP surface works end-to-end
-    - every portal write flowed through the orchestrator agent
-    - CRM's interaction log correctly attributes the writes to
-      `channel=portal-self-serve`
+  This scenario hits the v0.4 anonymous flow at GET / -> /signup/{plan}
+  -> POST /signup. v0.8 replaced that path with an account-first
+  funnel (see portal_self_serve_signup_v0_8.yaml). The expectations
+  here ARE NO LONGER VALID against the v0.8 portal — `/` is now login-
+  gated and `/signup/{plan}` requires a verified-email session.
 
-tags: [hero, portal, regression]
+  v0.11 will delete this file. Until then it serves as a diff anchor
+  for the funnel rewrite.
+
+tags: [portal, deprecated]
 
 setup:
   reset_operational_data: true

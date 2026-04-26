@@ -46,6 +46,12 @@ class SignupSession:
     msisdn: str  # chosen on the picker page; passed to order.create as msisdn_preference
     card_pan: str  # in-memory only, cleared once the agent finishes
     card_pan_last4: str
+    # v0.8 — portal-auth identity that owns this signup. Pinned at the
+    # POST /signup step from request.state.identity (the verified-email
+    # session). The agent stream calls link_to_customer(identity_id,
+    # customer_id) the moment customer.create returns a CUST-* id, so
+    # the binding survives even if the customer abandons mid-flow.
+    identity_id: str | None = None
     created_at: float = field(default_factory=monotonic)
 
     # Populated as the agent streams:
@@ -83,6 +89,7 @@ class SessionStore:
         phone: str,
         msisdn: str,
         card_pan: str,
+        identity_id: str | None = None,
     ) -> SignupSession:
         session_id = uuid.uuid4().hex
         session = SignupSession(
@@ -94,6 +101,7 @@ class SessionStore:
             msisdn=msisdn,
             card_pan=card_pan,
             card_pan_last4=card_pan[-4:],
+            identity_id=identity_id,
         )
         async with self._lock:
             self._prune_locked()

@@ -1,4 +1,4 @@
-.PHONY: help up up-all up-minimal up-core down build test fmt lint migrate seed reset-db check-clock doctrine-check scenarios scenarios-hero
+.PHONY: help up up-all up-minimal up-core down build test fmt lint migrate seed reset-db check-clock doctrine-check python-check scenarios scenarios-hero
 
 help:
 	@echo "  up               — 10 BSS services (BYOI Postgres/RabbitMQ)"
@@ -14,12 +14,23 @@ help:
 	@echo "  scenarios-hero   — run only the three hero ship-gate scenarios"
 	@echo "  check-clock      — grep guard: all datetime.now sites route through bss-clock"
 	@echo "  doctrine-check   — run all v0.6+ grep guards (clock, channel, portals, no-bypass)"
+	@echo "  python-check     — warn if active Python is outside the supported 3.12 range"
 
-up:
+up: dev-mailbox-dir
 	docker compose up -d
 
-up-all:
+up-all: dev-mailbox-dir
 	docker compose -f docker-compose.yml -f docker-compose.infra.yml up -d
+
+# v0.8 — pre-create the host bind-mount dir for the portal dev mailbox.
+# If Docker auto-creates it, it lands as root:root 755 and the portal
+# container (uid 1000) can't write — POST /auth/login 500s with
+# PermissionError. Creating it owned by the calling user (or 1000)
+# avoids the trap. We use 0777 so it works regardless of host uid
+# layout (this is dev-only state; production uses real SMTP).
+dev-mailbox-dir:
+	@mkdir -p .dev-mailbox
+	@chmod 0777 .dev-mailbox 2>/dev/null || true
 
 up-minimal:
 	docker compose up -d catalog crm payment
@@ -33,9 +44,22 @@ down:
 build:
 	docker compose build
 
+python-check:
+	@# Project targets Python 3.12 (CLAUDE.md "Tech stack"). Newer minors
+	@# (e.g. 3.14) work mostly but have surfaced regressions:
+	@# `asyncio.get_event_loop()` removed in 3.14, Pydantic V1 deprecation
+	@# warnings under LangChain. Earlier minors (<3.12) lack syntax we use.
+	@# This is a warn-only check — never fails the build, just flags drift.
+	@v=$$(uv run python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")'); \
+	case "$$v" in \
+		3.12) echo "✓ python $$v (supported)" ;; \
+		3.13) echo "⚠ python $$v — newer than 3.12 target; should work but untested. See CLAUDE.md tech-stack." ;; \
+		*)   echo "⚠ python $$v — outside supported 3.12 range. Recreate venv: uv python install 3.12.13 && uv venv --python 3.12.13" ;; \
+	esac
+
 test:
 	@failed=0; \
-	for dir in packages/bss-clients packages/bss-admin packages/bss-clock packages/bss-events packages/bss-telemetry packages/bss-middleware packages/bss-portal-ui services/catalog services/crm services/payment services/subscription services/com services/som services/provisioning-sim services/mediation services/rating orchestrator cli portals/self-serve portals/csr; do \
+	for dir in packages/bss-clients packages/bss-admin packages/bss-clock packages/bss-events packages/bss-telemetry packages/bss-middleware packages/bss-portal-ui packages/bss-portal-auth services/catalog services/crm services/payment services/subscription services/com services/som services/provisioning-sim services/mediation services/rating orchestrator cli portals/self-serve portals/csr; do \
 		printf "\n══ $$dir ══\n"; \
 		PYTHONPATH=$$dir/tests:$$dir:$$PYTHONPATH uv run pytest $$dir/tests/ -v -m "not integration" || failed=1; \
 	done; \

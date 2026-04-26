@@ -23,11 +23,13 @@
 
   <fieldset>
     <legend>About you</legend>
+    <div class="signed-in-as">
+      <span class="signed-in-as-label">Signed in as</span>
+      <span class="signed-in-as-email">{{ identity_email }}</span>
+      <span class="signed-in-as-note">— this email will be used for the new account</span>
+    </div>
     <label>Name
       <input type="text" name="name" required autocomplete="name" placeholder="Ada Lovelace" />
-    </label>
-    <label>Email
-      <input type="email" name="email" required autocomplete="email" placeholder="ada@example.sg" />
     </label>
     <label>Contact phone
       <input type="tel" name="phone" required autocomplete="tel" placeholder="+65 9000 0000" value="+65" />

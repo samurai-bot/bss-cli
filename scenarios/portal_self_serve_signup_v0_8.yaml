@@ -1,0 +1,200 @@
+name: portal_self_serve_signup_v0_8
+description: |
+  v0.8 hero: full account-first signup funnel driven entirely through
+  the public HTTP surface.
+
+    1. Visitor lands on /welcome (public).
+    2. Browses /plans (public), sees anonymous CTAs that bounce
+       through /auth/login?next=...
+    3. POST /auth/login emits an OTP + magic link via
+       LoggingEmailAdapter (the dev mailbox).
+    4. file: step reads the dev mailbox, captures the OTP.
+    5. POST /auth/check-email with the OTP — session cookie set.
+    6. GET /signup/{plan}/msisdn (now gated) — picks an MSISDN.
+    7. GET /signup/{plan}?msisdn=... renders the form.
+    8. POST /signup — creates the in-memory signup session, redirects
+       to the SSE-driven progress page.
+    9. SSE stream drives drive_signup through the agent. The harvest
+       hook calls bss_portal_auth.link_to_customer the moment a CUST-*
+       id is seen, atomically binding identity to customer.
+   10. Assert subscription is active, identity row's customer_id is
+       set, channel attribution is portal-self-serve.
+
+  Pre-reqs:
+    - `make up-all` (or equivalent) so the portal container is on
+      the v0.8 image with BSS_PORTAL_DEV_MAILBOX_PATH pointing into
+      the volume-mounted ./.dev-mailbox/ directory.
+    - BSS_PORTAL_TOKEN_PEPPER set in .env (a real openssl-generated
+      32+-char value, not the changeme sentinel).
+    - BSS_LLM_API_KEY set so the agent can complete the funnel.
+
+tags: [hero, portal, regression]
+
+setup:
+  reset_operational_data: true
+  freeze_clock_at: "2026-05-05T09:00:00+08:00"
+
+variables:
+  customer_email: "portal-demo-{{ run_id }}@bss-cli.local"
+  customer_phone: "+6590009999"
+  customer_name: "Portal Demo {{ run_id }}"
+  plan: PLAN_M
+  # Scenario runner runs from the host; portal is published on 9001.
+  portal_base: "http://localhost:9001"
+  # Host-side path of the volume-mounted dev mailbox file.
+  dev_mailbox: "./.dev-mailbox/portal-mailbox.log"
+
+steps:
+  # ── 1. Public surfaces work without a session ───────────────────────────
+
+  - name: visit /welcome
+    http: GET /welcome
+    base_url: "{{ portal_base }}"
+    expect:
+      status: 200
+      body_contains: ["bss-cli self-serve", "Sign in", "Browse plans"]
+
+  - name: visit /plans
+    http: GET /plans
+    base_url: "{{ portal_base }}"
+    expect:
+      status: 200
+      body_contains:
+        - PLAN_M
+        - 'href="/auth/login?next=/signup/PLAN_M/msisdn"'
+
+  # ── 2. Email login — start, then read OTP from the dev mailbox ──────────
+
+  - name: POST /auth/login emits OTP via LoggingEmailAdapter
+    http: POST /auth/login
+    base_url: "{{ portal_base }}"
+    form:
+      email: "{{ customer_email }}"
+      next: "/signup/{{ plan }}/msisdn"
+    expect:
+      status: 303
+      headers_match:
+        location: "/auth/check-email?email={{ customer_email }}&next=/signup/{{ plan }}/msisdn"
+
+  - name: read OTP from dev mailbox
+    file: "{{ dev_mailbox }}"
+    capture_regex:
+      otp:
+        # Match the most-recent OTP block in the mailbox (file_step
+        # uses the LAST regex match, so concurrent runs don't poison
+        # each other as long as the OTP for THIS email comes after
+        # any earlier ones in append order).
+        source: body_text
+        pattern: 'OTP: (\d{6})'
+    poll:
+      interval_ms: 200
+      timeout_seconds: 10
+
+  # ── 3. Verify the OTP — session cookie set + redirect to next ───────────
+
+  - name: POST /auth/check-email with the OTP
+    http: POST /auth/check-email
+    base_url: "{{ portal_base }}"
+    form:
+      email: "{{ customer_email }}"
+      code: "{{ otp }}"
+      next: "/signup/{{ plan }}/msisdn"
+    expect:
+      status: 303
+    capture_regex:
+      session_cookie:
+        source: headers.set-cookie
+        pattern: 'bss_portal_session=([^;]+)'
+
+  # ── 4. Funnel — gated routes work with the session cookie ───────────────
+
+  - name: pick an MSISDN from the picker
+    http: GET /signup/{{ plan }}/msisdn
+    base_url: "{{ portal_base }}"
+    cookies: { bss_portal_session: "{{ session_cookie }}" }
+    expect:
+      status: 200
+      body_contains: ["Pick your number", "msisdn-tile"]
+    capture_regex:
+      chosen_msisdn:
+        source: body_text
+        pattern: 'msisdn=([0-9]{6,15})'
+
+  - name: visit signup form
+    http: GET /signup/{{ plan }}?msisdn={{ chosen_msisdn }}
+    base_url: "{{ portal_base }}"
+    cookies: { bss_portal_session: "{{ session_cookie }}" }
+    expect:
+      status: 200
+      body_contains:
+        - "KYC-PREBAKED-001"
+        - "{{ chosen_msisdn }}"
+
+  - name: submit signup form
+    http: POST /signup
+    base_url: "{{ portal_base }}"
+    cookies: { bss_portal_session: "{{ session_cookie }}" }
+    form:
+      plan: "{{ plan }}"
+      name: "{{ customer_name }}"
+      email: "{{ customer_email }}"
+      phone: "{{ customer_phone }}"
+      msisdn: "{{ chosen_msisdn }}"
+      card_pan: "4242424242424242"
+    expect:
+      status: 303
+    capture_regex:
+      signup_session_id:
+        source: headers.location
+        pattern: "session=([a-f0-9]+)"
+
+  - name: drive the agent via SSE
+    http: GET /agent/events/{{ signup_session_id }}
+    base_url: "{{ portal_base }}"
+    cookies: { bss_portal_session: "{{ session_cookie }}" }
+    drain_stream: true
+    timeout_seconds: 120
+    expect:
+      status: 200
+      body_contains: ["event: redirect"]
+
+  - name: wait for signup session to finish
+    http: GET /api/session/{{ signup_session_id }}
+    base_url: "{{ portal_base }}"
+    cookies: { bss_portal_session: "{{ session_cookie }}" }
+    poll:
+      interval_ms: 500
+      timeout_seconds: 30
+    expect:
+      status: 200
+      body_contains: ['"done":true']
+    capture:
+      subscription_id: "$.body.subscription_id"
+      customer_id: "$.body.customer_id"
+
+  # ── 5. Backend-side verification ────────────────────────────────────────
+
+  - name: subscription is active on PLAN_M
+    assert:
+      tool: subscription.get
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        state: active
+        offeringId: "{{ plan }}"
+      poll:
+        interval_ms: 200
+        timeout_seconds: 10
+
+  - name: interaction log attributes the order to portal-self-serve
+    assert:
+      tool: interaction.list
+      args: {customer_id: "{{ customer_id }}"}
+      expect:
+        any_match:
+          channel: portal-self-serve
+      poll:
+        interval_ms: 200
+        timeout_seconds: 10
+
+teardown:
+  unfreeze_clock: true

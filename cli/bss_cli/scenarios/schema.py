@@ -170,7 +170,27 @@ class HTTPStep(_StepBase):
         return self
 
 
-Step = ActionStep | AskStep | AssertStep | HTTPStep
+class FileReadStep(_StepBase):
+    """Read a local file and capture substrings from it (v0.8).
+
+    Used by the auth-flow hero scenarios to fetch the OTP / magic-link
+    that ``LoggingEmailAdapter`` writes to the dev-mailbox file. The
+    scenario YAML names the file path (interpolated against scenario
+    vars) and one or more ``capture_regex`` rules. ``poll:`` retries
+    while the file is missing or doesn't yet contain the pattern —
+    the file may be written milliseconds after the POST that triggers
+    the email send.
+    """
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    file: str
+    capture_regex: dict[str, HTTPRegexCapture] = Field(default_factory=dict)
+    poll: Poll | None = None
+    encoding: str = "utf-8"
+
+
+Step = ActionStep | AskStep | AssertStep | HTTPStep | FileReadStep
 
 
 # ─────────────────────────────────────────────────────────────────────────────

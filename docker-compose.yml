@@ -124,6 +124,21 @@ services:
       BSS_MEDIATION_URL: http://mediation:8000
       BSS_PROVISIONING_URL: http://provisioning-sim:8000
       BSS_RATING_URL: http://rating:8000
+      # v0.8 — pin the dev-mailbox path to the mounted volume below so
+      # the host-side scenario runner can read OTPs the
+      # LoggingEmailAdapter writes. Override per-deployment via .env
+      # if running outside compose.
+      BSS_PORTAL_DEV_MAILBOX_PATH: /var/bss-mailbox/portal-mailbox.log
+      # v0.8 — local compose serves over plain HTTP on localhost. The
+      # session cookie's `Secure` attribute would make browsers drop
+      # it silently on every request. Default ON for dev compose;
+      # production deployments override via .env to 0 (and terminate
+      # TLS upstream).
+      BSS_PORTAL_DEV_INSECURE_COOKIE: ${BSS_PORTAL_DEV_INSECURE_COOKIE:-1}
+    volumes:
+      # Host-side bind mount so the hero auth scenarios can read OTPs
+      # written by LoggingEmailAdapter. Created on first portal write.
+      - ./.dev-mailbox:/var/bss-mailbox
     depends_on:
       catalog: { condition: service_healthy }
       crm:     { condition: service_healthy }
