@@ -3,7 +3,12 @@
 from .admin import AdminClient
 from .audit import AuditClient
 from .auth import AuthProvider, NamedTokenAuthProvider, NoAuthProvider, TokenAuthProvider
-from .base import BSSClient, set_context
+from .base import (
+    BSSClient,
+    reset_service_identity_token,
+    set_context,
+    set_service_identity_token,
+)
 from .catalog import CatalogClient
 from .com import COMClient
 from .crm import CRMClient
@@ -37,5 +42,7 @@ __all__ = [
     "SubscriptionClient",
     "Timeout",
     "TokenAuthProvider",
+    "reset_service_identity_token",
     "set_context",
+    "set_service_identity_token",
 ]
