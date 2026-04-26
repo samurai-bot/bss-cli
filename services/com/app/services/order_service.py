@@ -1,6 +1,7 @@
 """Order orchestration service — calls policies, not repositories directly."""
 
 from datetime import datetime, timezone
+from decimal import Decimal
 
 import structlog
 from bss_clock import now as clock_now
@@ -15,6 +16,7 @@ from app.policies.order import (
     check_cancel_allowed_after_som,
     check_customer_exists,
     check_customer_has_payment_method,
+    check_offering_currently_sellable,
     check_offering_exists,
     check_order_transition,
 )
@@ -52,10 +54,20 @@ class OrderService:
         msisdn_preference: str | None = None,
         notes: str | None = None,
     ) -> ProductOrder:
-        """Create a new order (acknowledged)."""
+        """Create a new order (acknowledged) and stamp the price snapshot.
+
+        v0.7 — the active price row at this moment is captured on the order
+        item so renewal will charge what the customer signed up for, even if
+        the catalog row is later retired or repriced.
+        """
         await check_customer_exists(customer_id, self._crm)
-        await check_offering_exists(offering_id, self._catalog)
+        _, active_price = await check_offering_currently_sellable(offering_id, self._catalog)
         await check_customer_has_payment_method(customer_id, self._payment)
+
+        # Snapshot — the offering's active price at order-creation moment.
+        price_amount = Decimal(str(active_price["price"]["taxIncludedAmount"]["value"]))
+        price_currency = active_price["price"]["taxIncludedAmount"].get("unit", "SGD")
+        price_offering_price_id = active_price["id"]
 
         order_id = await self._repo.next_order_id()
         item_id = await self._repo.next_item_id()
@@ -74,6 +86,9 @@ class OrderService:
             action="add",
             offering_id=offering_id,
             state="acknowledged",
+            price_amount=price_amount,
+            price_currency=price_currency,
+            price_offering_price_id=price_offering_price_id,
         )
         self._session.add(item)
         await self._repo.create(order)
@@ -89,6 +104,11 @@ class OrderService:
                 "commercialOrderId": order_id,
                 "customerId": customer_id,
                 "offeringId": offering_id,
+                "priceSnapshot": {
+                    "priceAmount": str(price_amount),
+                    "priceCurrency": price_currency,
+                    "priceOfferingPriceId": price_offering_price_id,
+                },
             },
             exchange=self._exchange,
         )
@@ -115,24 +135,37 @@ class OrderService:
         item = order.items[0] if order.items else None
         offering_id = item.offering_id if item else ""
 
+        # Forward the price snapshot stamped at create_order time.
+        price_snapshot = None
+        if item is not None and item.price_amount is not None:
+            price_snapshot = {
+                "priceAmount": str(item.price_amount),
+                "priceCurrency": item.price_currency,
+                "priceOfferingPriceId": item.price_offering_price_id,
+            }
+
         old_state = order.state
         order.state = "in_progress"
         await self._repo.add_state_history(order_id, old_state, "in_progress", reason="order submitted")
         await self._repo.update(order)
 
         # Publish order.in_progress event to MQ
+        payload = {
+            "commercialOrderId": order_id,
+            "customerId": order.customer_id,
+            "offeringId": offering_id,
+            "msisdnPreference": order.msisdn_preference,
+            "paymentMethodId": payment_method_id,
+        }
+        if price_snapshot is not None:
+            payload["priceSnapshot"] = price_snapshot
+
         await publish(
             self._session,
             event_type="order.in_progress",
             aggregate_type="ProductOrder",
             aggregate_id=order_id,
-            payload={
-                "commercialOrderId": order_id,
-                "customerId": order.customer_id,
-                "offeringId": offering_id,
-                "msisdnPreference": order.msisdn_preference,
-                "paymentMethodId": payment_method_id,
-            },
+            payload=payload,
             exchange=self._exchange,
         )
 
@@ -185,6 +218,7 @@ class OrderService:
         iccid: str,
         payment_method_id: str,
         cfs_service_id: str,
+        price_snapshot: dict | None = None,
     ) -> None:
         """Called from MQ consumer when service_order.completed."""
         with tracer("bss-com").start_as_current_span(
@@ -203,14 +237,28 @@ class OrderService:
                 )
                 return
 
+            # Resolve price snapshot — prefer event payload, fall back to the
+            # row stamped at create_order time. The order item is the durable
+            # source of truth in case the event arrives stripped.
+            if price_snapshot is None and order.items and order.items[0].price_amount is not None:
+                item = order.items[0]
+                price_snapshot = {
+                    "priceAmount": str(item.price_amount),
+                    "priceCurrency": item.price_currency,
+                    "priceOfferingPriceId": item.price_offering_price_id,
+                }
+
             # Create subscription
-            sub_result = await self._subscription.create(
-                customer_id=customer_id,
-                offering_id=offering_id,
-                msisdn=msisdn,
-                iccid=iccid,
-                payment_method_id=payment_method_id,
-            )
+            create_kwargs = {
+                "customer_id": customer_id,
+                "offering_id": offering_id,
+                "msisdn": msisdn,
+                "iccid": iccid,
+                "payment_method_id": payment_method_id,
+            }
+            if price_snapshot is not None:
+                create_kwargs["price_snapshot"] = price_snapshot
+            sub_result = await self._subscription.create(**create_kwargs)
             if sub_result.get("id"):
                 span.set_attribute(semconv.BSS_SUBSCRIPTION_ID, sub_result["id"])
 

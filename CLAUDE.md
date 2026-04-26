@@ -148,6 +148,7 @@ When Phase 12 ships, the BSSApiTokenMiddleware swap (token → JWT validator) is
 - **Repositories never call services.** Lowest layer, no outward dependencies.
 - **Inter-service calls via HTTP for synchronous needs, RabbitMQ for asynchronous reactions.** Never shared DB access across service boundaries.
 - **Each service owns its schema** in a single Postgres instance (v0.1). The schema-per-service boundary enables a later split to one Postgres per service without touching service code.
+- **(v0.7+) Subscription price is snapshotted at order time.** Renewal charges the snapshot, not the catalog. Catalog price changes affect new orders only; existing subscriptions migrate via an explicit operator-initiated flow (`subscription.migrate_to_new_price`) with regulatory notice.
 
 ## Call patterns (HTTP vs events)
 
@@ -226,6 +227,8 @@ See `ARCHITECTURE.md` for the full container topology, compose profiles, and the
 - **(v0.5+) Don't attribute agent actions to `channel=llm` when the operator is human.** Pass `actor=<operator_id>` to `astream_once` so the interaction log answers "who asked", not "what executed". Forensic per-model attribution lives in `audit.domain_event`.
 - **(v0.4+) Don't reach for React/Vue/Svelte to make a portal page snappier.** HTMX + SSE handles streaming-tool-call-log + auto-refresh patterns with less code, no bundler, no npm.
 - **(v0.5+) Don't call `datetime.now()` / `datetime.utcnow()` in business-logic paths.** Use `bss_clock.now()`. The grep guard (`make doctrine-check`) added in v0.6 enforces it.
+- **(v0.7+) Don't call catalog active-price queries at renewal time — read the snapshot off the subscription.** Catalog at renewal silently changes prices on existing customers and breaks the snapshot doctrine.
+- **(v0.7+) Don't schedule a plan change as terminate-and-recreate.** Pending fields + renewal-time pivot is the only correct path. Terminate-recreate loses VAS top-ups, mis-attributes voluntary churn in the audit log, and leaves the customer without a line.
 
 ## Project meta
 

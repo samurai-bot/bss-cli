@@ -60,6 +60,7 @@ async def setup_consumer(app) -> None:
                     iccid=body["iccid"],
                     payment_method_id=body["paymentMethodId"],
                     cfs_service_id=body.get("cfsServiceId", ""),
+                    price_snapshot=body.get("priceSnapshot"),
                 )
                 await session.commit()
 

@@ -88,6 +88,11 @@ MSISDN and eSIM reservation are internal SOM operations — not exposed as direc
 | `catalog.get_offering` | read | With prices, allowances, service mapping |
 | `catalog.list_vas` | read | |
 | `catalog.get_vas` | read | |
+| `catalog.list_active_offerings` | read | v0.7 — time-bounded; lowest-active-price first |
+| `catalog.get_active_price` | read | v0.7 — lowest-active-wins resolve at a moment |
+| `catalog.add_offering` | create | v0.7 — admin only — not in LLM registry |
+| `catalog.add_price` | create | v0.7 — admin only — not in LLM registry |
+| `catalog.window_offering` | update | v0.7 — admin only — not in LLM registry |
 
 ## Payment tools
 
@@ -142,6 +147,9 @@ SOM writes are internally triggered by COM events — no direct-create tool for 
 | `subscription.terminate` | destructive | Releases MSISDN + recycles eSIM |
 | `subscription.renew_now` | update | Manual renewal trigger |
 | `subscription.get_esim_activation` | read | Returns LPA + QR for first-time display |
+| `subscription.schedule_plan_change` | update | v0.7 — pivots plan + price at next renewal; no proration |
+| `subscription.cancel_pending_plan_change` | update | v0.7 — clears pending pivot; idempotent |
+| `subscription.migrate_to_new_price` | update | v0.7 — admin-only catalog price migration with notice |
 
 ## Usage tools
 

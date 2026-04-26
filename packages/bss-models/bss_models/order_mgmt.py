@@ -4,8 +4,9 @@ product_order, order_item, order_state_history.
 """
 
 from datetime import datetime
+from decimal import Decimal
 
-from sqlalchemy import BigInteger, ForeignKey, Text, func
+from sqlalchemy import BigInteger, ForeignKey, Numeric, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base, TZDateTime, TenantMixin, TimestampMixin
@@ -42,6 +43,11 @@ class OrderItem(Base, TenantMixin, TimestampMixin):
     offering_id: Mapped[str] = mapped_column(Text, nullable=False)
     state: Mapped[str | None] = mapped_column(Text)
     target_subscription_id: Mapped[str | None] = mapped_column(Text)
+
+    # v0.7 — price snapshot stamped at order creation, copied to subscription.
+    price_amount: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    price_currency: Mapped[str | None] = mapped_column(Text)
+    price_offering_price_id: Mapped[str | None] = mapped_column(Text)
 
     order: Mapped["ProductOrder"] = relationship(back_populates="items")
 

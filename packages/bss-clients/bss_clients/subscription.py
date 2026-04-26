@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from .auth import AuthProvider
@@ -27,18 +28,27 @@ class SubscriptionClient(BSSClient):
         msisdn: str,
         iccid: str,
         payment_method_id: str,
+        price_snapshot: dict | None = None,
     ) -> dict[str, Any]:
-        """POST /subscription-api/v1/subscription — create and activate."""
+        """POST /subscription-api/v1/subscription — create and activate.
+
+        v0.7 — `price_snapshot` carries the active price row captured at
+        order-creation time. Required by COM in steady state; legacy direct
+        callers can omit it and the service falls back to the catalog.
+        """
+        body: dict[str, Any] = {
+            "customerId": customer_id,
+            "offeringId": offering_id,
+            "msisdn": msisdn,
+            "iccid": iccid,
+            "paymentMethodId": payment_method_id,
+        }
+        if price_snapshot is not None:
+            body["priceSnapshot"] = price_snapshot
         resp = await self._request(
             "POST",
             "/subscription-api/v1/subscription",
-            json={
-                "customerId": customer_id,
-                "offeringId": offering_id,
-                "msisdn": msisdn,
-                "iccid": iccid,
-                "paymentMethodId": payment_method_id,
-            },
+            json=body,
         )
         return resp.json()
 
@@ -94,6 +104,55 @@ class SubscriptionClient(BSSClient):
         """POST /subscription-api/v1/subscription/{id}/terminate — destructive."""
         resp = await self._request(
             "POST", f"/subscription-api/v1/subscription/{subscription_id}/terminate"
+        )
+        return resp.json()
+
+    # ── v0.7 — plan change ─────────────────────────────────────────────
+
+    async def schedule_plan_change(
+        self, subscription_id: str, new_offering_id: str
+    ) -> dict[str, Any]:
+        """POST /subscription/{id}/schedule-plan-change — applies at next renewal."""
+        resp = await self._request(
+            "POST",
+            f"/subscription-api/v1/subscription/{subscription_id}/schedule-plan-change",
+            json={"newOfferingId": new_offering_id},
+        )
+        return resp.json()
+
+    async def cancel_plan_change(self, subscription_id: str) -> dict[str, Any]:
+        """POST /subscription/{id}/cancel-plan-change — clears pending fields."""
+        resp = await self._request(
+            "POST",
+            f"/subscription-api/v1/subscription/{subscription_id}/cancel-plan-change",
+        )
+        return resp.json()
+
+    async def migrate_to_new_price(
+        self,
+        *,
+        offering_id: str,
+        new_price_id: str,
+        effective_from: datetime,
+        notice_days: int = 30,
+        initiated_by: str,
+    ) -> dict[str, Any]:
+        """POST /admin/subscription/migrate-price — operator price migration.
+
+        Schedules the new price for every active subscription on
+        ``offering_id``. Returns ``{count, subscriptionIds}``.
+        Admin-only on the server side.
+        """
+        resp = await self._request(
+            "POST",
+            "/subscription-api/v1/admin/subscription/migrate-price",
+            json={
+                "offeringId": offering_id,
+                "newPriceId": new_price_id,
+                "effectiveFrom": effective_from.isoformat(),
+                "noticeDays": notice_days,
+                "initiatedBy": initiated_by,
+            },
         )
         return resp.json()
 

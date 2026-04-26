@@ -27,6 +27,9 @@ async def create_subscription(
         msisdn=body.msisdn,
         iccid=body.iccid,
         payment_method_id=body.payment_method_id,
+        price_snapshot=(
+            body.price_snapshot.model_dump(by_alias=True) if body.price_snapshot else None
+        ),
     )
     return to_subscription_response(sub)
 
@@ -101,3 +104,86 @@ async def terminate_subscription(
 ) -> SubscriptionResponse:
     sub = await svc.terminate(sub_id)
     return to_subscription_response(sub)
+
+
+# ── v0.7 — plan change ───────────────────────────────────────────────
+
+
+from pydantic import BaseModel, ConfigDict
+from pydantic.alias_generators import to_camel
+
+
+class SchedulePlanChangeRequest(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    new_offering_id: str
+
+
+@router.post(
+    "/subscription/{sub_id}/schedule-plan-change",
+    response_model=SubscriptionResponse,
+)
+async def schedule_plan_change(
+    sub_id: str,
+    body: SchedulePlanChangeRequest,
+    svc: SubscriptionService = Depends(get_subscription_service),
+) -> SubscriptionResponse:
+    sub = await svc.schedule_plan_change(sub_id, body.new_offering_id)
+    return to_subscription_response(sub)
+
+
+@router.post(
+    "/subscription/{sub_id}/cancel-plan-change",
+    response_model=SubscriptionResponse,
+)
+async def cancel_plan_change(
+    sub_id: str,
+    svc: SubscriptionService = Depends(get_subscription_service),
+) -> SubscriptionResponse:
+    sub = await svc.cancel_pending_plan_change(sub_id)
+    return to_subscription_response(sub)
+
+
+# ── v0.7 — operator price migration ─────────────────────────────────
+
+
+from datetime import datetime
+
+
+class MigratePriceRequest(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    offering_id: str
+    new_price_id: str
+    effective_from: datetime
+    notice_days: int = 30
+    initiated_by: str
+
+
+class MigratePriceResponse(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    count: int
+    subscription_ids: list[str]
+
+
+@router.post(
+    "/admin/subscription/migrate-price",
+    response_model=MigratePriceResponse,
+)
+async def migrate_price(
+    body: MigratePriceRequest,
+    svc: SubscriptionService = Depends(get_subscription_service),
+) -> MigratePriceResponse:
+    """Operator-initiated price migration with notice. Admin-only."""
+    result = await svc.migrate_subscriptions_to_price(
+        filter={"offering_id": body.offering_id},
+        new_price_id=body.new_price_id,
+        effective_from=body.effective_from,
+        notice_days=body.notice_days,
+        initiated_by=body.initiated_by,
+    )
+    return MigratePriceResponse(
+        count=result["count"],
+        subscription_ids=result["subscriptionIds"],
+    )

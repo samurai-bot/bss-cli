@@ -39,6 +39,15 @@ _LLM_HIDDEN_TOOLS: frozenset[str] = frozenset(
         # layer; never from the copilot — read-only ``usage.history`` and
         # ``subscription.get`` are the right troubleshooting surfaces.
         "usage.simulate",
+        # v0.7 — catalog admin writes are CLI/scenario-only. The LLM tool
+        # surface deliberately omits them so the model never edits the
+        # catalog mid-conversation.
+        "catalog.add_offering",
+        "catalog.add_price",
+        "catalog.window_offering",
+        # v0.7 — operator price migration carries a notice period and is
+        # an explicit operator action. CLI/scenarios only.
+        "subscription.migrate_to_new_price",
     }
 )
 

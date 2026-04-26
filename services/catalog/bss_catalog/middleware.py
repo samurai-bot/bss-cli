@@ -5,12 +5,14 @@ breaking ContextVar propagation including OTel's current span
 context. Pure ASGI middleware preserves it.
 """
 
+import json
 import uuid
 
 import structlog
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from bss_catalog import auth_context
+from bss_catalog.policies import PolicyViolation
 
 log = structlog.get_logger()
 
@@ -54,5 +56,31 @@ class RequestIdMiddleware:
             await send(message)
 
         log.info("request.start")
-        await self.app(scope, receive, send_wrapper)
+        try:
+            await self.app(scope, receive, send_wrapper)
+        except PolicyViolation as exc:
+            log.warning(
+                "policy.violation",
+                rule=exc.rule,
+                message=exc.message,
+                context=exc.context,
+            )
+            body = json.dumps({
+                "code": "POLICY_VIOLATION",
+                "reason": exc.rule,
+                "message": exc.message,
+                "referenceError": f"https://docs.bss-cli.dev/policies/{exc.rule}",
+                "context": exc.context,
+            }).encode()
+            await send({
+                "type": "http.response.start",
+                "status": 422,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode()),
+                    (b"x-request-id", request_id.encode()),
+                ],
+            })
+            await send({"type": "http.response.body", "body": body})
+            return
         log.info("request.end", status=status_holder["status"])

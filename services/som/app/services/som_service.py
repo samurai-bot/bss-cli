@@ -45,6 +45,7 @@ class SOMService:
         offering_id: str,
         msisdn_preference: str | None,
         payment_method_id: str,
+        price_snapshot: dict | None = None,
     ) -> ServiceOrder:
         """Called when order.in_progress is consumed."""
         return await decompose_order(
@@ -58,6 +59,7 @@ class SOMService:
             svc_repo=self._svc_repo,
             inventory_client=self._inventory_client,
             exchange=self._exchange,
+            price_snapshot=price_snapshot,
         )
 
     # ── Task completed (provisioning.task.completed) ───────────────────
@@ -138,6 +140,8 @@ class SOMService:
             "paymentMethodId": chars.get("paymentMethodId", ""),
             "cfsServiceId": cfs.id,
         }
+        if chars.get("priceSnapshot"):
+            event_payload["priceSnapshot"] = chars["priceSnapshot"]
         await publish(
             self._session,
             event_type="service_order.completed",

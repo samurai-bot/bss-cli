@@ -58,6 +58,8 @@ _CLOCK_TARGETS: list[_ServiceTarget] = [
     _ServiceTarget("mediation", settings.mediation_url),
     _ServiceTarget("rating", settings.rating_url),
     _ServiceTarget("provisioning-sim", settings.provisioning_url),
+    # v0.7 — catalog active-window math reads bss_clock.now() server-side.
+    _ServiceTarget("catalog", settings.catalog_url),
 ]
 
 

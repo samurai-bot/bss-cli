@@ -1,6 +1,7 @@
 """TMF622 ProductOrder Pydantic schemas — camelCase for API."""
 
 from datetime import datetime
+from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
@@ -27,6 +28,10 @@ class OrderItemResponse(BaseModel):
     offering_id: str
     state: str | None = None
     target_subscription_id: str | None = None
+    # v0.7 — price snapshot stamped at create time, copied to subscription.
+    price_amount: Decimal | None = None
+    price_currency: str | None = None
+    price_offering_price_id: str | None = None
 
 
 class ProductOrderResponse(BaseModel):
@@ -52,6 +57,9 @@ def to_order_item_response(item: OrderItem) -> OrderItemResponse:
         offering_id=item.offering_id,
         state=item.state,
         target_subscription_id=item.target_subscription_id,
+        price_amount=item.price_amount,
+        price_currency=item.price_currency,
+        price_offering_price_id=item.price_offering_price_id,
     )
 
 

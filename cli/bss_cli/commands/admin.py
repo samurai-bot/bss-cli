@@ -25,8 +25,10 @@ from rich import print as rprint
 from rich.table import Table
 
 from .._runtime import run_async
+from . import admin_catalog as admin_catalog_cmd
 
 app = typer.Typer(help="Operator tools — reset, ops.", no_args_is_help=True)
+app.add_typer(admin_catalog_cmd.app, name="catalog")
 
 
 @dataclass(frozen=True)

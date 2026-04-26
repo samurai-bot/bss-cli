@@ -10,6 +10,7 @@ dependencies = [
     "bss-models",
     "bss-telemetry",
     "bss-middleware",
+    "bss-clock",
     "asyncpg>=0.29",
     "sqlalchemy[asyncio]>=2.0",
 ]
@@ -32,3 +33,4 @@ packages = ["bss_catalog"]
 bss-models = { workspace = true }
 bss-telemetry = { workspace = true }
 bss-middleware = { workspace = true }
+bss-clock = { workspace = true }

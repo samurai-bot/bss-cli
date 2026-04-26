@@ -20,6 +20,8 @@ async def seed(session: AsyncSession) -> None:
     """))
 
     # ── Product Offerings ────────────────────────────────────────────
+    # valid_from / valid_to are NULL → "always available". v0.7 introduces
+    # time-bound rows; the seeded plans are not bound by default.
     offerings = [
         ("PLAN_S", "Lite", "SPEC_MOBILE_PREPAID", True, True, "active"),
         ("PLAN_M", "Standard", "SPEC_MOBILE_PREPAID", True, True, "active"),
@@ -27,13 +29,16 @@ async def seed(session: AsyncSession) -> None:
     ]
     for oid, name, spec, is_bundle, is_sellable, status in offerings:
         await session.execute(text("""
-            INSERT INTO catalog.product_offering (id, name, spec_id, is_bundle, is_sellable, lifecycle_status)
-            VALUES (:id, :name, :spec_id, :is_bundle, :is_sellable, :status)
+            INSERT INTO catalog.product_offering
+                (id, name, spec_id, is_bundle, is_sellable, lifecycle_status, valid_from, valid_to)
+            VALUES (:id, :name, :spec_id, :is_bundle, :is_sellable, :status, NULL, NULL)
             ON CONFLICT (id) DO NOTHING
         """), {"id": oid, "name": name, "spec_id": spec, "is_bundle": is_bundle,
                "is_sellable": is_sellable, "status": status})
 
     # ── Product Offering Prices ──────────────────────────────────────
+    # valid_from / valid_to are NULL → "always available". Promo prices
+    # land via `bss admin catalog set-price --valid-from ... --valid-to ...`.
     prices = [
         ("PRICE_PLAN_S", "PLAN_S", "recurring", 1, "month", 10.00, "SGD"),
         ("PRICE_PLAN_M", "PLAN_M", "recurring", 1, "month", 25.00, "SGD"),
@@ -42,8 +47,10 @@ async def seed(session: AsyncSession) -> None:
     for pid, oid, ptype, length, period, amount, currency in prices:
         await session.execute(text("""
             INSERT INTO catalog.product_offering_price
-                (id, offering_id, price_type, recurring_period_length, recurring_period_type, amount, currency)
-            VALUES (:id, :offering_id, :price_type, :length, :period, :amount, :currency)
+                (id, offering_id, price_type, recurring_period_length,
+                 recurring_period_type, amount, currency, valid_from, valid_to)
+            VALUES (:id, :offering_id, :price_type, :length, :period,
+                    :amount, :currency, NULL, NULL)
             ON CONFLICT (id) DO NOTHING
         """), {"id": pid, "offering_id": oid, "price_type": ptype, "length": length,
                "period": period, "amount": amount, "currency": currency})

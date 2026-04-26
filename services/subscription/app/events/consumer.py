@@ -72,3 +72,28 @@ async def setup_consumer(app) -> None:
 
     await queue.consume(on_usage_rated)
     log.info("mq.consumer.started", queue="subscription.usage.rated")
+
+    # ── v0.7 — LoggingNotificationConsumer ──────────────────────────────
+    # Pretty-prints `notification.requested` events to stdout so operators
+    # can verify the price-migration notice flow without an SMTP/SES adapter.
+    # Real email delivery lands in v1.0.
+    notif_queue = await channel.declare_queue(
+        "subscription.notification.logger", durable=True
+    )
+    await notif_queue.bind(exchange, "notification.requested")
+
+    async def on_notification_requested(
+        message: aio_pika.abc.AbstractIncomingMessage,
+    ):
+        async with message.process():
+            body = json.loads(message.body)
+            log.info(
+                "notification.dev_inbox",
+                customer_id=body.get("customerId"),
+                channel=body.get("channel"),
+                template=body.get("template"),
+                template_args=body.get("templateArgs"),
+            )
+
+    await notif_queue.consume(on_notification_requested)
+    log.info("mq.consumer.started", queue="subscription.notification.logger")
