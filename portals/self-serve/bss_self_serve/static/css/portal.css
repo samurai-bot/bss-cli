@@ -2,6 +2,88 @@
    Palette, layout, header/footer, and the agent log widget live in
    bss_portal_ui/static/css/portal_base.css (loaded first via base.html). */
 
+/* ─── Auth surfaces (v0.8) ───────────────────────────────────── */
+
+.auth-card {
+  max-width: 480px;
+  margin: 32px auto;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.auth-label {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+.auth-input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 10px 12px;
+  font-size: 15px;
+  color: var(--fg);
+  font-family: var(--mono);
+}
+.auth-input:focus { outline: 2px solid var(--accent-dim); }
+.auth-input--otp {
+  letter-spacing: 0.4em;
+  font-size: 22px;
+  text-align: center;
+}
+.auth-cta {
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  border-radius: 4px;
+  padding: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.auth-cta:hover { filter: brightness(1.08); }
+.auth-hint {
+  color: var(--fg-muted);
+  font-size: 13px;
+  margin: 0;
+}
+.auth-error {
+  background: rgba(220, 80, 80, 0.12);
+  border: 1px solid rgba(220, 80, 80, 0.4);
+  color: #ff8a8a;
+  padding: 10px 12px;
+  border-radius: 4px;
+  font-size: 14px;
+}
+.auth-email {
+  font-family: var(--mono);
+  color: var(--accent);
+}
+.auth-action {
+  font-family: var(--mono);
+  color: var(--accent);
+}
+.auth-resend-form { margin-top: 8px; }
+.auth-resend {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+  border-radius: 4px;
+  padding: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  width: 100%;
+}
+.auth-resend:hover { color: var(--fg); }
+
 /* ─── Plan cards ─────────────────────────────────────────── */
 
 .plan-grid {

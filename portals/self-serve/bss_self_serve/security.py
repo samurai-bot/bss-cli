@@ -67,6 +67,28 @@ def is_public_path(path: str) -> bool:
     return any(path.startswith(prefix) for prefix in PUBLIC_PATH_PREFIXES)
 
 
+def safe_next_path(raw: str | None, *, default: str = "/") -> str:
+    """Validate a ``?next=`` redirect target against an internal-only allowlist.
+
+    Open-redirect defence: never trust ``next`` from a query string at face
+    value. Only accept absolute internal paths (start with ``/``, no ``//``,
+    no scheme, no fragment-injected host). Reject anything that doesn't
+    decompose into a path our portal owns.
+    """
+    if not raw:
+        return default
+    candidate = raw.strip()
+    if not candidate.startswith("/"):
+        return default
+    if candidate.startswith("//") or candidate.startswith("/\\"):
+        return default
+    # Forbid embedded hosts/schemes/CRLF.
+    forbidden = ("://", "\r", "\n", "\\")
+    if any(token in candidate for token in forbidden):
+        return default
+    return candidate
+
+
 # ── Redirect exception + handler ─────────────────────────────────────────
 
 
@@ -173,6 +195,10 @@ def requires_step_up(action_label: str) -> Callable[[Request], Awaitable[None]]:
     async def _dep(request: Request) -> None:
         sess = requires_session(request)
 
+        # Order: explicit form/header beats the convenience cookie. The
+        # cookie path is what the /auth/step-up redirect uses to thread
+        # a one-shot grant through a GET-bound bounce; explicit forms /
+        # headers let API-style callers carry the grant themselves.
         token = request.headers.get("x-bss-stepup-token") or request.headers.get(
             "x-bss-step-up-token"
         )
@@ -182,6 +208,11 @@ def requires_step_up(action_label: str) -> Callable[[Request], Awaitable[None]]:
                 token = form.get("step_up_token")  # type: ignore[assignment]
             except Exception:
                 token = None
+        if token is None:
+            # Read the grant cookie via the Starlette wrapper (no raw
+            # cookie-header parsing in route code). This is part of the
+            # auth flow proper, not a route-side cookie rummage.
+            token = request.cookies.get("bss_portal_step_up")
 
         if not token:
             raise StepUpRequired(
