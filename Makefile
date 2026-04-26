@@ -16,11 +16,21 @@ help:
 	@echo "  doctrine-check   — run all v0.6+ grep guards (clock, channel, portals, no-bypass)"
 	@echo "  python-check     — warn if active Python is outside the supported 3.12 range"
 
-up:
+up: dev-mailbox-dir
 	docker compose up -d
 
-up-all:
+up-all: dev-mailbox-dir
 	docker compose -f docker-compose.yml -f docker-compose.infra.yml up -d
+
+# v0.8 — pre-create the host bind-mount dir for the portal dev mailbox.
+# If Docker auto-creates it, it lands as root:root 755 and the portal
+# container (uid 1000) can't write — POST /auth/login 500s with
+# PermissionError. Creating it owned by the calling user (or 1000)
+# avoids the trap. We use 0777 so it works regardless of host uid
+# layout (this is dev-only state; production uses real SMTP).
+dev-mailbox-dir:
+	@mkdir -p .dev-mailbox
+	@chmod 0777 .dev-mailbox 2>/dev/null || true
 
 up-minimal:
 	docker compose up -d catalog crm payment

@@ -87,6 +87,13 @@ If you see sustained `wrong_code` or `rate_limited` rows from a single IP, tight
 
 `LoggingEmailAdapter` writes one block per send to `BSS_PORTAL_DEV_MAILBOX_PATH`. In compose the path is bind-mounted to `./.dev-mailbox/portal-mailbox.log` on the host so the scenario runner — which runs from the host — can read OTPs.
 
+**Trap to dodge: directory ownership.** If Docker auto-creates `./.dev-mailbox/` on first `docker compose up`, it lands as `root:root 755`. The portal container runs as uid 1000 (the `bss` user) and gets `PermissionError [Errno 13]` on first write — `POST /auth/login` 500s with no obvious clue. `make up` and `make up-all` now both depend on a `dev-mailbox-dir` target that pre-creates the dir as `0777` to avoid this. If you brought the stack up before that target existed, fix in place:
+
+```bash
+sudo chown -R 1000:1000 .dev-mailbox/   # or: sudo chmod 0777 .dev-mailbox
+docker compose restart portal-self-serve
+```
+
 Tail in dev:
 
 ```bash
