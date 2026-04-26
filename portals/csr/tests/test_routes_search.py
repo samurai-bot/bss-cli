@@ -54,3 +54,22 @@ def test_msisdn_with_country_code_strips_plus(authed_client, fake_clients):  # t
     resp = authed_client.get("/search?q=%2B6590001234", follow_redirects=False)
     assert resp.status_code == 303
     assert resp.headers["location"] == "/customer/CUST-cc"
+
+
+def test_all_digit_query_falls_through_to_name_search_when_no_msisdn_match(
+    authed_client, fake_clients
+):  # type: ignore[no-untyped-def]
+    """Regression: an all-digit query that doesn't match an MSISDN must still
+    run the name-contains search. Hex run_ids that happen to be all-digits
+    (e.g. ``30103736``) made the scenario runner search by run_id and miss
+    the customer if the route bailed at the empty MSISDN branch.
+    """
+    fake_clients.crm.customers_by_name = [
+        sample_customer("CUST-stub", ("CSR", "Demo 30103736")),
+    ]
+    # MSISDN dict deliberately empty for this query — the route must
+    # still hit list_customers(name_contains="30103736").
+    resp = authed_client.get("/search?q=30103736")
+    assert resp.status_code == 200
+    assert "CUST-stub" in resp.text
+    assert "Demo 30103736" in resp.text
