@@ -4,8 +4,11 @@ Per V0_4_0.md §8 / V0_8_0.md §2.2:
 
 - ``BSSApiTokenMiddleware`` is NOT on the portal's inbound HTTP. The
   portal is a customer-facing surface protected by the v0.8 portal-auth
-  layer (PortalSessionMiddleware below). Outbound calls still carry
-  ``X-BSS-API-Token`` via the orchestrator's ``get_clients()`` factory.
+  layer (PortalSessionMiddleware below). Outbound calls carry the
+  portal's named token via ``bss_self_serve.clients.get_clients()``
+  (v0.9+: ``BSS_PORTAL_API_TOKEN`` → ``service_identity = "portal_self_serve"``
+  on the receiving side; falls back to ``BSS_API_TOKEN`` if the named
+  token is not provisioned).
 - ``configure_telemetry(service_name="portal-self-serve")`` runs in
   lifespan so portal spans show up in ``bss trace``.
 - v0.8 lifespan adds:

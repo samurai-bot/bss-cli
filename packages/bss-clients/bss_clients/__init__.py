@@ -2,7 +2,7 @@
 
 from .admin import AdminClient
 from .audit import AuditClient
-from .auth import AuthProvider, NoAuthProvider, TokenAuthProvider
+from .auth import AuthProvider, NamedTokenAuthProvider, NoAuthProvider, TokenAuthProvider
 from .base import BSSClient, set_context
 from .catalog import CatalogClient
 from .com import COMClient
@@ -26,6 +26,7 @@ __all__ = [
     "ClientError",
     "InventoryClient",
     "MediationClient",
+    "NamedTokenAuthProvider",
     "NoAuthProvider",
     "NotFound",
     "PaymentClient",

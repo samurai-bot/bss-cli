@@ -21,7 +21,7 @@ lock-and-hold, by design; it's a demo.
 
 from __future__ import annotations
 
-from bss_orchestrator.clients import get_clients
+from ..clients import get_clients
 from bss_portal_auth import IdentityView
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
