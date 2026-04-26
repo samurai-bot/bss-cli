@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}My account · bss-cli self-serve{% endblock %}
+
+{% block main %}
+<section class="dashboard">
+  <h1 class="page-title">My account</h1>
+  <p class="page-subtitle">
+    Signed in as <strong>{{ email }}</strong>
+    (customer <code class="dashboard-cust">{{ customer_id }}</code>).
+  </p>
+
+  <div class="dashboard-placeholder">
+    <p>
+      v0.10 will render lines, balances, and self-serve actions here.
+      For now, this page just confirms session resolution works
+      end-to-end.
+    </p>
+  </div>
+
+  <div class="dashboard-actions">
+    <a class="welcome-cta" href="/plans">Browse plans</a>
+    <form method="post" action="/auth/logout" class="dashboard-logout-form">
+      <button type="submit" class="welcome-cta">Sign out</button>
+    </form>
+  </div>
+</section>
+{% endblock %}

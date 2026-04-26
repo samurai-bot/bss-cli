@@ -147,8 +147,9 @@ def fake_clients() -> FakeClientsBundle:
 def client(fake_clients: FakeClientsBundle):
     # Patch get_clients at every import site the routes use. Using
     # ``create=False`` so we don't accidentally create missing attrs.
-    with patch("bss_self_serve.routes.landing.get_clients", return_value=fake_clients), \
-         patch("bss_self_serve.routes.welcome.get_clients", return_value=fake_clients), \
+    # routes/landing.py is the dashboard now (no catalog reads); the
+    # public plan-card browse moved to routes/welcome.py at /plans.
+    with patch("bss_self_serve.routes.welcome.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.signup.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.activation.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.confirmation.get_clients", return_value=fake_clients), \
@@ -228,8 +229,9 @@ def authed_client(fake_clients: FakeClientsBundle):
 
     session_id, identity_id = asyncio.run(_seed())
 
-    with patch("bss_self_serve.routes.landing.get_clients", return_value=fake_clients), \
-         patch("bss_self_serve.routes.welcome.get_clients", return_value=fake_clients), \
+    # routes/landing.py is the dashboard now (no catalog reads); the
+    # public plan-card browse moved to routes/welcome.py at /plans.
+    with patch("bss_self_serve.routes.welcome.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.signup.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.activation.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.confirmation.get_clients", return_value=fake_clients), \

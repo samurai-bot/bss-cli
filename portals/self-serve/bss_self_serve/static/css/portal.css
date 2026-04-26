@@ -2,6 +2,37 @@
    Palette, layout, header/footer, and the agent log widget live in
    bss_portal_ui/static/css/portal_base.css (loaded first via base.html). */
 
+/* ─── Dashboard (v0.8 placeholder, v0.10 fills it in) ─────────── */
+
+.dashboard,
+.dashboard-empty {
+  max-width: 640px;
+  margin: 32px auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.dashboard-empty-cta-row,
+.dashboard-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-top: 8px;
+}
+.dashboard-placeholder {
+  background: var(--bg-inset);
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  padding: 24px;
+  color: var(--fg-muted);
+  font-size: 14px;
+}
+.dashboard-cust {
+  font-family: var(--mono);
+  color: var(--accent);
+}
+.dashboard-logout-form { margin: 0; }
+
 /* ─── Welcome page (v0.8) ────────────────────────────────────── */
 
 .welcome-card {
