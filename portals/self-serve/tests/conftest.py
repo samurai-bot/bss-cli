@@ -38,11 +38,20 @@ class FakeCatalog:
 @dataclass
 class FakeSubscription:
     records: dict[str, dict[str, Any]] = field(default_factory=dict)
+    by_customer: dict[str, list[str]] = field(default_factory=dict)
+    balances: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
 
     async def get(self, subscription_id: str) -> dict[str, Any]:
         if subscription_id not in self.records:
             raise KeyError(subscription_id)
         return dict(self.records[subscription_id])
+
+    async def list_for_customer(self, customer_id: str) -> list[dict[str, Any]]:
+        ids = self.by_customer.get(customer_id, [])
+        return [dict(self.records[i]) for i in ids if i in self.records]
+
+    async def get_balance(self, subscription_id: str) -> list[dict[str, Any]]:
+        return [dict(b) for b in self.balances.get(subscription_id, [])]
 
 
 @dataclass
@@ -86,6 +95,10 @@ class FakeClientsBundle:
     subscription: FakeSubscription = field(default_factory=FakeSubscription)
     inventory: FakeInventory = field(default_factory=FakeInventory)
     com: FakeCOM = field(default_factory=FakeCOM)
+    # v0.10 — added so post-login route tests can pre-seed responses.
+    payment: Any = None
+    provisioning: Any = None
+    crm: Any = None
 
 
 SAMPLE_OFFERINGS = [
@@ -153,7 +166,8 @@ def client(fake_clients: FakeClientsBundle):
          patch("bss_self_serve.routes.signup.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.activation.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.confirmation.get_clients", return_value=fake_clients), \
-         patch("bss_self_serve.routes.msisdn_picker.get_clients", return_value=fake_clients):
+         patch("bss_self_serve.routes.msisdn_picker.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.landing.get_clients", return_value=fake_clients):
         app = create_app(Settings())
         with TestClient(app) as c:
             yield c
@@ -235,7 +249,8 @@ def authed_client(fake_clients: FakeClientsBundle):
          patch("bss_self_serve.routes.signup.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.activation.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.confirmation.get_clients", return_value=fake_clients), \
-         patch("bss_self_serve.routes.msisdn_picker.get_clients", return_value=fake_clients):
+         patch("bss_self_serve.routes.msisdn_picker.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.landing.get_clients", return_value=fake_clients):
         app = create_app(Settings())
         with TestClient(app) as c:
             c.cookies.set(PORTAL_SESSION_COOKIE, session_id)
