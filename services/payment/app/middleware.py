@@ -11,6 +11,7 @@ import uuid
 import structlog
 from bss_clients import set_context
 from bss_clients.errors import ServerError
+from bss_telemetry import stamp_request_span
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app import auth_context
@@ -53,8 +54,17 @@ class RequestIdMiddleware:
             request_id=request_id,
             actor=actor,
             channel=channel,
+            service_identity=service_identity,
             method=scope.get("method", "?"),
             path=scope.get("path", "?"),
+        )
+
+        # v0.9 — stamp the active server span (set up by FastAPIInstrumentor)
+        # with caller context. Lets `bss trace` filter by service identity.
+        stamp_request_span(
+            actor=actor,
+            channel=channel,
+            service_identity=service_identity,
         )
 
         status_holder = {"status": 0}

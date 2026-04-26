@@ -9,6 +9,7 @@ import json
 import uuid
 
 import structlog
+from bss_telemetry import stamp_request_span
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from bss_catalog import auth_context
@@ -50,8 +51,16 @@ class RequestIdMiddleware:
             request_id=request_id,
             actor=actor,
             channel=channel,
+            service_identity=service_identity,
             method=scope.get("method", "?"),
             path=scope.get("path", "?"),
+        )
+
+        # v0.9 — stamp the active server span with caller context.
+        stamp_request_span(
+            actor=actor,
+            channel=channel,
+            service_identity=service_identity,
         )
 
         status_holder = {"status": 0}
