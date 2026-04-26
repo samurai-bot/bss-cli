@@ -188,10 +188,10 @@ seed:
 	@$(ENV_SOURCE); uv run --package bss-seed python -m bss_seed.main
 
 scenarios:
-	@uv run bss scenario run-all scenarios
+	@$(ENV_SOURCE); uv run bss scenario run-all scenarios
 
 scenarios-hero:
-	@uv run bss scenario run-all scenarios --tag hero
+	@$(ENV_SOURCE); uv run bss scenario run-all scenarios --tag hero
 
 reset-db:
 	@$(ENV_SOURCE); \
