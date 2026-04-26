@@ -20,12 +20,17 @@ class Settings(BaseSettings):
     version: str = "0.4.0"
     log_level: str = "INFO"
 
-    # Upstream BSS service endpoints (reads only — writes go through the
-    # orchestrator, which has its own URL config).
+    # Upstream BSS service endpoints. v0.4–v0.9: reads only (signup
+    # writes routed through the orchestrator). v0.10+: post-login
+    # self-serve routes write directly via these clients (see CLAUDE.md
+    # doctrine carve-out); signup + chat continue going through the
+    # orchestrator.
     catalog_url: str = "http://catalog:8000"
     com_url: str = "http://com:8000"
     subscription_url: str = "http://subscription:8000"
     crm_url: str = "http://crm:8000"
+    payment_url: str = "http://payment:8000"
+    provisioning_url: str = "http://provisioning:8000"
 
     # Portal-specific
     bss_portal_self_serve_port: int = 9001

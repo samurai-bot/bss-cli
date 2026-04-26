@@ -26,6 +26,7 @@ fallback; the dataclasses (``IdentityView``, ``SessionView``,
 ``StepUpToken``) keep their shape.
 """
 
+from .audit import record_portal_action
 from .config import Settings
 from .email import (
     EmailAdapter,
@@ -86,4 +87,6 @@ __all__ = [
     "start_step_up",
     "verify_step_up",
     "consume_step_up_token",
+    # v0.10 — portal-side per-write audit
+    "record_portal_action",
 ]

@@ -38,7 +38,15 @@ def test_factory_uses_named_token_provider(monkeypatch):
     # ``_auth`` attribute on BSSClient — the contract test is that the
     # factory wires the right provider, not what the provider's public
     # API looks like.
-    for c in (bundle.catalog, bundle.crm, bundle.inventory, bundle.com, bundle.subscription):
+    for c in (
+        bundle.catalog,
+        bundle.crm,
+        bundle.inventory,
+        bundle.com,
+        bundle.subscription,
+        bundle.payment,
+        bundle.provisioning,
+    ):
         provider = c._auth
         assert isinstance(provider, NamedTokenAuthProvider)
         assert provider.identity == "portal_self_serve"
@@ -92,12 +100,20 @@ async def test_factory_outbound_headers_carry_named_token(monkeypatch):
 
 
 def test_portal_clients_bundle_includes_required_clients(monkeypatch):
-    """Document the read surface the portal currently uses."""
+    """Document the read + write surface the portal currently uses.
+
+    v0.10 adds payment + provisioning so post-login routes can call
+    them directly (charge history, COF management, eSIM ownership
+    lookup). The catalog covers VAS list. The subscription client
+    covers terminate / purchase_vas / schedule_plan_change /
+    cancel_plan_change.
+    """
     monkeypatch.setenv("BSS_PORTAL_SELF_SERVE_API_TOKEN", PORTAL_TOKEN)
     bundle = portal_clients.get_clients()
-    # Expand this list deliberately when v0.10+ adds new portal-side reads.
     assert hasattr(bundle, "catalog")
     assert hasattr(bundle, "crm")
     assert hasattr(bundle, "inventory")
     assert hasattr(bundle, "com")
     assert hasattr(bundle, "subscription")
+    assert hasattr(bundle, "payment")
+    assert hasattr(bundle, "provisioning")

@@ -12,7 +12,7 @@ completes its first KYC + ``customer.create`` (see
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, ForeignKey, Index, Text, text
+from sqlalchemy import BigInteger, Boolean, ForeignKey, Index, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import Base, TZDateTime, TenantMixin
@@ -122,3 +122,55 @@ class LoginAttempt(Base, TenantMixin):
     # Optional discriminator: 'login_start', 'login_verify', 'step_up_start',
     # 'step_up_verify'. Helps the rate-limiter scope its window queries.
     stage: Mapped[str | None] = mapped_column(Text)
+
+
+class PortalAction(Base, TenantMixin):
+    """v0.10 — per-write portal-side audit row.
+
+    Written by every direct post-login self-serve route after the BSS
+    write completes (success or failure). Complements the canonical
+    ``audit.domain_event`` row with portal-side context: which route,
+    which resolved customer principal, was step-up consumed, and the
+    originating ip / user agent. The forensic question this answers
+    is "did customer X actually authorise this?" — not the BSS
+    domain question of "what changed in the canonical record".
+    """
+
+    __tablename__ = "portal_action"
+    __table_args__ = (
+        Index(
+            "ix_portal_action_customer_ts",
+            "customer_id",
+            text("ts DESC"),
+        ),
+        Index(
+            "ix_portal_action_action_ts",
+            "action",
+            text("ts DESC"),
+        ),
+        Index(
+            "ix_portal_action_unknown_rule",
+            "error_rule",
+            text("ts DESC"),
+            postgresql_where=text("error_rule IS NOT NULL"),
+        ),
+        {"schema": SCHEMA},
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    ts: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+    customer_id: Mapped[str | None] = mapped_column(Text)
+    identity_id: Mapped[str | None] = mapped_column(Text)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    route: Mapped[str] = mapped_column(Text, nullable=False)
+    method: Mapped[str] = mapped_column(Text, nullable=False)
+    success: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    error_rule: Mapped[str | None] = mapped_column(Text)
+    step_up_consumed: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+    )
+    ip: Mapped[str | None] = mapped_column(Text)
+    user_agent: Mapped[str | None] = mapped_column(Text)

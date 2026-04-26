@@ -71,7 +71,7 @@ from .billing import BillingAccount, CustomerBill
 from .audit import DomainEvent
 
 # Portal Auth (4 tables) — v0.8
-from .portal_auth import Identity, LoginAttempt, LoginToken, Session
+from .portal_auth import Identity, LoginAttempt, LoginToken, PortalAction, Session
 
 __all__ = [
     "Base",
@@ -128,9 +128,10 @@ __all__ = [
     "CustomerBill",
     # Audit
     "DomainEvent",
-    # Portal Auth (v0.8)
+    # Portal Auth (v0.8 + v0.10 PortalAction)
     "Identity",
     "LoginToken",
     "Session",
     "LoginAttempt",
+    "PortalAction",
 ]
