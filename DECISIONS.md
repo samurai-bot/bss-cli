@@ -1294,3 +1294,114 @@ right thing. New regression test
 the cache-staleness mechanism in a single session and would FAIL
 without the fix (verified). Documented inline in
 `subscription_repo.py:get_balance_for_update`.
+
+## 2026-04-26 — v0.9.0 — Named tokens at the BSS perimeter
+**Context:** v0.3 introduced a single shared `BSS_API_TOKEN` carried
+by every internal caller. With the v0.4/v0.8 self-serve portal now
+sitting at the public-internet edge (behind a reverse proxy), a
+leaked portal credential granted full orchestrator-equivalent access.
+The portal is reachable from the public internet; the orchestrator is
+not. Distinct exposure surfaces should rotate independently and leave
+distinct audit trails.
+**Decision:** Split the perimeter token into a `TokenMap`. The
+default identity stays on `BSS_API_TOKEN`; new external-facing
+surfaces get `BSS_<NAME>_API_TOKEN` env vars. The middleware loads
+the map at startup, validates incoming `X-BSS-API-Token` against it
+in constant time, and attaches the resolved `service_identity` to
+the ASGI scope. Receiving services derive `service_identity` from
+the token, never from a separate header. The self-serve portal in
+v0.9 carries `BSS_PORTAL_API_TOKEN` → `service_identity = "portal_self_serve"`.
+The CSR console stays on the default token until v0.12.
+**Alternatives:** (a) Jump straight to OAuth2/JWT — rejected, that's
+Phase 12's full per-principal auth story and lifts roles/permissions
+out of `auth_context.py` at the same time. v0.9 is the bridge.
+(b) Leave a single token and rely on per-channel `X-BSS-Channel` for
+audit attribution — rejected, the channel header is caller-asserted
+and a leaked token still grants full access; the blast-radius point
+needs distinct credentials, not just distinct labels. (c) Per-route
+permission scoping on the named tokens — rejected as out of scope;
+named tokens identify a *surface*, not a permission set. Phase 12
+does scoping via JWT claims.
+**Consequences:** Each external-facing surface now rotates on its
+own cadence. Portal-token compromise leaves orchestrator and CSR
+unaffected. Audit gains a critical dimension: SQL by
+`service_identity` answers "which surface initiated this write?".
+The model is forward-compatible with Phase 12 — the perimeter
+middleware swap (token → JWT validator) is the only change per
+service when OAuth lands. The Phase 12 trap of "rebuilding piecemeal"
+is avoided because v0.9 deliberately ships only the token-map split,
+not roles/permissions/per-principal claims.
+
+## 2026-04-26 — v0.9.0 — Identity derivation from env-var name
+**Context:** A `TokenMap` needs a stable, simple way to associate
+each loaded token with an identity string. Two options: a separate
+config block (e.g., a `BSS_TOKEN_MAP_JSON` env var) or convention
+over configuration (env-var name → identity).
+**Decision:** Derive identity from the env-var name.
+`BSS_API_TOKEN` → `"default"`, `BSS_<NAME>_API_TOKEN` → `<name>`
+lowercased. `BSS_PARTNER_ACME_API_TOKEN` → `"partner_acme"`. The
+loader regex is `^BSS_(.+)_API_TOKEN$` plus the `BSS_API_TOKEN`
+special case.
+**Alternatives:** (a) Separate JSON config — rejected; one more file
+to keep in sync with `.env`, easy for the two to drift. (b) A
+required `BSS_*_API_TOKEN_IDENTITY` companion env per token —
+rejected; doubles the env footprint without buying anything the
+naming convention doesn't already give us.
+**Consequences:** Adding a new named token is a one-line `.env`
+change with no extra plumbing. The convention is documented in
+`.env.example` and the rotation runbook so operators don't guess.
+Doctrine: portal client code (`NamedTokenAuthProvider`) takes the
+identity *label* as a constructor arg — that label is informational
+on the outbound side only; the receiving side always re-derives from
+its own validated map. Caller cannot assert identity.
+
+## 2026-04-26 — v0.9.0 — Hashed token map storage (HMAC-SHA-256 with fixed salt)
+**Context:** The middleware needs a fast, constant-time lookup from
+incoming token to identity. Options for in-memory storage: raw
+strings (simple, but raw env values live in process memory in dict
+form, and a debug-level dump leaks them); HMAC-SHA-256 hashes with
+a fixed salt (one-way, safe to log at debug level for ops diagnosis,
+constant-time comparable via `hmac.compare_digest`); per-process
+random salt (no diagnostic value across processes).
+**Decision:** HMAC-SHA-256 with a constant salt baked into source.
+The salt is not a secret — its purpose is one-wayness so the
+in-memory map representation can be safely logged at debug level
+without exposing the raw env value. Lookup hashes the incoming
+header value with the same salt, then iterates the map under
+`hmac.compare_digest`. Iteration does not short-circuit on first
+match — total wall-time is independent of which entry matched.
+**Alternatives:** (a) Plain dict of raw strings — rejected; debug
+dumps and core dumps would leak the env value verbatim. (b)
+Per-process random salt — rejected; an operator running `bss
+config dump` on two processes can't compare hashes for sanity
+checks (e.g., "are these two services running with the same token?").
+**Consequences:** Operators can safely log the loaded map at debug
+level for diagnosis. The salt-as-constant detail is a security
+nuance documented in `api_token.py`; it is *not* an interface
+callers should rely on. No `is_valid_token(value)` public helper —
+all token validation goes through the middleware's 200/401 response.
+
+## 2026-04-26 — v0.9.0 — Backfill `audit.domain_event.service_identity` to `'default'`
+**Context:** Migration 0009 adds `service_identity` to
+`audit.domain_event`. Existing rows predate v0.9; how should the
+column be populated? Three options: leave NULL (interpret later),
+backfill `'default'` in the migration with NOT NULL applied after,
+or backfill in v0.10 with a NULL-allowed column in v0.9.
+**Decision:** Backfill `'default'` in the same migration, then apply
+NOT NULL with `server_default='default'`. Pre-v0.9 rows arrived via
+the v0.3 single-token regime which v0.9 maps to identity `"default"`
+— the historically-correct value, not an "unknown" placeholder. The
+NOT NULL constraint guarantees the column always has a meaningful
+value for SQL pivots and prevents a future paper-cut where some
+straggler insert path forgets to populate it.
+**Alternatives:** (a) Leave nullable forever — rejected; "what does
+NULL mean here" creates an ongoing interpretation tax on every
+SQL query. (b) Defer backfill to v0.10 — rejected; same
+half-finished trap as the v0.7 price-snapshot migration that we
+explicitly call out as an anti-pattern in the v0.9 phase doc.
+**Consequences:** Forward-compatible — every row in
+`audit.domain_event` now carries a meaningful `service_identity`,
+including historical rows. The v0.9 phase doc's "audit by surface"
+queries (in the rotation runbook) work correctly against pre-v0.9
+data: a leak detection query on the past 90 days returns sane
+counts because the historical baseline is `'default'`, not `NULL`.
