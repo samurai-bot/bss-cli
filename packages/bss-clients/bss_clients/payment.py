@@ -137,6 +137,19 @@ class PaymentClient(BSSClient):
         )
         return resp.json() if resp.content else {"id": method_id, "removed": True}
 
+    async def set_default_method(self, method_id: str) -> dict[str, Any]:
+        """POST /tmf-api/paymentMethodManagement/v4/paymentMethod/{id}/setDefault.
+
+        v0.10 — used by the self-serve portal's "Set default" CTA. The
+        server owns the "exactly one default per customer" invariant
+        and clears any prior default in the same transaction.
+        """
+        resp = await self._request(
+            "POST",
+            f"/tmf-api/paymentMethodManagement/v4/paymentMethod/{method_id}/setDefault",
+        )
+        return resp.json()
+
     # ── Dev tokenizer ────────────────────────────────────────────────────
 
     async def dev_tokenize_card(self, card_number: str) -> dict[str, Any]:

@@ -110,13 +110,92 @@ class FakeCOM:
 
 
 @dataclass
+class FakePayment:
+    methods_by_customer: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    create_calls: list[dict[str, Any]] = field(default_factory=list)
+    remove_calls: list[str] = field(default_factory=list)
+    set_default_calls: list[str] = field(default_factory=list)
+    next_error: Exception | None = None
+
+    async def list_methods(self, customer_id: str) -> list[dict[str, Any]]:
+        return [dict(m) for m in self.methods_by_customer.get(customer_id, [])]
+
+    async def create_payment_method(
+        self,
+        *,
+        customer_id: str,
+        card_token: str,
+        last4: str,
+        brand: str,
+        exp_month: int = 12,
+        exp_year: int = 2030,
+        tokenization_provider: str = "sandbox",
+        country: str | None = "SG",
+    ) -> dict[str, Any]:
+        if self.next_error is not None:
+            err = self.next_error
+            self.next_error = None
+            raise err
+        record = {
+            "customer_id": customer_id,
+            "card_token": card_token,
+            "last4": last4,
+            "brand": brand,
+            "exp_month": exp_month,
+            "exp_year": exp_year,
+        }
+        self.create_calls.append(record)
+        new_id = f"PM-{len(self.create_calls):04d}"
+        existing = self.methods_by_customer.setdefault(customer_id, [])
+        is_default = len(existing) == 0
+        method = {
+            "id": new_id,
+            "customerId": customer_id,
+            "brand": brand,
+            "last4": last4,
+            "expMonth": exp_month,
+            "expYear": exp_year,
+            "isDefault": is_default,
+        }
+        existing.append(method)
+        return dict(method)
+
+    async def remove_method(self, method_id: str) -> dict[str, Any]:
+        if self.next_error is not None:
+            err = self.next_error
+            self.next_error = None
+            raise err
+        self.remove_calls.append(method_id)
+        for cust_id, methods in self.methods_by_customer.items():
+            for m in methods:
+                if m["id"] == method_id:
+                    methods.remove(m)
+                    return {"id": method_id, "removed": True}
+        raise KeyError(method_id)
+
+    async def set_default_method(self, method_id: str) -> dict[str, Any]:
+        if self.next_error is not None:
+            err = self.next_error
+            self.next_error = None
+            raise err
+        self.set_default_calls.append(method_id)
+        for cust_id, methods in self.methods_by_customer.items():
+            target = next((m for m in methods if m["id"] == method_id), None)
+            if target is not None:
+                for m in methods:
+                    m["isDefault"] = (m["id"] == method_id)
+                return dict(target)
+        raise KeyError(method_id)
+
+
+@dataclass
 class FakeClientsBundle:
     catalog: FakeCatalog = field(default_factory=FakeCatalog)
     subscription: FakeSubscription = field(default_factory=FakeSubscription)
     inventory: FakeInventory = field(default_factory=FakeInventory)
     com: FakeCOM = field(default_factory=FakeCOM)
     # v0.10 — added so post-login route tests can pre-seed responses.
-    payment: Any = None
+    payment: FakePayment = field(default_factory=FakePayment)
     provisioning: Any = None
     crm: Any = None
 
@@ -223,7 +302,8 @@ def client(fake_clients: FakeClientsBundle):
          patch("bss_self_serve.routes.confirmation.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.msisdn_picker.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.landing.get_clients", return_value=fake_clients), \
-         patch("bss_self_serve.routes.top_up.get_clients", return_value=fake_clients):
+         patch("bss_self_serve.routes.top_up.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.payment_methods.get_clients", return_value=fake_clients):
         app = create_app(Settings())
         with TestClient(app) as c:
             yield c
@@ -307,7 +387,8 @@ def authed_client(fake_clients: FakeClientsBundle):
          patch("bss_self_serve.routes.confirmation.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.msisdn_picker.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.landing.get_clients", return_value=fake_clients), \
-         patch("bss_self_serve.routes.top_up.get_clients", return_value=fake_clients):
+         patch("bss_self_serve.routes.top_up.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.payment_methods.get_clients", return_value=fake_clients):
         app = create_app(Settings())
         with TestClient(app) as c:
             c.cookies.set(PORTAL_SESSION_COOKIE, session_id)

@@ -144,6 +144,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         confirmation,
         landing,
         msisdn_picker,
+        payment_methods,
         session_api,
         signup,
         top_up,
@@ -161,6 +162,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(session_api.router)
     # v0.10 — post-login self-serve writes go direct (no orchestrator).
     app.include_router(top_up.router)
+    app.include_router(payment_methods.router)
 
     return app
 

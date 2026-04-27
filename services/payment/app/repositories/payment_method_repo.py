@@ -56,3 +56,29 @@ class PaymentMethodRepository:
     async def update(self, pm: PaymentMethod) -> PaymentMethod:
         await self._s.flush()
         return pm
+
+    async def set_default(self, customer_id: str, pm_id: str) -> None:
+        """Clear the existing default for ``customer_id`` and set ``pm_id`` as default.
+
+        Both updates land in the same transaction; callers commit
+        afterwards. Idempotent: if ``pm_id`` is already the default,
+        the net effect is a no-op (other rows still get cleared,
+        which is the same as before).
+        """
+        # Clear: every other active method for this customer.
+        await self._s.execute(
+            PaymentMethod.__table__.update()
+            .where(
+                PaymentMethod.customer_id == customer_id,
+                PaymentMethod.id != pm_id,
+                PaymentMethod.is_default.is_(True),
+            )
+            .values(is_default=False)
+        )
+        # Set: the target row.
+        await self._s.execute(
+            PaymentMethod.__table__.update()
+            .where(PaymentMethod.id == pm_id)
+            .values(is_default=True)
+        )
+        await self._s.flush()

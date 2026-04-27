@@ -104,6 +104,49 @@ class PaymentMethodService:
             customer_id, include_removed=include_removed
         )
 
+    async def set_default_method(self, pm_id: str) -> PaymentMethod:
+        """Mark ``pm_id`` as the customer's default payment method.
+
+        v0.10 — used by the portal's COF "Set default" CTA. The service
+        owns the "exactly one default per customer" invariant: it
+        clears any existing default for the same customer and sets the
+        new one in a single transaction. Idempotent on a method that's
+        already the default. Removed methods can't be made default.
+        """
+        from app.policies.base import PolicyViolation
+
+        pm = await self._pm_repo.get(pm_id)
+        if pm is None:
+            raise PolicyViolation(
+                rule="payment_method.set_default.not_found",
+                message=f"Payment method {pm_id} not found",
+                context={"payment_method_id": pm_id},
+            )
+        if pm.status == "removed":
+            raise PolicyViolation(
+                rule="payment_method.set_default.removed",
+                message=f"Payment method {pm_id} has been removed",
+                context={"payment_method_id": pm_id},
+            )
+
+        await self._pm_repo.set_default(pm.customer_id, pm_id)
+        # Refresh in-memory view post-update so the response carries the new flag.
+        pm.is_default = True
+
+        await publisher.publish(
+            self._session,
+            event_type="payment_method.default_changed",
+            aggregate_type="payment_method",
+            aggregate_id=pm_id,
+            payload={"customer_id": pm.customer_id, "last4": pm.last4},
+        )
+
+        await self._session.commit()
+        log.info(
+            "payment_method.default_changed", pm_id=pm_id, customer_id=pm.customer_id
+        )
+        return pm
+
     async def remove_method(self, pm_id: str) -> PaymentMethod:
         pm = await self._pm_repo.get(pm_id)
         if pm is None:
