@@ -3,12 +3,18 @@
 V0_5_0.md §6: shows a single case with its child tickets and the
 notes timeline. No writes; if the operator needs to add a note or
 transition a ticket, they ask the agent on the parent customer 360.
+
+v0.12 PR8: when a case carries ``chat_transcript_hash`` (i.e. it
+was opened by the chat surface via ``case.open_for_me``), the
+CSR-facing page renders a "Chat transcript" panel below the notes.
+The transcript is fetched via ``CRMClient.get_chat_transcript`` —
+the same route the orchestrator's ``case.show_transcript_for`` tool
+uses on the agent side.
 """
 
 from __future__ import annotations
 
-import asyncio
-
+import structlog
 from bss_clients.errors import ClientError
 from bss_orchestrator.clients import get_clients
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -18,6 +24,7 @@ from ..deps import require_operator
 from ..session import OperatorSession
 from ..templating import templates
 
+log = structlog.get_logger(__name__)
 router = APIRouter()
 
 
@@ -49,6 +56,36 @@ async def case_thread(
         key=lambda n: n.get("createdAt", ""),
     )
 
+    # v0.12 — transcript link, if any. Failures (transcript archived,
+    # service down) render the "linked but not retrievable" empty
+    # state rather than failing the whole case page.
+    transcript_hash = (
+        case_raw.get("chatTranscriptHash")
+        or case_raw.get("chat_transcript_hash")
+    )
+    transcript_view: dict | None = None
+    if transcript_hash:
+        try:
+            row = await clients.crm.get_chat_transcript(transcript_hash)
+            transcript_view = {
+                "hash": row.get("hash", transcript_hash),
+                "body": row.get("body", ""),
+                "recorded_at": row.get("recorded_at", ""),
+            }
+        except ClientError as exc:
+            log.warning(
+                "csr.case.chat_transcript_fetch_failed",
+                case_id=case_id,
+                hash=transcript_hash,
+                status=getattr(exc, "status_code", None),
+            )
+            transcript_view = {
+                "hash": transcript_hash,
+                "body": None,
+                "recorded_at": "",
+                "error": "Transcript is no longer retrievable. It may have been archived.",
+            }
+
     return templates.TemplateResponse(
         request,
         "case_thread.html",
@@ -64,6 +101,7 @@ async def case_thread(
                 "customer_id": case_raw.get("customerId", ""),
                 "created_at": case_raw.get("createdAt", ""),
                 "updated_at": case_raw.get("updatedAt", ""),
+                "chat_transcript_hash": transcript_hash,
             },
             "tickets": [
                 {
@@ -84,5 +122,6 @@ async def case_thread(
                 }
                 for n in notes
             ],
+            "transcript": transcript_view,
         },
     )

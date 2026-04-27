@@ -49,7 +49,16 @@ class CaseService:
         priority: str = "normal",
         category: str = "general",
         opened_by_agent_id: str | None = None,
+        chat_transcript_hash: str | None = None,
     ) -> Case:
+        """Open a case for a customer.
+
+        ``chat_transcript_hash`` (v0.12) links the case to a previously-
+        stored ``audit.chat_transcript`` row when the case is opened
+        from the customer chat surface via ``case.open_for_me``. The
+        column is a soft pointer (no FK constraint) — transcripts may
+        be archived independently of cases per the retention runbook.
+        """
         ctx = auth_context.current()
 
         await case_policies.check_customer_active(customer_id, self._customer_repo)
@@ -67,6 +76,7 @@ class CaseService:
             opened_by_agent_id=opened_by_agent_id,
             opened_at=now,
             tenant_id=ctx.tenant,
+            chat_transcript_hash=chat_transcript_hash,
         )
         await self._case_repo.create(case)
 

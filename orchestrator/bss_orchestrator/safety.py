@@ -30,6 +30,12 @@ DESTRUCTIVE_TOOLS: frozenset[str] = frozenset(
         "payment.remove_method",
         "order.cancel",
         "subscription.terminate",
+        # v0.12 — chat-surface wrapper around subscription.terminate.
+        # The wrapper narrows the LLM-visible target to the actor's
+        # own line, but the operation is still irreversible — gating
+        # at the wrapper too keeps the destructive contract honest
+        # even if a future caller forgets allow_destructive=True.
+        "subscription.terminate_mine",
         "provisioning.set_fault_injection",
         "admin.reset_operational_data",
         "admin.force_state",

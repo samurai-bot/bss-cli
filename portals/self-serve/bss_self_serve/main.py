@@ -42,6 +42,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from .chat_session import ChatConversationStore, ChatTurnStore
 from .config import Settings
 from .middleware import PortalSessionMiddleware
 from .security import install_redirect_handlers
@@ -88,6 +89,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.session_store = SessionStore(
         ttl_seconds=settings.bss_portal_self_serve_session_ttl,
     )
+
+    # v0.12 PR7/PR13 — chat in-memory state.
+    #   * ChatConversationStore: durable per-customer history so a
+    #     second message in the same conversation lands with full
+    #     prior-turn context. 60 min idle TTL.
+    #   * ChatTurnStore: per-SSE-stream working set for the current
+    #     in-flight turn. 30 min TTL covers a customer who Tab-
+    #     switched between submitting and opening the stream.
+    app.state.chat_turn_store = ChatTurnStore(ttl_seconds=1800)
+    app.state.chat_conversation_store = ChatConversationStore(ttl_seconds=3600)
     log.info(
         "portal.starting",
         service=settings.service_name,
@@ -142,9 +153,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         auth,
         billing,
         cancel,
+        chat,
         confirmation,
         esim,
         landing,
+        legal,
         msisdn_picker,
         payment_methods,
         plan_change,
@@ -157,6 +170,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(auth.router)
     app.include_router(welcome.router)
+    # v0.12 PR20 — public legal pages.
+    app.include_router(legal.router)
     app.include_router(landing.router)
     app.include_router(msisdn_picker.router)
     app.include_router(signup.router)
@@ -171,6 +186,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(profile.router)
     app.include_router(billing.router)
     app.include_router(plan_change.router)
+    # v0.12 — chat surface, the only orchestrator-mediated route.
+    app.include_router(chat.router)
 
     return app
 

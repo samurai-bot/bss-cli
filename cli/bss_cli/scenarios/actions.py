@@ -326,6 +326,166 @@ async def portal_link_identity_to_customer(
 # Scenario-only overrides. These SHADOW any same-named TOOL_REGISTRY entry
 # (e.g. orchestrator.tools.ops.clock_freeze is a NOT_IMPLEMENTED stub —
 # scenarios need the real fan-out).
+async def portal_mint_test_session(
+    *,
+    email: str,
+    customer_id: str,
+) -> dict[str, Any]:
+    """v0.12 — mint a verified linked-customer portal_auth session
+    and return the session_id. Combines what
+    ``portal.link_identity_to_customer`` does (seed the identity)
+    with what the OTP-login flow produces (a row in
+    ``portal_auth.session``). The chat hero scenarios use this to
+    skip the OTP round-trip — driving real OTP from the dev mailbox
+    is exercised by ``portal_post_login_self_serve``.
+
+    Idempotent on email — re-running the soak against a dirty DB
+    fails to seed (use ``make reset-db``).
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from bss_portal_auth.test_helpers import create_test_session
+
+    db_url = os.environ.get("BSS_DB_URL", "")
+    if not db_url:
+        raise RuntimeError("BSS_DB_URL must be set for portal.mint_test_session")
+    engine = create_async_engine(db_url)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as db:
+            sess, identity = await create_test_session(
+                db, email=email, customer_id=customer_id, verified=True
+            )
+            await db.commit()
+            return {
+                "session_id": sess.id,
+                "identity_id": identity.id,
+                "email": email,
+                "customer_id": customer_id,
+            }
+    finally:
+        await engine.dispose()
+
+
+async def portal_run_chat_turn(
+    *,
+    portal_base: str,
+    session_cookie: str,
+    message: str,
+    timeout_s: float = 30.0,
+) -> dict[str, Any]:
+    """v0.12 — drive one chat turn end-to-end against the live portal.
+
+    Steps:
+    1. POST /chat/message with the message + session cookie. Expect
+       303. The Location header carries either ``?session=<sid>`` (LLM
+       will run) or ``?cap_tripped=<reason>`` (cap blocked, no LLM).
+    2. If cap-tripped, return early with the reason.
+    3. Else, GET /chat/events/{sid} and drain the SSE stream until
+       ``status: done`` / ``status: error`` / timeout.
+    4. Return the captured outcome the scenario can assert on:
+       ``session_id``, ``cap_tripped``, ``stream_status``,
+       ``tool_calls`` (names of tools the agent invoked), ``duration_s``.
+
+    Idempotent on the ``message`` argument. The runner is responsible
+    for spacing turns to avoid the per-customer hourly cap.
+    """
+    import re
+    import time
+
+    t0 = time.perf_counter()
+    cookies = {"bss_portal_session": session_cookie}
+    async with httpx.AsyncClient(base_url=portal_base, timeout=timeout_s) as client:
+        r = await client.post(
+            "/chat/message",
+            data={"message": message},
+            cookies=cookies,
+            follow_redirects=False,
+        )
+        if r.status_code != 303:
+            return {
+                "ok": False,
+                "session_id": None,
+                "cap_tripped": None,
+                "stream_status": "post_failed",
+                "tool_calls": [],
+                "duration_s": time.perf_counter() - t0,
+                "error": f"POST /chat/message returned {r.status_code}",
+            }
+
+        location = r.headers.get("location", "")
+        if "cap_tripped=" in location:
+            reason_m = re.search(r"cap_tripped=([^&]+)", location)
+            return {
+                "ok": True,
+                "session_id": None,
+                "cap_tripped": reason_m.group(1) if reason_m else "unknown",
+                "stream_status": "cap_tripped",
+                "tool_calls": [],
+                "duration_s": time.perf_counter() - t0,
+            }
+
+        sid_m = re.search(r"session=([0-9a-f]+)", location)
+        if not sid_m:
+            return {
+                "ok": False,
+                "session_id": None,
+                "cap_tripped": None,
+                "stream_status": "no_session_in_redirect",
+                "tool_calls": [],
+                "duration_s": time.perf_counter() - t0,
+                "error": f"unexpected location: {location[:80]}",
+            }
+        sid = sid_m.group(1)
+
+        # Drain the SSE stream. Each frame is "event: <name>\n data: <html>\n\n".
+        # The agent log's tool_started events embed the tool name as the
+        # first part of the title text; cheap regex pulls them out.
+        tool_calls: list[str] = []
+        stream_status = "stream_closed"
+        async with client.stream(
+            "GET",
+            f"/chat/events/{sid}",
+            cookies=cookies,
+        ) as resp:
+            buf = ""
+            async for chunk in resp.aiter_text():
+                buf += chunk
+                # Frame boundaries are blank lines.
+                while "\n\n" in buf:
+                    frame, buf = buf.split("\n\n", 1)
+                    if "data: " not in frame:
+                        continue
+                    data = frame.split("data: ", 1)[1]
+                    # Tool-started rows have title="<tool.name>(args…)";
+                    # tool-completed rows have title="<tool.name>".
+                    for m in re.finditer(
+                        r'class="title">([a-z_.]+(?:_(?:mine|for_me))?)\b',
+                        data,
+                    ):
+                        candidate = m.group(1)
+                        if "." in candidate and candidate not in tool_calls:
+                            tool_calls.append(candidate)
+                    # Stream end markers.
+                    if "done" in data and 'class="dot done"' in data:
+                        stream_status = "done"
+                        break
+                    if "error" in data and 'class="dot error"' in data:
+                        stream_status = "error"
+                        break
+                if stream_status in {"done", "error"}:
+                    break
+
+    return {
+        "ok": stream_status == "done",
+        "session_id": sid,
+        "cap_tripped": None,
+        "stream_status": stream_status,
+        "tool_calls": tool_calls,
+        "duration_s": time.perf_counter() - t0,
+    }
+
+
 _SCENARIO_ACTIONS: dict[str, AsyncAction] = {
     "admin.reset_operational_data": admin_reset_operational_data,
     "clock.freeze": clock_freeze,
@@ -346,6 +506,10 @@ _SCENARIO_ACTIONS: dict[str, AsyncAction] = {
     # post-login direct-API flows in seconds rather than the ~85s the
     # v0.4/v0.8 SSE signup takes.
     "portal.link_identity_to_customer": portal_link_identity_to_customer,
+    # v0.12 — drive a chat turn end-to-end (POST /chat/message →
+    # follow redirect → drain SSE) and return the captured outcome.
+    "portal.run_chat_turn": portal_run_chat_turn,
+    "portal.mint_test_session": portal_mint_test_session,
 }
 
 

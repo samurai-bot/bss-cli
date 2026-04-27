@@ -11,6 +11,7 @@ from bss_middleware import api_token, validate_api_token_present
 from bss_telemetry import configure_telemetry
 
 from app.repositories.case_repo import CaseRepository
+from app.repositories.chat_transcript_repo import ChatTranscriptRepository
 from app.repositories.customer_repo import CustomerRepository
 from app.repositories.esim_repo import EsimRepository
 from app.repositories.interaction_repo import InteractionRepository
@@ -18,6 +19,7 @@ from app.repositories.kyc_repo import KycRepository
 from app.repositories.msisdn_repo import MsisdnRepository
 from app.repositories.ticket_repo import TicketRepository
 from app.services.case_service import CaseService
+from app.services.chat_transcript_service import ChatTranscriptService
 from app.services.customer_service import CustomerService
 from app.services.inventory_service import InventoryService
 from app.services.kyc_service import KycService
@@ -130,6 +132,15 @@ async def get_case_service(
         customer_repo=CustomerRepository(session),
         ticket_repo=TicketRepository(session),
         interaction_repo=InteractionRepository(session),
+    )
+
+
+async def get_chat_transcript_service(
+    session: AsyncSession = Depends(get_session),
+) -> ChatTranscriptService:
+    return ChatTranscriptService(
+        session=session,
+        chat_transcript_repo=ChatTranscriptRepository(session),
     )
 
 

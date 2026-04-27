@@ -291,17 +291,59 @@ class CRMClient(BSSClient):
         subject: str,
         category: str,
         priority: str,
+        description: str | None = None,
+        opened_by_agent_id: str | None = None,
+        chat_transcript_hash: str | None = None,
     ) -> dict[str, Any]:
-        """POST /crm-api/v1/case."""
+        """POST /crm-api/v1/case.
+
+        v0.12 added ``description``, ``opened_by_agent_id``, and
+        ``chat_transcript_hash``. The first two were always supported
+        server-side but not surfaced on the client; ``chat_transcript_hash``
+        is new and links the case to a previously-stored transcript
+        when the case is opened from the customer chat surface
+        (``case.open_for_me``).
+        """
+        payload: dict[str, Any] = {
+            "customer_id": customer_id,
+            "subject": subject,
+            "category": category,
+            "priority": priority,
+        }
+        if description is not None:
+            payload["description"] = description
+        if opened_by_agent_id is not None:
+            payload["opened_by_agent_id"] = opened_by_agent_id
+        if chat_transcript_hash is not None:
+            payload["chat_transcript_hash"] = chat_transcript_hash
         resp = await self._request(
             "POST",
             "/crm-api/v1/case",
-            json={
-                "customerId": customer_id,
-                "subject": subject,
-                "category": category,
-                "priority": priority,
-            },
+            json=payload,
+        )
+        return resp.json()
+
+    async def store_chat_transcript(
+        self, *, hash_: str, customer_id: str, body: str
+    ) -> dict[str, Any]:
+        """POST /crm-api/v1/chat-transcript — v0.12.
+
+        Idempotent on the hash PK. The orchestrator computes the
+        SHA-256 and posts; the server re-computes and rejects
+        mismatches so the column cannot be poisoned with a body that
+        does not match its key.
+        """
+        resp = await self._request(
+            "POST",
+            "/crm-api/v1/chat-transcript",
+            json={"hash": hash_, "customer_id": customer_id, "body": body},
+        )
+        return resp.json()
+
+    async def get_chat_transcript(self, hash_: str) -> dict[str, Any]:
+        """GET /crm-api/v1/chat-transcript/{hash} — v0.12. CSR-side only."""
+        resp = await self._request(
+            "GET", f"/crm-api/v1/chat-transcript/{hash_}"
         )
         return resp.json()
 

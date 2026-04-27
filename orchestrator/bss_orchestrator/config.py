@@ -46,6 +46,15 @@ class Settings(BaseSettings):
     tenant_default: str = "DEFAULT"
     log_level: str = "INFO"
 
+    # ── v0.12 chat scoping ─────────────────────────────────────────────
+    # The orchestrator owns ``audit.chat_usage`` because no single
+    # domain service does — the table aggregates costs across CRM /
+    # subscription / payment writes that the chat surface drives.
+    db_url: str = ""
+    chat_rate_per_customer_per_hour: int = 20
+    chat_cost_cap_per_customer_per_month_cents: int = 200
+    chat_rate_per_ip_per_hour: int = 60
+
     model_config = SettingsConfigDict(
         env_file=_REPO_ROOT / ".env",
         env_file_encoding="utf-8",

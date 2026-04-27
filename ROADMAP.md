@@ -61,6 +61,42 @@ internal-beta soak. When v0.12 tags, the platform is
 production-shape modulo the three v1.0 swaps (real Singpass,
 real Stripe, real SM-DP+).
 
+## v1.0 — Real Singpass + real Stripe + real SM-DP+
+
+The version that swaps the three integrations v0.12 leaves
+mocked. v1.0 is **not** a new feature ladder; nothing in v0.7–v0.12
+is renegotiated. The data model, tool surface, doctrine, and audit
+trail are stable. The three swaps land behind the existing seams:
+
+- **Real Singpass attestation flow on the portal-side.** The
+  channel-layer eKYC vendor changes from a hardcoded
+  `KYC-PREBAKED-001` sentinel to a Singpass-issued signed JWT.
+  BSS-CLI's contract — receive a signed attestation, record it,
+  enforce `order.create.requires_verified_customer` — does not
+  change. The `customer.attest_kyc` tool keeps its signature.
+- **Real payment provider behind the existing COF UX.** The mock
+  tokenizer at `services/payment/app/services/mock_tokenizer.py`
+  is replaced with a Stripe (or equivalent) SDK call. PAN never
+  reaches BSS; tokens still stamp ``audit.domain_event``. The
+  `payment.add_card` / `payment.charge` surfaces, the COF-mandatory
+  policy, the no-retry doctrine — all unchanged.
+- **Real SM-DP+ integration for eSIM provisioning.** The
+  provisioning-sim's eSIM hooks are replaced with a real GSMA
+  SGP.22 SM-DP+ adapter. The `inventory.esim` pool, the
+  `subscription.get_esim_activation` LPA bundle, the activation
+  state machine — unchanged shape. The `ESIM_PROFILE_REARM` SOM
+  task ships then; v0.x's `/esim/<id>` view becomes the entry
+  point for the real re-arm flow.
+
+Plus a public soak: real-customer-cohort exposure with the three
+real integrations live, monitored against the v0.12 soak gates
+(zero ownership trips, p99 chat latency, no DB unbounded growth)
+re-run on production data shapes.
+
+`SHIP_CRITERIA.md` gets a v1.0 row when the three swaps land.
+The git tag `v0.12.0` is the platform v1.0 sits on; tagging v1.0
+without all three swaps is a doctrine violation.
+
 ## Phase 12 — Authentication & RBAC
 
 The big post-portals piece. Spec exists in `CLAUDE.md` already.

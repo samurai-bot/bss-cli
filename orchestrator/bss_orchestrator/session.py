@@ -29,8 +29,15 @@ from bss_clients import reset_service_identity_token, set_service_identity_token
 from bss_telemetry import semconv, tracer
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
+from . import auth_context
+from .clients import get_clients
 from .context import use_channel_context, use_llm_context
 from .graph import build_graph
+from .ownership import (
+    AgentOwnershipViolation,
+    assert_owned_output,
+    record_violation,
+)
 
 
 def _resolve_token_for_service_identity(identity: str) -> str:
@@ -135,12 +142,29 @@ class AgentEventError:
     message: str
 
 
+@dataclass(frozen=True)
+class AgentEventTurnUsage:
+    """v0.12 — token counts for the completed turn so the chat route
+    can call ``chat_caps.record_chat_turn`` with the right numbers.
+
+    Emitted once at stream end after ``AgentEventFinalMessage`` when
+    the LLM's response surfaced ``usage_metadata``. ``model`` carries
+    the model identifier used so the rate table looks up the right
+    rates even if ``BSS_LLM_MODEL`` changes between turns.
+    """
+
+    prompt_tok: int
+    completion_tok: int
+    model: str
+
+
 AgentEvent = Union[
     AgentEventPromptReceived,
     AgentEventToolCallStarted,
     AgentEventToolCallCompleted,
     AgentEventFinalMessage,
     AgentEventError,
+    AgentEventTurnUsage,
 ]
 
 
@@ -276,6 +300,9 @@ async def astream_once(
     channel: str = "llm",
     actor: str | None = None,
     service_identity: str | None = None,
+    tool_filter: str | None = None,
+    system_prompt: str | None = None,
+    transcript: str = "",
 ) -> AsyncIterator[AgentEvent]:
     """Streaming variant of ``ask_once``. Yields ``AgentEvent`` as the graph runs.
 
@@ -290,6 +317,18 @@ async def astream_once(
     rather than to ``llm-<model-slug>``. Per-model attribution still
     lives in ``audit.domain_event.actor``. Defaults to ``settings.llm_actor``
     when ``channel != "llm"`` and no actor is given (preserves v0.4 behaviour).
+
+    The ``tool_filter`` parameter (v0.12+) names a profile in
+    ``TOOL_PROFILES`` (e.g. ``"customer_self_serve"``). When set, the
+    LangGraph agent is constructed with the profile's tool subset
+    instead of the full registry — the chat surface narrows the
+    LLM-visible tools so an injected prompt cannot reach a tool the
+    customer's own UI doesn't expose. ``None`` (default) keeps full
+    access (CLI / scenario / CSR behaviour).
+
+    The ``system_prompt`` parameter (v0.12+) overrides the canonical
+    ``SYSTEM_PROMPT`` for this stream. v0.12 customer chat passes the
+    customer-chat prompt with five-category escalation guidance.
 
     The ``service_identity`` parameter (v0.9+) overrides the X-BSS-API-Token
     on outbound bss-clients calls so audit rows attribute writes to the
@@ -341,12 +380,30 @@ async def astream_once(
             override_token = _resolve_token_for_service_identity(service_identity)
             identity_reset_token = set_service_identity_token(override_token)
 
+        # v0.12 — bind the orchestrator-side auth_context for the
+        # duration of this stream so the customer profile's *.mine
+        # wrappers can read auth_context.current().actor. The
+        # transcript carries the chat-session conversation history
+        # for case.open_for_me's transcript-link when a customer
+        # escalates. Reset in finally so a stream that raises still
+        # leaves a clean Context for whatever runs next.
+        auth_reset_token = None
+        if actor:
+            auth_reset_token = auth_context.set_actor(
+                actor, transcript=transcript
+            )
+
         try:
             yield AgentEventPromptReceived(prompt=prompt)
 
-            graph = build_graph(allow_destructive=allow_destructive)
+            graph = build_graph(
+                allow_destructive=allow_destructive,
+                tool_filter=tool_filter,
+                system_prompt=system_prompt,
+            )
             seen_call_ids: set[str] = set()
             last_ai_text = ""
+            usage_total = {"input_tokens": 0, "output_tokens": 0, "model": ""}
 
             try:
                 async for update in graph.astream(
@@ -378,25 +435,100 @@ async def astream_once(
                                 text = _ai_text(msg)
                                 if text and not tool_calls:
                                     last_ai_text = text
+                                # v0.12 — accumulate per-turn token
+                                # counts so the chat route can record
+                                # cost via chat_caps.record_chat_turn.
+                                # langchain_openai surfaces usage_metadata
+                                # on the final assistant message; some
+                                # providers also emit on tool-call AI
+                                # messages, so accumulate across all of
+                                # them.
+                                um = getattr(msg, "usage_metadata", None)
+                                if um:
+                                    usage_total["input_tokens"] += int(
+                                        um.get("input_tokens") or 0
+                                    )
+                                    usage_total["output_tokens"] += int(
+                                        um.get("output_tokens") or 0
+                                    )
+                                rm = getattr(msg, "response_metadata", None) or {}
+                                model_name = rm.get("model_name") or rm.get("model")
+                                if model_name:
+                                    usage_total["model"] = model_name
                             elif isinstance(msg, ToolMessage):
                                 full = (
                                     str(msg.content) if msg.content is not None else ""
+                                )
+                                is_error = (
+                                    getattr(msg, "status", None) == "error"
                                 )
                                 yield AgentEventToolCallCompleted(
                                     name=msg.name or "",
                                     call_id=msg.tool_call_id or "",
                                     result=_truncate(full),
                                     result_full=full,
-                                    is_error=getattr(msg, "status", None) == "error",
+                                    is_error=is_error,
                                 )
+                                # v0.12 PR4 — output ownership trip-wire.
+                                # Skips error-status results (they cannot
+                                # carry customer-bound rows by definition)
+                                # and runs only when an actor is bound
+                                # (the chat surface) so non-chat callers
+                                # (CLI / scenario / CSR) keep their
+                                # full-surface behaviour.
+                                if actor and not is_error and msg.name:
+                                    try:
+                                        assert_owned_output(
+                                            tool_name=msg.name,
+                                            result_json=full,
+                                            actor=actor,
+                                        )
+                                    except AgentOwnershipViolation as v:
+                                        # Best-effort audit trail
+                                        # (record_violation has its own
+                                        # try/except — never raises).
+                                        # Then surface to the route
+                                        # handler which renders the
+                                        # generic user-facing message.
+                                        await record_violation(
+                                            crm_client=get_clients().crm,
+                                            actor=actor,
+                                            tool_name=v.tool_name,
+                                            path=v.path,
+                                            found=v.found,
+                                            transcript_so_far=prompt,
+                                        )
+                                        yield AgentEventError(
+                                            message=(
+                                                f"AgentOwnershipViolation: "
+                                                f"{v.tool_name}"
+                                            )
+                                        )
+                                        return
             except Exception as exc:  # noqa: BLE001
                 yield AgentEventError(message=f"{type(exc).__name__}: {exc}")
                 return
 
+            # v0.12 — emit token totals BEFORE FinalMessage so the
+            # chat route can call chat_caps.record_chat_turn before
+            # closing the SSE response. Earlier we tried ordering
+            # this AFTER FinalMessage, but the chat-route's SSE
+            # consumer (browsers, soak runner) disconnects on the
+            # "status: done" frame the FinalMessage triggers; the
+            # next yield then raises GeneratorExit and the housekeeping
+            # never lands. Putting TurnUsage first keeps cost
+            # accounting honest.
+            yield AgentEventTurnUsage(
+                prompt_tok=usage_total["input_tokens"],
+                completion_tok=usage_total["output_tokens"],
+                model=usage_total["model"] or "",
+            )
             yield AgentEventFinalMessage(text=last_ai_text)
         finally:
             if identity_reset_token is not None:
                 reset_service_identity_token(identity_reset_token)
+            if auth_reset_token is not None:
+                auth_context.reset_actor(auth_reset_token)
 
 
 def _ai_text(msg: AIMessage) -> str:

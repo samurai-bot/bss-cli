@@ -173,6 +173,10 @@ class Case(Base, TenantMixin, TimestampMixin):
     )
     opened_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
     closed_at: Mapped[datetime | None] = mapped_column(TZDateTime)
+    # v0.12 — points at audit.chat_transcript.hash when the case was
+    # opened by case.open_for_me from a chat-surface escalation. NULL
+    # for cases opened via the CSR/CLI path.
+    chat_transcript_hash: Mapped[str | None] = mapped_column(Text)
 
     customer: Mapped["Customer"] = relationship(back_populates="cases")
     notes: Mapped[list["CaseNote"]] = relationship(back_populates="case")
