@@ -58,7 +58,11 @@ element only — the ``chat-thread-host`` div MUST wrap the
         {% if m.role == "user" %}
           <div class="chat-bubble chat-bubble-user">{{ m.body }}</div>
         {% else %}
-          <div class="chat-bubble chat-bubble-assistant">{{ m.body }}</div>
+          {# Assistant body has been markdown-converted server-side
+             via _render_chat_markdown; mark safe so the <strong>,
+             <em>, <ul>, <code>, <p>, <br> tags render. The LLM
+             output was HTML-escaped before markdown conversion. #}
+          <div class="chat-bubble chat-bubble-assistant">{{ m.body_html | safe }}</div>
         {% endif %}
       {% endfor %}
 
@@ -107,6 +111,7 @@ element only — the ``chat-thread-host`` div MUST wrap the
       required
       placeholder="Ask anything about your account…"
       autofocus
+      onkeydown="if(event.key==='Enter' && !event.shiftKey && !event.ctrlKey && !event.metaKey){event.preventDefault(); if(this.value.trim()){this.form.requestSubmit();}}"
     ></textarea>
     <button type="submit" class="welcome-cta">Send</button>
   </form>
