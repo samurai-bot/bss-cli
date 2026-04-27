@@ -1,4 +1,13 @@
-"""Signup route — form render, POST creates session + redirect, progress shell."""
+"""Signup route — form render + POST /signup direct-write step 1 (v0.11+).
+
+v0.11 migrates the signup chain from orchestrator-mediated (one
+``astream_once`` call streaming every tool through SSE) to deterministic
+direct-API calls. The POST /signup handler now runs ``crm.create_customer``
++ ``link_to_customer`` directly, then redirects to the progress page,
+which fires the rest of the chain via HTMX (``/signup/step/{kyc,cof,
+order,poll}``). Tests for the chained step routes live in
+``test_signup_funnel_v0_8.py``; this file covers the form + POST.
+"""
 
 from __future__ import annotations
 
@@ -62,10 +71,11 @@ def test_signup_form_does_not_ask_for_email_again(authed_client):  # type: ignor
     assert "ada@example.sg" in body  # matches authed_client's seeded identity
 
 
-def test_signup_post_uses_session_email_not_form_email(authed_client):  # type: ignore[no-untyped-def]
+def test_signup_post_uses_session_email_not_form_email(authed_client, fake_clients):  # type: ignore[no-untyped-def]
     """Even if a form-side email is submitted (e.g. by a hand-crafted
     POST), the route must use identity.email from the verified session.
     """
+    fake_clients.crm.next_customer_id = "CUST-901"
     resp = authed_client.post(
         "/signup",
         data={
@@ -80,23 +90,13 @@ def test_signup_post_uses_session_email_not_form_email(authed_client):  # type: 
         follow_redirects=False,
     )
     assert resp.status_code == 303
-    session_id = parse_qs(urlparse(resp.headers["location"]).query)["session"][0]
 
-    import asyncio
-    store = authed_client.app.state.session_store
-    sig = asyncio.run(store.get(session_id))
-    assert sig is not None
-    # The in-memory signup session must carry the verified-session email,
-    # not the attacker-supplied one. Downstream agent uses sig.email.
-    assert sig.email == "ada@example.sg"
-    assert sig.email != "evil@attacker.example"
-
-
-def test_signup_form_agent_log_is_idle_before_submit(authed_client):  # type: ignore[no-untyped-def]
-    resp = authed_client.get("/signup/PLAN_M?msisdn=90000042")
-    assert "Agent Activity" in resp.text
-    assert "Submit the form to watch it work" in resp.text
-    assert "sse-connect" not in resp.text
+    # v0.11 — POST /signup runs crm.create_customer directly. Verify the
+    # call was made with identity.email, not the attacker-supplied email.
+    assert len(fake_clients.crm.create_customer_calls) == 1
+    call = fake_clients.crm.create_customer_calls[0]
+    assert call["email"] == "ada@example.sg"
+    assert call["email"] != "evil@attacker.example"
 
 
 def test_signup_unknown_plan_returns_404(authed_client):  # type: ignore[no-untyped-def]
@@ -104,13 +104,17 @@ def test_signup_unknown_plan_returns_404(authed_client):  # type: ignore[no-unty
     assert resp.status_code == 404
 
 
-def test_signup_post_creates_session_and_redirects(authed_client):  # type: ignore[no-untyped-def]
+def test_signup_post_runs_create_customer_and_redirects_to_progress(  # type: ignore[no-untyped-def]
+    authed_client, fake_clients
+):
+    """v0.11 — POST /signup is one BSS write (crm.create_customer) plus a
+    portal-auth link_to_customer. Redirect to progress; no SSE stream."""
+    fake_clients.crm.next_customer_id = "CUST-042"
     resp = authed_client.post(
         "/signup",
         data={
             "plan": "PLAN_M",
             "name": "Ada Lovelace",
-            "email": "ada@example.sg",
             "phone": "+6590001234",
             "msisdn": "90000042",
             "card_pan": "4242424242424242",
@@ -123,18 +127,78 @@ def test_signup_post_creates_session_and_redirects(authed_client):  # type: igno
     session_id = parse_qs(urlparse(location).query)["session"][0]
     assert len(session_id) == 32
 
-    # The chosen number stuck in the session.
+    # The chosen number + identity.email stuck in the session.
     import asyncio
     store = authed_client.app.state.session_store
     sig = asyncio.run(store.get(session_id))
+    assert sig is not None
     assert sig.msisdn == "90000042"
+    assert sig.email == "ada@example.sg"
+    assert sig.customer_id == "CUST-042"
+    # Step 1 done; chain ready to advance to KYC on the progress page.
+    assert sig.step == "pending_kyc"
 
+    # Exactly one create_customer call.
+    assert len(fake_clients.crm.create_customer_calls) == 1
+
+
+def test_signup_progress_page_renders_timeline_without_sse(  # type: ignore[no-untyped-def]
+    authed_client, fake_clients
+):
+    """Progress page is now an HTMX-driven 5-step timeline. No
+    sse-connect on the body; no agent log stream attached."""
+    fake_clients.crm.next_customer_id = "CUST-042"
+    resp = authed_client.post(
+        "/signup",
+        data={
+            "plan": "PLAN_M",
+            "name": "Ada Lovelace",
+            "phone": "+6590001234",
+            "msisdn": "90000042",
+            "card_pan": "4242424242424242",
+        },
+        follow_redirects=False,
+    )
+    location = resp.headers["location"]
     progress = authed_client.get(location)
     assert progress.status_code == 200
-    assert session_id in progress.text
-    assert f'sse-connect="/agent/events/{session_id}"' in progress.text
+    body = progress.text
+    # Timeline labels appear; the next-step trigger fires the chain.
+    assert "create customer" in body
+    assert "attest KYC" in body
+    assert "place order" in body
+    # No SSE wiring on the progress page.
+    assert "sse-connect" not in body
+    assert "/agent/events/" not in body
 
 
 def test_signup_progress_with_unknown_session_404s(authed_client):  # type: ignore[no-untyped-def]
     resp = authed_client.get("/signup/PLAN_M/progress?session=unknown")
     assert resp.status_code == 404
+
+
+def test_signup_post_renders_structured_error_on_policy_violation(  # type: ignore[no-untyped-def]
+    authed_client, fake_clients
+):
+    """A PolicyViolationFromServer on crm.create_customer re-renders the
+    signup form with a customer-facing error, not a 500."""
+    from bss_clients import PolicyViolationFromServer
+
+    fake_clients.crm.next_error = PolicyViolationFromServer(
+        rule="customer.create.email_unique",
+        message="Email already belongs to another customer.",
+    )
+    resp = authed_client.post(
+        "/signup",
+        data={
+            "plan": "PLAN_M",
+            "name": "Ada",
+            "phone": "+6590001234",
+            "msisdn": "90000042",
+            "card_pan": "4242424242424242",
+        },
+        follow_redirects=False,
+    )
+    # 422 + form re-rendered with the structured error message.
+    assert resp.status_code == 422
+    assert "PLAN_M" in resp.text

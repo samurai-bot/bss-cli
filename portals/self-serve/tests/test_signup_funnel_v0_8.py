@@ -1,36 +1,31 @@
-"""Account-first signup funnel tests (PR 4).
+"""Account-first signup funnel tests (v0.8 + v0.11).
 
-Covers the v0.8 doctrine pieces specifically:
+v0.11 migrates the funnel from orchestrator-mediated to direct-API
+calls from route handlers. The auth gating from v0.8 still applies —
+that's the common ground covered here:
 
-* /signup/{plan}, /signup/{plan}/msisdn, POST /signup all redirect to
-  /auth/login when no session is present (the gating bites).
-* /welcome and /plans are public — render without a session.
-* The agent_events stream calls link_to_customer the moment a CUST-*
-  id is harvested, atomically binding the verified identity to the
-  customer record. Verified by inspecting the identity row after the
-  stream finishes.
-* If the visitor abandons mid-flow (no final agent message), the
-  identity is still linked to the customer that was created — so a
-  returning visitor gets the same customer record under the same email.
-* link_to_customer is idempotent on retry — a second stream with the
-  same (identity, customer) pair doesn't raise.
+* /welcome and /plans are public (no session required).
+* /signup/{plan}, /signup/{plan}/msisdn, POST /signup all redirect
+  to /auth/login when no session is present.
+
+The atomic ``link_to_customer`` invariant from v0.8 is preserved:
+the moment ``crm.create_customer`` returns a CUST-* id, the verified
+identity is bound to it (atomically with the customer write —
+abandoning mid-chain still leaves the (identity, customer) pair so a
+returning visitor under the same email reuses their record).
+
+The full direct-write chain (POST /signup → /signup/step/{kyc,cof,
+order,poll} → /confirmation) is exercised end-to-end below.
 """
 
 from __future__ import annotations
 
 import os
-from collections.abc import AsyncIterator
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
-from bss_orchestrator.session import (
-    AgentEventFinalMessage,
-    AgentEventPromptReceived,
-    AgentEventToolCallCompleted,
-    AgentEventToolCallStarted,
-)
 from fastapi.testclient import TestClient
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import select, text
@@ -181,31 +176,30 @@ def test_signup_post_without_session_redirects_to_login(seed_db, fake_clients):
             assert resp.headers["location"].startswith("/auth/login")
 
 
-# ── link_to_customer atomicity ───────────────────────────────────────────
+# ── Direct-write chain end-to-end (v0.11) ────────────────────────────────
 
 
-def _canned_signup_stream():
-    """Mocked agent stream that emits a CUST-* id from customer.create."""
+def _patch_clients(fake_clients):
+    """All route modules that consume get_clients() in the direct path."""
     return [
-        AgentEventPromptReceived(prompt="Create customer Ada on PLAN_M…"),
-        AgentEventToolCallStarted(
-            name="customer.create", args={"name": "Ada"}, call_id="c1"
+        patch(
+            "bss_self_serve.routes.welcome.get_clients", return_value=fake_clients
         ),
-        AgentEventToolCallCompleted(
-            name="customer.create",
-            call_id="c1",
-            result='{"id": "CUST-042"}',
+        patch(
+            "bss_self_serve.routes.signup.get_clients", return_value=fake_clients
         ),
-        AgentEventToolCallStarted(
-            name="order.create", args={"offering_id": "PLAN_M"}, call_id="c2"
+        patch(
+            "bss_self_serve.routes.activation.get_clients", return_value=fake_clients
         ),
-        AgentEventToolCallCompleted(
-            name="order.create",
-            call_id="c2",
-            result='{"id": "ORD-014", "state": "acknowledged"}',
+        patch(
+            "bss_self_serve.routes.confirmation.get_clients", return_value=fake_clients
         ),
-        AgentEventFinalMessage(
-            text="Signup complete. Subscription SUB-007 is active on PLAN_M."
+        patch(
+            "bss_self_serve.routes.msisdn_picker.get_clients",
+            return_value=fake_clients,
+        ),
+        patch(
+            "bss_self_serve.routes.landing.get_clients", return_value=fake_clients
         ),
     ]
 
@@ -214,42 +208,41 @@ def _canned_signup_stream():
 async def test_link_to_customer_runs_when_customer_create_returns_id(
     seed_db, fake_clients
 ):
-    """The full happy path: identity exists, signup runs, identity is linked."""
+    """v0.11 — the moment crm.create_customer returns CUST-*, the verified
+    identity is linked to it. POST /signup is the single write site for
+    that linking; no separate SSE stream is involved."""
     async with seed_db() as db:
         sess, identity = await create_test_session(db, email="ada@x.sg")
         await db.commit()
         sid = sess.id
         identity_id = identity.id
 
-    canned = _canned_signup_stream()
+    fake_clients.crm.next_customer_id = "CUST-042"
 
-    async def fake_drive_signup(**_kwargs) -> AsyncIterator:  # type: ignore[no-untyped-def]
-        for e in canned:
-            yield e
-
-    with patch("bss_self_serve.routes.signup.get_clients", return_value=fake_clients), \
-         patch("bss_self_serve.routes.agent_events.drive_signup", new=fake_drive_signup):
+    patches = _patch_clients(fake_clients)
+    for p in patches:
+        p.start()
+    try:
         app = create_app(Settings())
         with TestClient(app) as c:
             c.cookies.set(PORTAL_SESSION_COOKIE, sid)
-            sub = c.post(
+            resp = c.post(
                 "/signup",
                 data={
                     "plan": "PLAN_M",
                     "name": "Ada",
-                    "email": "ada@x.sg",
                     "phone": "+6590001234",
                     "msisdn": "90000042",
                     "card_pan": "4242424242424242",
                 },
                 follow_redirects=False,
             )
-            assert sub.status_code == 303
-            session_id = sub.headers["location"].split("session=")[-1]
-            # Drain the SSE stream — drive_signup runs to completion.
-            _ = c.get(f"/agent/events/{session_id}").text
+            assert resp.status_code == 303
+    finally:
+        for p in patches:
+            p.stop()
 
-    # Identity is now linked to CUST-042.
+    # Identity is now linked to CUST-042 — atomic with the create.
     async with seed_db() as db:
         row = (
             await db.execute(select(Identity).where(Identity.id == identity_id))
@@ -262,11 +255,13 @@ async def test_link_to_customer_runs_when_customer_create_returns_id(
 async def test_link_to_customer_persists_when_visitor_abandons_after_customer_create(
     seed_db, fake_clients
 ):
-    """Mid-flow bail: customer.create succeeded, agent crashed before final.
+    """Mid-flow bail: customer.create succeeded, the visitor closes the
+    browser before completing KYC.
 
-    The identity should STILL be linked to the customer — that's the
-    "abandoned-cart hygiene" doctrine in V0_8_0.md §3.5. Returning
-    visitor under the same email gets their existing customer record.
+    The identity is linked to the customer the moment POST /signup
+    returns — the link survives even if the rest of the chain never
+    runs. Returning visitor under the same email gets their existing
+    customer record.
     """
     async with seed_db() as db:
         sess, identity = await create_test_session(db, email="ada@x.sg")
@@ -274,92 +269,195 @@ async def test_link_to_customer_persists_when_visitor_abandons_after_customer_cr
         sid = sess.id
         identity_id = identity.id
 
-    # Truncated stream — emits the customer.create result, then quits.
-    truncated = [
-        AgentEventPromptReceived(prompt="Create customer Ada…"),
-        AgentEventToolCallStarted(
-            name="customer.create", args={"name": "Ada"}, call_id="c1"
-        ),
-        AgentEventToolCallCompleted(
-            name="customer.create",
-            call_id="c1",
-            result='{"id": "CUST-042"}',
-        ),
-        # No final message — simulates the agent bailing here.
-    ]
+    fake_clients.crm.next_customer_id = "CUST-042"
 
-    async def fake_drive_signup(**_kwargs) -> AsyncIterator:  # type: ignore[no-untyped-def]
-        for e in truncated:
-            yield e
-
-    with patch("bss_self_serve.routes.signup.get_clients", return_value=fake_clients), \
-         patch("bss_self_serve.routes.agent_events.drive_signup", new=fake_drive_signup):
+    patches = _patch_clients(fake_clients)
+    for p in patches:
+        p.start()
+    try:
         app = create_app(Settings())
         with TestClient(app) as c:
             c.cookies.set(PORTAL_SESSION_COOKIE, sid)
-            sub = c.post(
+            # POST /signup commits the customer + links — then the test
+            # never fires the rest of the chain (no /signup/step/kyc).
+            resp = c.post(
                 "/signup",
                 data={
                     "plan": "PLAN_M",
                     "name": "Ada",
-                    "email": "ada@x.sg",
                     "phone": "+6590001234",
                     "msisdn": "90000042",
                     "card_pan": "4242424242424242",
                 },
                 follow_redirects=False,
             )
-            session_id = sub.headers["location"].split("session=")[-1]
-            _ = c.get(f"/agent/events/{session_id}").text
+            assert resp.status_code == 303
+    finally:
+        for p in patches:
+            p.stop()
 
     async with seed_db() as db:
         row = (
             await db.execute(select(Identity).where(Identity.id == identity_id))
         ).scalar_one()
-        # Linked even though the agent never said "complete".
+        # Linked even though the chain never finished.
         assert row.customer_id == "CUST-042"
 
 
 @pytest.mark.asyncio
 async def test_link_to_customer_idempotent_on_retry(seed_db, fake_clients):
-    """Re-running a signup stream that re-asserts the same customer is OK."""
+    """Re-running POST /signup with the same identity re-creates a new
+    CUST-* (fake), but the identity stays linked to the FIRST one — the
+    portal-auth link is 1:1 and not reassignable from this surface.
+    The second call's link attempt is a no-op (link_to_customer raises
+    ValueError when re-linked to a different customer; the route
+    swallows it as a warning so the chain still runs)."""
     async with seed_db() as db:
         sess, identity = await create_test_session(db, email="ada@x.sg")
         await db.commit()
         sid = sess.id
         identity_id = identity.id
 
-    canned = _canned_signup_stream()
+    fake_clients.crm.next_customer_id = "CUST-042"
 
-    async def fake_drive_signup(**_kwargs) -> AsyncIterator:  # type: ignore[no-untyped-def]
-        for e in canned:
-            yield e
-
-    with patch("bss_self_serve.routes.signup.get_clients", return_value=fake_clients), \
-         patch("bss_self_serve.routes.agent_events.drive_signup", new=fake_drive_signup):
+    patches = _patch_clients(fake_clients)
+    for p in patches:
+        p.start()
+    try:
         app = create_app(Settings())
         with TestClient(app) as c:
             c.cookies.set(PORTAL_SESSION_COOKIE, sid)
-            # Two parallel signup attempts re-using the same identity.
             for _ in range(2):
-                sub = c.post(
+                # Each call returns a fresh CUST-* from the fake; the
+                # link logic should keep the identity bound to the first.
+                resp = c.post(
                     "/signup",
                     data={
                         "plan": "PLAN_M",
                         "name": "Ada",
-                        "email": "ada@x.sg",
                         "phone": "+6590001234",
                         "msisdn": "90000042",
                         "card_pan": "4242424242424242",
                     },
                     follow_redirects=False,
                 )
-                session_id = sub.headers["location"].split("session=")[-1]
-                _ = c.get(f"/agent/events/{session_id}").text
+                assert resp.status_code == 303
+    finally:
+        for p in patches:
+            p.stop()
 
-    # Still linked to CUST-042; no exception, no double-linking.
+    # Still linked to CUST-042 from the first call. No exception, no
+    # double-linking — the route handler caught the second link
+    # attempt's ValueError and continued.
     async with seed_db() as db:
         row = (
             await db.execute(select(Identity).where(Identity.id == identity_id))
         ).scalar_one()
         assert row.customer_id == "CUST-042"
+
+
+# ── End-to-end happy path through the direct-write chain ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_direct_write_chain_completes_without_orchestrator(
+    seed_db, fake_clients
+):
+    """v0.11 happy path: POST /signup → /signup/step/kyc → /signup/step/cof
+    → /signup/step/order → /signup/step/poll → HX-Redirect to /confirmation.
+
+    No ``astream_once`` involved; each step is one bss-clients call (or
+    zero for the poll). Asserts each fake's call list at the end."""
+    async with seed_db() as db:
+        sess, _identity = await create_test_session(db, email="ada@x.sg")
+        await db.commit()
+        sid = sess.id
+
+    fake_clients.crm.next_customer_id = "CUST-042"
+    # COM poll: one acknowledged tick, then completed (with SUB-007).
+    fake_clients.com.next_order_states = ["acknowledged", "completed"]
+    fake_clients.com.next_subscription_id = "SUB-007"
+    fake_clients.com.next_activation_code = "LPA:1$smdp$activation-code-007"
+
+    patches = _patch_clients(fake_clients)
+    for p in patches:
+        p.start()
+    try:
+        app = create_app(Settings())
+        with TestClient(app) as c:
+            c.cookies.set(PORTAL_SESSION_COOKIE, sid)
+
+            # Step 1: customer.create
+            resp = c.post(
+                "/signup",
+                data={
+                    "plan": "PLAN_M",
+                    "name": "Ada",
+                    "phone": "+6590001234",
+                    "msisdn": "90000042",
+                    "card_pan": "4242424242424242",
+                },
+                follow_redirects=False,
+            )
+            assert resp.status_code == 303
+            location = resp.headers["location"]
+            from urllib.parse import parse_qs, urlparse
+            session_id = parse_qs(urlparse(location).query)["session"][0]
+
+            # Step 2: attest_kyc
+            r2 = c.post(
+                f"/signup/step/kyc?session={session_id}", follow_redirects=False
+            )
+            assert r2.status_code == 200
+            assert "attest KYC" in r2.text
+
+            # Step 3: payment.add_card
+            r3 = c.post(
+                f"/signup/step/cof?session={session_id}", follow_redirects=False
+            )
+            assert r3.status_code == 200
+
+            # Step 4: com.create_order + submit_order
+            r4 = c.post(
+                f"/signup/step/order?session={session_id}", follow_redirects=False
+            )
+            assert r4.status_code == 200
+
+            # Step 5a: poll once — order still acknowledged.
+            r5 = c.get(
+                f"/signup/step/poll?session={session_id}", follow_redirects=False
+            )
+            assert r5.status_code == 200
+            # No HX-Redirect yet.
+            assert "HX-Redirect" not in r5.headers and "hx-redirect" not in r5.headers
+
+            # Step 5b: poll again — order completed. The route arms
+            # ``redirect_armed`` and renders the celebration fragment
+            # with a 1.5s delayed re-trigger; no HX-Redirect yet so
+            # the user sees the chain finish before navigation.
+            r6 = c.get(
+                f"/signup/step/poll?session={session_id}", follow_redirects=False
+            )
+            assert r6.status_code == 200
+            assert "HX-Redirect" not in r6.headers and "hx-redirect" not in r6.headers
+            assert "Activated" in r6.text  # celebration fragment
+
+            # Step 5c: poll one more time — redirect_armed is now true,
+            # the route emits HX-Redirect to /confirmation.
+            r7 = c.get(
+                f"/signup/step/poll?session={session_id}", follow_redirects=False
+            )
+            assert r7.status_code == 200
+            redirect = r7.headers.get("HX-Redirect") or r7.headers.get("hx-redirect")
+            assert redirect is not None
+            assert redirect.startswith("/confirmation/SUB-007")
+    finally:
+        for p in patches:
+            p.stop()
+
+    # Each fake's call list reflects one direct write per step.
+    assert len(fake_clients.crm.create_customer_calls) == 1
+    assert len(fake_clients.crm.attest_kyc_calls) == 1
+    assert len(fake_clients.payment.create_calls) == 1
+    assert len(fake_clients.com.create_calls) == 1
+    assert len(fake_clients.com.submit_calls) == 1

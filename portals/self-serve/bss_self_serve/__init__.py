@@ -1,11 +1,17 @@
-"""bss-self-serve — customer-facing signup portal (v0.4+).
+"""bss-self-serve — customer-facing signup + post-login portal (v0.4+).
 
-A thin FastAPI + Jinja + HTMX skin over the LLM orchestrator. The
-hero artifact is the Agent Activity side-panel — the portal's back
-end sends every write through ``bss_orchestrator.session.astream_once``
-and streams tool-call events into the browser via SSE so the viewer
-watches the agent work as their signup completes.
+A thin FastAPI + Jinja + HTMX skin over BSS-CLI's domain services.
 
-See ``phases/V0_4_0.md`` for the full spec and ``DECISIONS.md`` 2026-04-24
-for the "portal writes route through the LLM orchestrator" rationale.
+* **(v0.4)** First shipped as an LLM-mediated signup demo: every write
+  went through the orchestrator's ``astream_once`` and the browser
+  watched a streaming agent log as the chain ran.
+* **(v0.10+)** Post-login customer self-serve carved out as direct-API.
+* **(v0.11+)** The signup funnel joins the direct-write side. Every
+  page in this portal — signup chain, post-login dashboard, top-up,
+  COF management, eSIM redownload, plan change, profile, billing,
+  cancel — calls ``bss-clients`` directly. The chat surface is the
+  one route that stays orchestrator-mediated when it lands.
+
+See ``phases/V0_11_0.md`` for the v0.11 doctrine consolidation and
+``DECISIONS.md`` 2026-04-27 for the rationale.
 """

@@ -78,6 +78,24 @@ SENSITIVE_ACTION_LABELS: Final[frozenset[str]] = frozenset({
 })
 
 
+# v0.11 — signup chain audit labels (V0_11_0.md Track 2.6).
+#
+# Signup writes happen BEFORE the customer has a linked-customer session,
+# so ``requires_step_up`` does not apply. The labels are still used as
+# the ``action`` field on ``portal_action`` audit rows so a forensic
+# query can replay a signup attempt step-by-step. We keep them in a
+# separate set from ``SENSITIVE_ACTION_LABELS`` so the step-up cross-
+# check test (``test_step_up_label_cross_check``) doesn't conflate
+# "every label in this set must appear under a ``requires_step_up``
+# call site" with "signup audit labels exist but never gate via step-up".
+SIGNUP_ACTION_LABELS: Final[frozenset[str]] = frozenset({
+    "signup_create_customer",
+    "signup_attest_kyc",
+    "signup_add_card",
+    "signup_create_order",
+})
+
+
 def is_public_path(path: str) -> bool:
     """True iff ``path`` is reachable without a session.
 

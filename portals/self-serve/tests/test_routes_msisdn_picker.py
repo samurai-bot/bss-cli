@@ -19,10 +19,17 @@ def test_picker_unknown_plan_404s(authed_client):  # type: ignore[no-untyped-def
     assert authed_client.get("/signup/PLAN_NOPE/msisdn").status_code == 404
 
 
-def test_picker_agent_log_is_idle(authed_client):  # type: ignore[no-untyped-def]
-    # Widget on every page, not streaming yet (no session_id).
+def test_picker_does_not_render_agent_log_widget(authed_client):  # type: ignore[no-untyped-def]
+    """v0.11 — signup pages don't render the Agent Activity widget.
+
+    The widget was the v0.4 demo artifact for "watch the LLM drive
+    the signup flow." v0.11 retired that artifact (signup is a
+    deterministic routine flow now); the widget is reserved for the
+    chat surface (when it lands). See CLAUDE.md (v0.11+ / chat only)
+    anti-pattern.
+    """
     resp = authed_client.get("/signup/PLAN_M/msisdn")
-    assert "Agent Activity" in resp.text
+    assert "Agent Activity" not in resp.text
     assert "sse-connect" not in resp.text
 
 

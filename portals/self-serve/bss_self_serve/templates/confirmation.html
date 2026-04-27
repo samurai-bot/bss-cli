@@ -5,6 +5,13 @@
 <h1 class="page-title">You're on <span class="accent">{{ plan.id if plan else subscription_id }}</span></h1>
 <p class="page-subtitle">Subscription active. Scan the QR to provision your eSIM.</p>
 
+{# v0.11 — keep the 5-step timeline visible above the QR so the user
+   sees the full chain that just ran. The partial renders without a
+   next-step trigger when ``signup.step == 'completed'``. #}
+{% if signup %}
+{% include "partials/signup_progress.html" %}
+{% endif %}
+
 <div class="confirmation-grid">
   <section class="confirmation-qr">
     {% if qr_data_uri %}

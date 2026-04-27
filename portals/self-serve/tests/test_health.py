@@ -1,8 +1,4 @@
-"""Scaffold smoke test: /health returns 200 and identifies the portal.
-
-This file exists so the test runner has something to collect pre-Step 3;
-real route tests land alongside agent_bridge + SSE work in Steps 3-5.
-"""
+"""Scaffold smoke test: /health returns 200 and identifies the portal."""
 
 from __future__ import annotations
 

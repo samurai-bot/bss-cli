@@ -1,14 +1,15 @@
 """Confirmation page — /confirmation/{subscription_id}?session=...
 
-Reached after the agent has placed the order and the subscription
-is active. Renders the eSIM QR PNG + LPA activation code + plan
-summary. Subscription data is fetched directly via bss-clients
-(read path — no agent needed).
+v0.11 — reached after the direct-write signup chain's poll route emits
+``HX-Redirect``. Renders the eSIM QR PNG + LPA activation code + plan
+summary. Subscription data is fetched directly via bss-clients (reads
+have always gone direct).
 
-If the user arrives with a valid session (the common path from the
-redirect event), the session already carries the activation code
-and we skip re-fetching it. If they somehow arrived without one
-(deep-linking from a past run), we try the inventory client.
+If the in-memory signup session still has the activation code from
+the order envelope, we use it; otherwise we fall back to the inventory
+client (deep-link from a past activation, or an old code that didn't
+surface on the order item). The agent-log widget that v0.4 rendered
+here is gone — signup is no longer orchestrator-mediated.
 """
 
 from __future__ import annotations
@@ -55,28 +56,27 @@ async def confirmation(
     plans = flatten_offerings(await clients.catalog.list_offerings())
     plan = find_plan(plans, sig.plan)
 
-    # Render the agent's full transcript statically from the session —
-    # the confirmation page must NOT open a live SSE connection, or
-    # the browser would reconnect every ~3s and the widget would fill
-    # with repeated "complete" frames.
-    events = [
-        {**e, "detail": e.get("detail_full") or e.get("detail", "")}
-        for e in sig.event_log
-    ]
-
     return templates.TemplateResponse(
         request,
         "confirmation.html",
         {
-            "session_id": None,
-            "stream_live": False,
-            "agent_log_status": "error" if sig.error else "done",
-            "events": events,
             "subscription_id": subscription_id,
             "subscription": subscription,
             "activation_code": activation_code,
             "qr_data_uri": qr_data_uri,
             "plan": plan,
-            "final_text": sig.final_text,
+            # v0.11 — render the completed 5-step timeline above the QR
+            # so the user can see the full chain that just ran. Pass the
+            # signup session through so the partial reuses the same
+            # rendering as the progress page, just at step="completed"
+            # with no next-step trigger.
+            "signup": sig,
+            "session_id": sig.session_id,
+            "plan_id": sig.plan,
+            "step_error_message": None,
+            # Suppress the auto-re-trigger inside the partial so the
+            # completed-branch div doesn't fire HX-Redirect again on
+            # the confirmation page (would loop us back here).
+            "progress_with_trigger": False,
         },
     )

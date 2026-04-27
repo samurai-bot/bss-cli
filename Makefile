@@ -86,19 +86,24 @@ check-clock:
 
 doctrine-check: check-clock
 	@# v0.6 wrapper around all grep-guard doctrine checks.
-	@# Adds: portal-handlers don't write via bss-clients on the
-	@# signup + chat surfaces (v0.4–v0.9 doctrine, retained for those
-	@# routes), and OTel imports stay out of services/policies (v0.2).
+	@# Adds: portal-handlers don't write via bss-clients on the chat
+	@# surface (v0.11+ doctrine, narrowed from the earlier v0.4–v0.10
+	@# rule that also covered signup), and OTel imports stay out of
+	@# services/policies (v0.2).
 	@#
 	@# v0.10+ — post-login self-serve writes go direct via bss-clients
-	@# (CLAUDE.md "v0.10+ / authenticated post-login customer self-serve"
-	@# anti-pattern split). The route files below are the carve-out;
-	@# they enforce ownership + step-up server-side. Adding a new
-	@# post-login direct-write route requires extending this list AND
-	@# the SENSITIVE_ACTION_LABELS catalogue in security.py.
+	@# (CLAUDE.md "v0.10+ / authenticated post-login customer self-serve").
+	@# v0.11+ — signup writes go direct via bss-clients
+	@# (CLAUDE.md "v0.11+ / chat only"). The route files below are the
+	@# carve-out; they enforce ownership + step-up where applicable.
+	@# Adding a new direct-write route requires extending this list AND
+	@# (for sensitive post-login routes) the SENSITIVE_ACTION_LABELS
+	@# catalogue in security.py. The chat surface (when it lands in
+	@# v0.12+) stays orchestrator-mediated and would NOT join this list.
 	@hits=$$(grep -rnE '\.(create|charge|purchase_vas|terminate|add_card|remove_method|cancel)\(' \
 		--include='*.py' portals/*/bss_*/routes/ 2>/dev/null \
 		| grep -v 'session_store.create\|store.create\|ask_about_customer' \
+		| grep -v 'portals/self-serve/bss_self_serve/routes/signup\.py' \
 		| grep -v 'portals/self-serve/bss_self_serve/routes/top_up\.py' \
 		| grep -v 'portals/self-serve/bss_self_serve/routes/payment_methods\.py' \
 		| grep -v 'portals/self-serve/bss_self_serve/routes/esim\.py' \
@@ -108,11 +113,11 @@ doctrine-check: check-clock
 		| grep -v 'portals/self-serve/bss_self_serve/routes/plan_change\.py' \
 		|| true); \
 	if [ -n "$$hits" ]; then \
-		echo "✗ portal route handlers must not call mutating bss-clients (signup + chat):"; \
+		echo "✗ portal route handlers must not call mutating bss-clients on the chat surface:"; \
 		echo "$$hits"; \
 		exit 1; \
 	fi; \
-	echo "✓ signup + chat routes go through agent_bridge; v0.10 post-login routes carved out"
+	echo "✓ chat-only orchestrator-mediation; v0.10 post-login + v0.11 signup routes carved out"
 	@hits=$$(grep -rn 'from opentelemetry' --include='*.py' \
 		services/*/app/services/ services/*/app/policies/ 2>/dev/null \
 		|| true); \
@@ -195,22 +200,21 @@ doctrine-check: check-clock
 		exit 1; \
 	fi; \
 	echo "✓ customer_id bound from request.state, not user-controllable"
-	@# v0.10+ — astream_once stays inside chat + signup routes only. Post-
-	@# login routes go direct via bss-clients (not the orchestrator).
+	@# v0.11+ — the orchestrator streaming entrypoint stays inside the
+	@# chat route only. Signup + post-login self-serve routes go direct
+	@# via bss-clients (CLAUDE.md "(v0.11+ / chat only)" anti-pattern).
+	@# The chat route (`routes/chat.py`) lands in v0.12+; until then the
+	@# whitelist is empty and this guard rejects every match.
 	@hits=$$(grep -rn 'astream_once' \
 		--include='*.py' portals/self-serve/bss_self_serve/routes/ 2>/dev/null \
-		| grep -v 'routes/signup\.py' \
-		| grep -v 'routes/agent_events\.py' \
-		| grep -v 'routes/activation\.py' \
-		| grep -v 'routes/confirmation\.py' \
-		| grep -v 'routes/msisdn_picker\.py' \
+		| grep -v 'routes/chat\.py' \
 		|| true); \
 	if [ -n "$$hits" ]; then \
-		echo "✗ astream_once leaked into a post-login route:"; \
+		echo "✗ astream_once leaked into a non-chat route (signup + post-login go direct):"; \
 		echo "$$hits"; \
 		exit 1; \
 	fi; \
-	echo "✓ astream_once stays in signup + chat routes (post-login is direct)"
+	echo "✓ astream_once stays in chat route only (signup + post-login are direct)"
 
 fmt:
 	uv run ruff format .

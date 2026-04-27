@@ -4,23 +4,13 @@
 {% block main %}
 <h1 class="page-title">Activating <span class="accent">{{ plan_id }}</span></h1>
 <p class="page-subtitle">
-  Hold tight — the LLM agent is chaining the signup tools. Watch the panel on the right.
+  Five deterministic steps. No LLM in the loop — typical wall time is under 5 seconds.
 </p>
 
-<div class="progress-card">
-  <div class="progress-lane">
-    <span class="progress-step active">create customer</span>
-    <span class="progress-arrow">→</span>
-    <span class="progress-step">attest KYC</span>
-    <span class="progress-arrow">→</span>
-    <span class="progress-step">add card</span>
-    <span class="progress-arrow">→</span>
-    <span class="progress-step">place order</span>
-    <span class="progress-arrow">→</span>
-    <span class="progress-step">activate eSIM</span>
-  </div>
-  <div class="progress-note">
-    Activation usually takes 10-20 seconds. A slower model can stretch it to 60s.
-  </div>
-</div>
+{# v0.11 — direct-write signup chain. The partial renders the timeline
+   AND embeds the next-step ``hx-trigger="load"``, so HTMX fires the
+   chain automatically on first paint. The widget on the right is no
+   longer streaming an agent log; signup is a routine flow that goes
+   direct via bss-clients. #}
+{% include "partials/signup_progress.html" %}
 {% endblock %}

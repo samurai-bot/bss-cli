@@ -11,8 +11,9 @@
   --fg: #d8d8d4;
   --fg-muted: #8a8f99;
   --fg-dim: #5a5e66;
-  --accent: #9fe870;           /* phosphor green */
-  --accent-dim: #5a7d3a;
+  --accent: #74d535;           /* phosphor green — deepened v0.11 for contrast */
+  --accent-bright: #9fe870;    /* the previous shade, kept as the hover lift */
+  --accent-dim: #4d8a22;
   --accent-amber: #ffb454;
   --accent-error: #ff6b6b;
   --border: #2a2e38;
@@ -32,6 +33,35 @@ html, body {
   font-size: 15px;
   line-height: 1.5;
   min-height: 100vh;
+}
+
+/* v0.11 — link colour overrides the browser default
+   purple/indigo, which is unreadable against the dark portal
+   theme. Use the phosphor accent for unvisited + visited
+   (treating both equally — we don't want a portal user's "Try a
+   different email" link to wash out after one click). Hover bumps
+   to the lighter shade for affordance; focus uses the accent ring
+   pattern from the rest of the buttons.
+
+   The selector targets ONLY classless / inline-style anchors. Every
+   anchor that has a class (``.plan-card-cta``, ``.welcome-cta``,
+   ``.line-card-cta``, etc.) is a button-shaped CTA whose colour is
+   set by its own rule — pulling the global ``a:hover``'s
+   ``color: --accent-bright`` onto a CTA whose background ALSO turns
+   ``--accent-bright`` on hover collapses text + bg to the same
+   colour and makes the label vanish (real-portal feedback
+   2026-04-27). */
+a:not([class]) {
+  color: var(--accent);
+  text-decoration-color: var(--accent-dim);
+  text-underline-offset: 2px;
+}
+a:not([class]):visited { color: var(--accent); }
+a:not([class]):hover { color: var(--accent-bright); text-decoration-color: var(--accent); }
+a:not([class]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
 }
 
 body { display: flex; flex-direction: column; }
@@ -70,6 +100,20 @@ body { display: flex; flex-direction: column; }
   width: 100%;
   margin: 0 auto;
 }
+/* v0.11+ — single-column variant for pages without the agent-log
+   sidebar. The grid collapses to a single ``1fr`` column, and the
+   main card is constrained + centered via its own max-width + auto
+   margins (more reliable across browsers than ``justify-content``
+   on a CSS-grid track). Set on ``<main>`` whenever ``show_agent_log``
+   is falsy in base.html. */
+.portal-layout--single-column {
+  grid-template-columns: 1fr;
+}
+.portal-layout--single-column .portal-main {
+  max-width: 800px;
+  width: 100%;
+  margin: 0 auto;
+}
 .portal-main {
   background: var(--bg-elev);
   border: 1px solid var(--border);
@@ -78,6 +122,25 @@ body { display: flex; flex-direction: column; }
   min-height: 500px;
 }
 .portal-aside { display: flex; flex-direction: column; }
+
+/* v0.11+ — narrow-viewport polish. The portal is desktop-first by
+   doctrine but signup is increasingly opened on phones (real-portal
+   feedback 2026-04-27). Below 720px: collapse the 2-col grid (agent
+   log drops below main), squeeze padding, let plan cards stack. */
+@media (max-width: 720px) {
+  .portal-layout {
+    grid-template-columns: 1fr;
+    padding: 12px;
+    gap: 16px;
+  }
+  .portal-main {
+    padding: 18px;
+    min-height: 0;
+  }
+  .portal-layout--single-column .portal-main {
+    max-width: none;
+  }
+}
 
 .portal-footer {
   padding: 12px 28px;

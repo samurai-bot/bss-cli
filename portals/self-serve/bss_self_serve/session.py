@@ -1,14 +1,17 @@
 """In-memory signup session store.
 
-A signup spans three requests: the POST that triggers the agent, the
-GET that opens the SSE stream, and any HTMX polls the progress page
-fires. They all need to share the form input + the agent's emitted
-state (subscription id, activation code, final AI text).
+A signup spans many requests: the POST that runs ``customer.create``,
+the GET that lands on the progress page, and the HTMX-triggered step
+routes that run the rest of the chain (``customer.attest_kyc``,
+``payment.add_card``, ``com.create_order``, ``com.get_order`` polling).
+They all share form input + the per-step results (CUST-id, payment
+method id, order id, subscription id, activation code).
 
-Production portals would put this in Redis. v0.4 is a demo — one
-process, one dict, TTL-bounded. If the process restarts mid-signup
-the user loses their session; that's an acceptable constraint per
-V0_4_0.md §3 ("If they refresh during signup, it's gone").
+Production portals would put this in Redis. v0.4 was a demo — one
+process, one dict, TTL-bounded. v0.11 keeps the same posture for the
+direct-write signup chain because the demo invariant is identical: if
+the process restarts mid-signup the user loses their session, and
+that's still acceptable per V0_4_0.md §3.
 
 Thread/async safety: protected by a single ``asyncio.Lock`` so
 ``create_session`` / ``get_session`` / ``update_session`` can be
@@ -23,7 +26,23 @@ import asyncio
 import uuid
 from dataclasses import dataclass, field
 from time import monotonic
-from typing import Any
+from typing import Any, Literal
+
+
+# v0.11 — explicit step states for the direct-write chain. The progress
+# page reads ``step`` to render the timeline and to decide which step
+# route to fire next. The poll route flips it to ``completed`` when
+# ``com.get_order`` returns ``state == completed``; any policy violation
+# along the chain flips it to ``failed`` and stores ``step_error``.
+SignupStep = Literal[
+    "pending_customer",     # before POST /signup runs customer.create
+    "pending_kyc",          # CUST-id known; next call is customer.attest_kyc
+    "pending_cof",          # KYC done; next call is payment.add_card
+    "pending_order",        # COF added; next call is com.create_order + submit
+    "pending_activation",   # order placed; polling com.get_order until completed
+    "completed",            # subscription active; activation code known
+    "failed",               # any step raised a structured error; see step_error
+]
 
 
 @dataclass
@@ -44,32 +63,42 @@ class SignupSession:
     email: str
     phone: str
     msisdn: str  # chosen on the picker page; passed to order.create as msisdn_preference
-    card_pan: str  # in-memory only, cleared once the agent finishes
+    card_pan: str  # in-memory only, cleared once the chain finishes
     card_pan_last4: str
     # v0.8 — portal-auth identity that owns this signup. Pinned at the
     # POST /signup step from request.state.identity (the verified-email
-    # session). The agent stream calls link_to_customer(identity_id,
-    # customer_id) the moment customer.create returns a CUST-* id, so
+    # session). The POST handler calls ``link_to_customer(identity_id,
+    # customer_id)`` the moment ``customer.create`` returns CUST-* so
     # the binding survives even if the customer abandons mid-flow.
     identity_id: str | None = None
     created_at: float = field(default_factory=monotonic)
 
-    # Populated as the agent streams:
+    # v0.11 — explicit step state for the direct-write chain.
+    step: SignupStep = "pending_customer"
+    step_error: str | None = None  # PolicyViolation rule string, when step=="failed"
+    # v0.11 — when the poll route first detects completion it renders
+    # the "all 5 ticks ✓ Activated" fragment AND arms a 1.5s delayed
+    # re-trigger so the user sees the chain finish before HX-Redirect
+    # whisks them to /confirmation. The next poll visit, with this
+    # flag already true, is the one that emits the redirect.
+    redirect_armed: bool = False
+
+    # Populated as each step completes:
     customer_id: str | None = None
+    payment_method_id: str | None = None
     order_id: str | None = None
     subscription_id: str | None = None
     activation_code: str | None = None
-    final_text: str = ""
     error: str | None = None
     done: bool = False
 
-    # One entry per streamed agent event, shaped like RenderedEvent's
-    # dict (``kind`` / ``icon`` / ``title`` / ``detail`` / ``detail_full``
-    # / ``is_error``). The confirmation page replays this list as static
-    # HTML instead of reopening the SSE stream, so done sessions don't
-    # retrigger the agent and don't get the "complete ✓ complete ✓"
-    # reconnect spam.
+    # v0.11 — historical shape preserved (the confirmation page renders
+    # ``event_log`` if it's non-empty for back-compat with v0.10 git tag
+    # replays). The direct-write chain does NOT populate this list; it
+    # stays empty, and the confirmation page falls back to a static
+    # 5-step summary derived from the captured ids.
     event_log: list[dict[str, Any]] = field(default_factory=list)
+    final_text: str = ""
 
 
 class SessionStore:

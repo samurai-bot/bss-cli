@@ -23,9 +23,12 @@ For engineers learning telco BSS/OSS, for a small MVNO that wants a deployable M
 
 ## The LLM agent story
 
-Every write in BSS-CLI is reachable as a typed tool. Reads go direct (a `customer.get` doesn't need an LLM); writes either flow through `bss ask` from the CLI, or through `agent_bridge.*` in the portals. Both paths land at the same `astream_once(prompt, allow_destructive=False, channel=…, actor=…)` entry point in the orchestrator, which wraps a LangGraph ReAct agent over the tool registry.
+Every write in BSS-CLI is reachable as a typed tool. Reads go direct (a `customer.get` doesn't need an LLM). For writes, BSS-CLI separates **deterministic routine flows** (direct, sub-second, deterministic) from **judgment-required flows** (orchestrator-mediated, LLM-reasoning, slower):
 
-The point: a portal route handler **never** calls `CustomerClient.create()` or `OrderClient.create()`. It builds a natural-language instruction, hands it to the agent, and streams the resulting tool-call sequence back to the browser via SSE. So the same policy chokepoint enforces every change, the audit log gets a coherent attribution (`channel=portal-self-serve`, `channel=portal-csr`, `channel=cli`, or `channel=llm`), and the agent's behaviour is observable in real time in the **Agent Activity** widget.
+- **Direct via `bss-clients`** — every CLI/REPL command, the entire signup funnel (v0.11+), every post-login self-serve route (v0.10+), and every read.
+- **Orchestrator-mediated via `astream_once`** — the CSR `/ask` agent surface and the self-serve chat route (when it lands in v0.12+). These wrap a LangGraph ReAct agent over the same tool registry as the direct path; the same policy chokepoint enforces both, so audit + attribution stay coherent.
+
+The point: every BSS write goes through the per-service policy layer no matter which path triggered it. The audit log gets a coherent attribution (`channel=portal-self-serve`, `channel=portal-csr`, `channel=cli`, or `channel=llm`), and on the agent-mediated surfaces the **Agent Activity** widget makes the agent's tool-call sequence visible in real time.
 
 Example: a CSR types *"why is their data not working — fix it if you can"*. The agent reads `subscription.get` → sees `state=blocked` → reads `catalog.list_vas` → calls `subscription.purchase_vas(VAS_DATA_5GB)` → calls `interaction.log("topped up after exhaustion")`. The 360 view auto-refreshes when the agent finishes, the operator sees `state=active` again, and `interaction.list` shows the action attributed to them — not to the model.
 

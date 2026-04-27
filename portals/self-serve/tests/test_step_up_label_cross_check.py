@@ -58,31 +58,34 @@ def test_every_call_site_uses_a_catalogued_label():
     )
 
 
-def test_no_post_login_route_imports_astream_once():
-    """v0.10 doctrine — only chat + signup routes go through the orchestrator.
+def test_no_route_imports_astream_once():
+    """v0.11 doctrine — only the chat surface goes through the orchestrator.
+
+    v0.10 carved out post-login self-serve as direct-API; v0.11 extended
+    the carve-out to signup. As of v0.11 there is no orchestrator-mediated
+    route in the self-serve portal — the chat route lives in v0.12+.
+    Greppable: ``rg 'astream_once' portals/self-serve/bss_self_serve/routes/``
+    must match the chat route only (empty until chat lands).
 
     The Makefile doctrine-check enforces this at the project level; this
     test catches it at the test layer too so a contributor sees the
     failure during normal pytest runs without needing make.
     """
-    signup_chain = {
-        "signup.py",
-        "agent_events.py",
-        "activation.py",
-        "confirmation.py",
-        "msisdn_picker.py",
+    chat_only_whitelist = {
+        # When the chat route lands in v0.12+, add "chat.py" here.
     }
     offenders = []
     for py in _ROUTES_DIR.glob("*.py"):
-        if py.name in signup_chain:
+        if py.name in chat_only_whitelist:
             continue
         text = py.read_text(encoding="utf-8")
         if "astream_once" in text:
             offenders.append(py.name)
     assert not offenders, (
-        f"astream_once appears in non-signup/non-chat route(s): {offenders}. "
-        f"Post-login routes must write directly via bss-clients per the "
-        f"v0.10 carve-out (CLAUDE.md / DECISIONS 2026-04-27)."
+        f"astream_once appears in non-chat route(s): {offenders}. "
+        f"Per v0.11 doctrine, only the chat surface goes through the "
+        f"orchestrator (CLAUDE.md (v0.11+ / chat only) + DECISIONS "
+        f"2026-04-27)."
     )
 
 

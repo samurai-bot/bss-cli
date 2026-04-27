@@ -139,7 +139,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     from .routes import (
         activation,
-        agent_events,
         auth,
         billing,
         cancel,
@@ -163,7 +162,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(signup.router)
     app.include_router(activation.router)
     app.include_router(confirmation.router)
-    app.include_router(agent_events.router)
     app.include_router(session_api.router)
     # v0.10 — post-login self-serve writes go direct (no orchestrator).
     app.include_router(top_up.router)

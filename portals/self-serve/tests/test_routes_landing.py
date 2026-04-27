@@ -19,11 +19,13 @@ def test_plans_returns_200_and_renders_three_plans(client):  # type: ignore[no-u
         assert name in body
 
 
-def test_plans_shows_the_agent_log_widget(client):  # type: ignore[no-untyped-def]
+def test_plans_does_not_render_agent_log_widget(client):  # type: ignore[no-untyped-def]
+    """v0.11 — the Agent Activity widget was retired from the signup
+    funnel (V0_11_0.md). The widget is reserved for the chat surface
+    when it lands; signup pages no longer carry it."""
     resp = client.get("/plans")
-    # The hero artifact must be visible on every page — per V0_4_0.md §4.
-    assert "Agent Activity" in resp.text
-    assert "agent-log-events" in resp.text
+    assert "Agent Activity" not in resp.text
+    assert "agent-log-events" not in resp.text
 
 
 def test_plans_anonymous_cta_bounces_through_login(client):  # type: ignore[no-untyped-def]

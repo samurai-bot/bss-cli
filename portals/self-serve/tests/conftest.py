@@ -159,12 +159,87 @@ class FakeInventory:
 
 @dataclass
 class FakeCOM:
+    """v0.10: order read fixture (used by the activation-poll route).
+
+    v0.11 PR 2 extended this to cover the direct-write signup chain —
+    create_order + submit_order. Tests pre-seed ``next_order_state`` to
+    drive the get_order poll through ``acknowledged → in_progress →
+    completed``; ``next_subscription_id`` lets the completed branch
+    surface a SUB-* on the order envelope so the route can extract it.
+    """
+
     orders: dict[str, dict[str, Any]] = field(default_factory=dict)
+    create_calls: list[dict[str, Any]] = field(default_factory=list)
+    submit_calls: list[str] = field(default_factory=list)
+    next_error: Exception | None = None
+    # Sequence of states get_order returns on each call (left-to-right).
+    next_order_states: list[str] = field(default_factory=list)
+    next_subscription_id: str | None = None
+    next_activation_code: str | None = None
 
     async def get_order(self, order_id: str) -> dict[str, Any]:
         if order_id not in self.orders:
             raise KeyError(order_id)
-        return dict(self.orders[order_id])
+        rec = dict(self.orders[order_id])
+        if self.next_order_states:
+            rec["state"] = self.next_order_states.pop(0)
+            self.orders[order_id]["state"] = rec["state"]
+        # On completed, surface SUB-* + activation code on the envelope so
+        # the signup poll route extracts them. Mirrors COM's contract:
+        # items[*].subscriptionId is set the moment SOM activation lands.
+        if rec.get("state") == "completed":
+            sub = self.next_subscription_id or self.orders[order_id].get(
+                "subscriptionId"
+            )
+            if sub:
+                items = rec.setdefault("items", [{}])
+                items[0]["subscriptionId"] = sub
+                rec["subscriptionId"] = sub
+            ac = self.next_activation_code or self.orders[order_id].get(
+                "activationCode"
+            )
+            if ac:
+                rec["activationCode"] = ac
+        return rec
+
+    async def create_order(
+        self,
+        *,
+        customer_id: str,
+        offering_id: str,
+        msisdn_preference: str | None = None,
+        notes: str | None = None,
+    ) -> dict[str, Any]:
+        if self.next_error is not None:
+            err = self.next_error
+            self.next_error = None
+            raise err
+        record = {
+            "customer_id": customer_id,
+            "offering_id": offering_id,
+            "msisdn_preference": msisdn_preference,
+        }
+        self.create_calls.append(record)
+        new_id = f"ORD-{len(self.create_calls):04d}"
+        self.orders[new_id] = {
+            "id": new_id,
+            "customerId": customer_id,
+            "offeringId": offering_id,
+            "state": "acknowledged",
+            "items": [{"offeringId": offering_id, "msisdnPreference": msisdn_preference}],
+        }
+        return dict(self.orders[new_id])
+
+    async def submit_order(self, order_id: str) -> dict[str, Any]:
+        if self.next_error is not None:
+            err = self.next_error
+            self.next_error = None
+            raise err
+        self.submit_calls.append(order_id)
+        if order_id in self.orders:
+            self.orders[order_id]["state"] = "in_progress"
+            return dict(self.orders[order_id])
+        raise KeyError(order_id)
 
 
 @dataclass
@@ -184,7 +259,62 @@ class FakeCRM:
     individual_update_calls: list[tuple[str, str | None, str | None]] = field(
         default_factory=list
     )
+    # v0.11 — direct-write signup chain calls create_customer + attest_kyc.
+    # Pre-seed ``next_error`` to simulate a server-side PolicyViolation;
+    # ``next_customer_id`` controls the CUST-* id returned by create_customer.
+    create_customer_calls: list[dict[str, Any]] = field(default_factory=list)
+    attest_kyc_calls: list[dict[str, Any]] = field(default_factory=list)
+    next_customer_id: str | None = None
     next_error: Exception | None = None
+
+    async def create_customer(
+        self,
+        *,
+        name: str,
+        email: str | None = None,
+        phone: str | None = None,
+    ) -> dict[str, Any]:
+        if self.next_error is not None:
+            err = self.next_error
+            self.next_error = None
+            raise err
+        record = {"name": name, "email": email, "phone": phone}
+        self.create_customer_calls.append(record)
+        cid = self.next_customer_id or f"CUST-{len(self.create_customer_calls):03d}"
+        self.next_customer_id = None
+        # Seed an empty mediums row so the v0.10 contact-medium fakes
+        # find the customer if a follow-up read happens. Mirrors the
+        # CRM service shape.
+        self.mediums_by_customer.setdefault(cid, [])
+        return {"id": cid, "givenName": name.split()[0], "familyName": name}
+
+    async def attest_kyc(
+        self,
+        customer_id: str,
+        *,
+        provider: str,
+        attestation_token: str,
+        provider_reference: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        if self.next_error is not None:
+            err = self.next_error
+            self.next_error = None
+            raise err
+        self.attest_kyc_calls.append(
+            {
+                "customer_id": customer_id,
+                "provider": provider,
+                "attestation_token": attestation_token,
+                "provider_reference": provider_reference,
+            }
+        )
+        return {
+            "customerId": customer_id,
+            "provider": provider,
+            "status": "verified",
+            "verifiedAt": "2026-04-27T00:00:00+00:00",
+        }
 
     async def get_customer(self, customer_id: str) -> dict[str, Any]:
         ind = self.individual_by_customer.get(customer_id, {})

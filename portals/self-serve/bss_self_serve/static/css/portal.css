@@ -126,19 +126,27 @@
   padding: 2px 8px;
   border-radius: 3px;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: 0.05em;
+  /* v0.11 — ACTIVE pill is the default (no state modifier).
+     Phosphor accent on dark text — much better contrast than the
+     old white-on-light-green which washed out (real-portal
+     feedback). The other state modifiers below override the
+     background to colours that work cleanly with white text. */
   background: var(--accent);
-  color: white;
+  color: #0e1014;
 }
 .line-card-state--blocked {
   background: #c0392b;
+  color: #ffffff;
 }
 .line-card-state--terminated {
   background: var(--fg-muted);
+  color: #0e1014;
 }
 .line-card-state--pending-activation {
   background: #f39c12;
+  color: #0e1014;
 }
 .line-card-plan-name {
   font-weight: 600;
@@ -246,8 +254,9 @@
 }
 .line-card-cta--primary {
   background: var(--accent);
-  color: white;
+  color: var(--bg);
   border-color: var(--accent);
+  font-weight: 600;
 }
 .line-card-cta-link {
   background: none;
@@ -313,7 +322,8 @@
 }
 .cof-card-badge {
   background: var(--accent);
-  color: white;
+  color: var(--bg);
+  font-weight: 700;
   font-size: 11px;
   padding: 2px 6px;
   border-radius: 3px;
@@ -986,7 +996,7 @@
   font-family: var(--mono);
   transition: background 120ms;
 }
-.plan-card-cta:hover { background: #b5ff80; }
+.plan-card-cta:hover { background: var(--accent-bright); }
 
 /* ─── MSISDN picker ──────────────────────────────────────── */
 
@@ -1086,7 +1096,7 @@
   border-radius: 4px; cursor: pointer;
   font-size: 14px;
 }
-.form-submit:hover { background: #b5ff80; }
+.form-submit:hover { background: var(--accent-bright); }
 
 .msisdn-chosen {
   display: flex; align-items: baseline; gap: 16px;
