@@ -1271,26 +1271,15 @@
 .chat-status .dot.idle  { background: var(--fg-muted); opacity: 0.6; }
 
 .chat-log {
+  /* v0.12 PR17 — chat-log is just a flex column. The agent-log
+     style (mono font + left-bar) was inherited from the v0.4
+     portal log widget and was visually overriding the chat
+     bubble's padding/border/background, making the streamed
+     reply look like a terminal entry instead of a bubble. The
+     bubbles + tool pills carry their own styling. */
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin-top: 8px;
-  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 13px;
-  line-height: 1.45;
-  color: var(--fg);
-}
-.chat-log .agent-event-row,
-.chat-log > * {
-  padding: 4px 8px;
-  border-left: 2px solid var(--border);
-  background: rgba(255, 255, 255, 0.02);
-  word-break: break-word;
-}
-.chat-log .agent-event-row.agent-event-error,
-.chat-log .chat-event-error {
-  border-left-color: #c84f4f;
-  color: #f0a0a0;
 }
 
 .chat-form {
@@ -1642,20 +1631,10 @@
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
-.chat-streaming .chat-log {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: 0;
-  background: transparent;
-}
-.chat-streaming .chat-log > * {
-  /* Override the agent-log-style left-bar; chat children are
-     already .chat-bubble shapes or .chat-tool-pill. */
-  border-left: none;
-  background: transparent;
-  padding: 0;
-}
+/* v0.12 PR17 — the .chat-streaming .chat-log overrides that
+   nullified the agent-log left-bar are gone now that .chat-log
+   itself is a plain flex column. Children carry their own
+   styling. */
 
 /* ─── v0.12 PR15 — markdown inside chat bubbles ─────────────────── */
 
