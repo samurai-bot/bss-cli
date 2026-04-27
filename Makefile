@@ -183,6 +183,34 @@ doctrine-check: check-clock
 		exit 1; \
 	fi; \
 	echo "✓ tokens loaded once at startup, cached"
+	@# v0.10+ — customer_id must come from request.state.customer_id, never
+	@# from form / body / query / path on a post-login route. CLAUDE.md
+	@# "(v0.10+) Don't accept user-controllable customer_id..." anti-pattern.
+	@hits=$$(grep -rnE 'customer_id\s*[:=]\s*(Form|Body|Query|Path)\(' \
+		--include='*.py' portals/self-serve/bss_self_serve/routes/ 2>/dev/null \
+		|| true); \
+	if [ -n "$$hits" ]; then \
+		echo "✗ customer_id taken from form/body/query/path in a post-login route:"; \
+		echo "$$hits"; \
+		exit 1; \
+	fi; \
+	echo "✓ customer_id bound from request.state, not user-controllable"
+	@# v0.10+ — astream_once stays inside chat + signup routes only. Post-
+	@# login routes go direct via bss-clients (not the orchestrator).
+	@hits=$$(grep -rn 'astream_once' \
+		--include='*.py' portals/self-serve/bss_self_serve/routes/ 2>/dev/null \
+		| grep -v 'routes/signup\.py' \
+		| grep -v 'routes/agent_events\.py' \
+		| grep -v 'routes/activation\.py' \
+		| grep -v 'routes/confirmation\.py' \
+		| grep -v 'routes/msisdn_picker\.py' \
+		|| true); \
+	if [ -n "$$hits" ]; then \
+		echo "✗ astream_once leaked into a post-login route:"; \
+		echo "$$hits"; \
+		exit 1; \
+	fi; \
+	echo "✓ astream_once stays in signup + chat routes (post-login is direct)"
 
 fmt:
 	uv run ruff format .

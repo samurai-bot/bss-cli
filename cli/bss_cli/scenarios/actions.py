@@ -17,6 +17,7 @@ Unknown actions raise ``KeyError``; the runner surfaces that as a
 
 from __future__ import annotations
 
+import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -253,6 +254,71 @@ async def portal_write_demo_contact(
     }
 
 
+async def portal_link_identity_to_customer(
+    *,
+    email: str,
+    customer_id: str,
+) -> dict[str, Any]:
+    """v0.10 hero scenario: bind a verified identity row to ``customer_id``.
+
+    Mirrors what ``bss_portal_auth.service.link_to_customer`` does
+    during the agent-mediated signup, but driven directly by the
+    scenario runner. The scenario will then drive the v0.8 login flow
+    (POST /auth/login → check email → POST /auth/check-email),
+    establishing a session bound to the linked identity. Subsequent
+    portal HTTP steps land on the post-login direct-API surface.
+
+    Idempotent on (email, customer_id): re-runs no-op. Inserts a fresh
+    identity row if none exists. Marks ``email_verified_at`` so the
+    portal's ``requires_verified_email`` dep passes.
+    """
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from bss_clock import now as clock_now
+    from bss_models import Identity
+
+    db_url = os.environ.get("BSS_DB_URL", "")
+    if not db_url:
+        raise RuntimeError(
+            "BSS_DB_URL must be set for portal.link_identity_to_customer"
+        )
+
+    engine = create_async_engine(db_url)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as db:
+            row = (
+                await db.execute(select(Identity).where(Identity.email == email))
+            ).scalar_one_or_none()
+            now = clock_now()
+            if row is None:
+                from uuid import uuid4
+
+                row = Identity(
+                    id=f"IDT-{uuid4().hex[:12]}",
+                    email=email,
+                    customer_id=customer_id,
+                    email_verified_at=now,
+                    status="registered",
+                    created_at=now,
+                    last_login_at=now,
+                )
+                db.add(row)
+            else:
+                row.customer_id = customer_id
+                row.email_verified_at = row.email_verified_at or now
+                row.status = "registered"
+            await db.commit()
+            return {
+                "identityId": row.id,
+                "email": email,
+                "customerId": customer_id,
+            }
+    finally:
+        await engine.dispose()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Registry
 # ─────────────────────────────────────────────────────────────────────────────
@@ -274,6 +340,12 @@ _SCENARIO_ACTIONS: dict[str, AsyncAction] = {
     # carries BSS_PORTAL_SELF_SERVE_API_TOKEN, demonstrating the distinct audit
     # attribution (service_identity="portal_self_serve").
     "portal.write_demo_contact": portal_write_demo_contact,
+    # v0.10 — seed an identity row + link it to a CRM customer
+    # without driving the full agent-mediated signup funnel. Used by
+    # portal_post_login_self_serve.yaml so the hero can exercise the
+    # post-login direct-API flows in seconds rather than the ~85s the
+    # v0.4/v0.8 SSE signup takes.
+    "portal.link_identity_to_customer": portal_link_identity_to_customer,
 }
 
 
