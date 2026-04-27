@@ -38,6 +38,10 @@ class FakeCatalog:
     async def list_vas(self) -> list[dict[str, Any]]:
         return list(self.vas_offerings)
 
+    async def list_active_offerings(self, *, at: Any = None) -> list[dict[str, Any]]:
+        # v0.7 active-as-of query — for tests, return everything seeded.
+        return list(self.offerings)
+
 
 @dataclass
 class FakeSubscription:
@@ -46,6 +50,8 @@ class FakeSubscription:
     balances: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     purchase_vas_calls: list[tuple[str, str]] = field(default_factory=list)
     terminate_calls: list[tuple[str, str | None]] = field(default_factory=list)
+    schedule_plan_change_calls: list[tuple[str, str]] = field(default_factory=list)
+    cancel_plan_change_calls: list[str] = field(default_factory=list)
     # v0.10 — tests pre-seed an exception here to simulate a server-side
     # PolicyViolation on the next call to ``purchase_vas`` etc.
     next_error: Exception | None = None
@@ -88,6 +94,36 @@ class FakeSubscription:
         rec = self.records[subscription_id]
         rec["state"] = "terminated"
         rec["terminatedAt"] = "2026-04-27T00:00:00+00:00"
+        return dict(rec)
+
+    async def schedule_plan_change(
+        self, subscription_id: str, new_offering_id: str
+    ) -> dict[str, Any]:
+        if self.next_error is not None:
+            err = self.next_error
+            self.next_error = None
+            raise err
+        if subscription_id not in self.records:
+            raise KeyError(subscription_id)
+        self.schedule_plan_change_calls.append((subscription_id, new_offering_id))
+        rec = self.records[subscription_id]
+        rec["pendingOfferingId"] = new_offering_id
+        rec["pendingEffectiveAt"] = rec.get("nextRenewalAt") or (
+            "2026-05-27T00:00:00+00:00"
+        )
+        return dict(rec)
+
+    async def cancel_plan_change(self, subscription_id: str) -> dict[str, Any]:
+        if self.next_error is not None:
+            err = self.next_error
+            self.next_error = None
+            raise err
+        if subscription_id not in self.records:
+            raise KeyError(subscription_id)
+        self.cancel_plan_change_calls.append(subscription_id)
+        rec = self.records[subscription_id]
+        rec["pendingOfferingId"] = None
+        rec["pendingEffectiveAt"] = None
         return dict(rec)
 
 
@@ -388,7 +424,8 @@ def client(fake_clients: FakeClientsBundle):
          patch("bss_self_serve.routes.esim.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.cancel.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.profile.get_clients", return_value=fake_clients), \
-         patch("bss_self_serve.routes.billing.get_clients", return_value=fake_clients):
+         patch("bss_self_serve.routes.billing.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.plan_change.get_clients", return_value=fake_clients):
         app = create_app(Settings())
         with TestClient(app) as c:
             yield c
@@ -477,7 +514,8 @@ def authed_client(fake_clients: FakeClientsBundle):
          patch("bss_self_serve.routes.esim.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.cancel.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.profile.get_clients", return_value=fake_clients), \
-         patch("bss_self_serve.routes.billing.get_clients", return_value=fake_clients):
+         patch("bss_self_serve.routes.billing.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.plan_change.get_clients", return_value=fake_clients):
         app = create_app(Settings())
         with TestClient(app) as c:
             c.cookies.set(PORTAL_SESSION_COOKIE, session_id)
