@@ -42,7 +42,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from .chat_session import ChatTurnStore
+from .chat_session import ChatConversationStore, ChatTurnStore
 from .config import Settings
 from .middleware import PortalSessionMiddleware
 from .security import install_redirect_handlers
@@ -90,11 +90,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         ttl_seconds=settings.bss_portal_self_serve_session_ttl,
     )
 
-    # v0.12 PR7 — chat turn store (in-memory). 30 min TTL covers a
-    # leisurely customer who Tab-switched between submitting and
-    # opening the SSE stream; the chat route reads from here on the
-    # SSE GET.
+    # v0.12 PR7/PR13 — chat in-memory state.
+    #   * ChatConversationStore: durable per-customer history so a
+    #     second message in the same conversation lands with full
+    #     prior-turn context. 60 min idle TTL.
+    #   * ChatTurnStore: per-SSE-stream working set for the current
+    #     in-flight turn. 30 min TTL covers a customer who Tab-
+    #     switched between submitting and opening the stream.
     app.state.chat_turn_store = ChatTurnStore(ttl_seconds=1800)
+    app.state.chat_conversation_store = ChatConversationStore(ttl_seconds=3600)
     log.info(
         "portal.starting",
         service=settings.service_name,

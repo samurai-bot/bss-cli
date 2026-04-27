@@ -96,16 +96,24 @@ def build_customer_chat_prompt(
     current_plan: str = "(loading)",
     balance_summary: str = "(loading)",
     operator_name: str = "BSS-CLI Mobile",
+    prior_messages: list[tuple[str, str]] | None = None,
 ) -> str:
     """Render the customer-chat system prompt with the customer's
-    snapshot. The chat route calls this once per session start.
+    snapshot. The chat route calls this once per turn.
 
-    Empty / unknown values render as ``(loading)`` placeholders so
+    ``prior_messages`` (v0.12 PR13) is the running conversation so
+    the LLM sees prior context across turns. Each entry is
+    ``(role, body)`` where role is ``"user"`` or ``"assistant"``.
+    The list is rendered into an inline "Prior conversation in this
+    session" block; the latest user message is NOT included here —
+    it's the prompt the LLM is currently answering.
+
+    Empty / unknown variables render as ``(loading)`` placeholders so
     the LLM doesn't fabricate a plan or balance — and so a partial
     profile (the customer just signed up; subscription hasn't
     materialised yet) doesn't blow up the prompt build.
     """
-    return _TEMPLATE.format(
+    base = _TEMPLATE.format(
         customer_name=customer_name or "there",
         customer_email=customer_email or "your address on file",
         account_state=account_state or "active",
@@ -113,6 +121,21 @@ def build_customer_chat_prompt(
         balance_summary=balance_summary or "(loading)",
         operator_name=operator_name,
     )
+    if not prior_messages:
+        return base
+
+    lines = ["", "Prior conversation in this session (oldest first):"]
+    for role, body in prior_messages:
+        label = "User" if role == "user" else "Assistant"
+        lines.append(f"- {label}: {body}")
+    lines.append("")
+    lines.append(
+        "Continue the conversation naturally. The customer's "
+        "next message is what you must answer; do not re-introduce "
+        "yourself, do not repeat earlier explanations the customer "
+        "already saw above."
+    )
+    return base + "\n" + "\n".join(lines) + "\n"
 
 
 def build_balance_summary(subscription: dict[str, Any] | None) -> str:

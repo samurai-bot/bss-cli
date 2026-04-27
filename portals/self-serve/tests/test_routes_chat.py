@@ -132,7 +132,7 @@ async def test_get_chat_renders_empty_form(seed_db) -> None:
         r = c.get("/chat")
     assert r.status_code == 200
     assert "Chat with us" in r.text
-    assert 'class="chat-form"' in r.text
+    assert 'class="chat-widget-form"' in r.text
     assert "name=\"message\"" in r.text
 
 
@@ -144,10 +144,12 @@ async def test_get_chat_with_cap_tripped_renders_banner(seed_db) -> None:
         r = c.get("/chat?cap_tripped=monthly_cost_cap&retry_at=2026-05-01T00:00:00+00:00")
     assert r.status_code == 200
     assert "this month's chat budget" in r.text
-    # Chat input form is hidden when cap-tripped (the page still
-    # contains the nav-bar logout form, so check for the chat-form
-    # class specifically).
-    assert 'class="chat-form"' not in r.text
+    # Chat input form is hidden when cap-tripped — the form element
+    # is rendered with the ``hidden`` HTML attribute. Assert the
+    # cap-warning class is present (the user-visible banner) and
+    # that the form carries ``hidden``.
+    assert 'class="chat-widget-cap"' in r.text
+    assert "<form" in r.text and "hidden" in r.text
 
 
 @pytest.mark.asyncio
@@ -158,7 +160,8 @@ async def test_get_chat_with_hourly_cap_tripped_renders_banner(seed_db) -> None:
         r = c.get("/chat?cap_tripped=hourly_rate_cap&retry_at=2026-04-27T15:00:00+00:00")
     assert r.status_code == 200
     assert "chatting fast" in r.text
-    assert 'class="chat-form"' not in r.text
+    # Form rendered but ``hidden`` when cap-tripped.
+    assert 'class="chat-widget-cap"' in r.text
 
 
 @pytest.mark.asyncio
@@ -193,7 +196,7 @@ async def test_get_chat_with_unknown_session_falls_back_to_form(seed_db) -> None
         c.cookies.set(PORTAL_SESSION_COOKIE, sid)
         r = c.get("/chat?session=does-not-exist")
     assert r.status_code == 200
-    assert 'class="chat-form"' in r.text
+    assert 'class="chat-widget-form"' in r.text
     assert 'sse-connect' not in r.text
 
 

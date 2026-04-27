@@ -1,49 +1,42 @@
-"""Customer chat surface (v0.12 PR7).
+"""Customer chat surface (v0.12 PR7 + PR13 conversation memory + popup widget).
 
 The only orchestrator-mediated route in the self-serve portal — every
 other route writes directly via bss-clients per the v0.10 / v0.11
 doctrine. The doctrine guard ``check-chat-only`` in the Makefile
 asserts ``astream_once`` appears only here.
 
-Three routes:
+Routes:
 
-* ``GET /chat`` — the chat page. When ``?session=<sid>``, the page
-  body opens an SSE stream to ``/chat/events/{sid}`` via HTMX. When
-  ``?cap_tripped=<reason>``, the page renders a templated banner
-  explaining the cap and a retry-at hint.
+* ``GET /chat`` — the standalone chat page (full window). Renders
+  the running conversation if any.
+* ``GET /chat/widget`` — the same UI as a fixed-position bottom-right
+  popup partial. The body-level FAB in base.html loads this via
+  ``hx-get`` so the customer can chat from any post-login page
+  without navigating away.
+* ``POST /chat/message`` — form submission. Cap-check, append the
+  user's message to the conversation, create a turn, and either
+  redirect (full-page form) or return an HTMX widget refresh
+  partial that opens the SSE stream in place.
+* ``POST /chat/reset`` — clear the running conversation. Returns a
+  fresh widget partial when called via HTMX; otherwise 303 to /chat.
+* ``GET /chat/events/{sid}`` — SSE stream. Reads turn + the
+  customer's running conversation, runs astream_once with prior
+  context inline, on FinalMessage appends the assistant reply to
+  the conversation so the next turn sees it.
 
-* ``POST /chat/message`` — form submission. Reads
-  ``request.state.customer_id`` (verified session), runs
-  ``chat_caps.check_caps``, and either:
-  - 303s to ``/chat?cap_tripped=<reason>&retry_at=<iso>`` on trip, or
-  - creates a ChatTurn and 303s to ``/chat?session=<sid>``.
-  Doctrine: cap-trip never invokes the LLM; the customer sees the
-  templated message, never a raw error.
-
-* ``GET /chat/events/{sid}`` — SSE response. Reads the turn from
-  the store, fetches the customer + a snapshot of their primary
-  subscription for the prompt, then runs:
-    astream_once(
-        actor=customer_id,
-        channel="portal-chat",
-        service_identity="portal_self_serve",
-        tool_filter="customer_self_serve",
-        system_prompt=customer_chat_prompt(...),
-        transcript=running_text,
-    )
-  Each event is rendered to an HTML SSE frame via
-  ``bss_portal_ui.agent_log.render_html``. On
-  ``AgentEventTurnUsage``, ``chat_caps.record_chat_turn`` records
-  the cost. On ``AgentOwnershipViolation`` (surfaced as a generic
-  ``AgentEventError`` with that name), the page swaps in a generic
-  "couldn't complete that — try again or contact support" message.
+Doctrine: cap-trip → templated response, no LLM invocation.
+``AgentOwnershipViolation`` → generic safety reply, no leaked detail.
+``AgentEventTurnUsage`` → ``chat_caps.record_chat_turn`` (cost
+accounting). ``AgentEventFinalMessage`` rendered in full — the
+chat surface owns the user-visible reply, so unlike the agent-log
+widget it does not truncate.
 """
 
 from __future__ import annotations
 
 import asyncio
+import html as _html
 from collections.abc import AsyncIterator
-from datetime import datetime, timezone
 from urllib.parse import urlencode
 
 import structlog
@@ -55,10 +48,10 @@ from bss_orchestrator.customer_chat_prompt import (
 from bss_orchestrator.session import (
     AgentEventError,
     AgentEventFinalMessage,
+    AgentEventToolCallStarted,
     AgentEventTurnUsage,
     astream_once,
 )
-from bss_portal_ui.agent_log import render_html
 from bss_portal_ui.sse import format_frame as _sse_frame
 from bss_portal_ui.sse import status_html as _status_html
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
@@ -72,121 +65,23 @@ log = structlog.get_logger(__name__)
 router = APIRouter()
 
 
-# Generic message rendered when the trip-wire fires. Per the phase
-# doc trap section: never leak detail. The customer sees the same
-# string for any ownership violation; ops investigate via the audit
-# row that ``record_violation`` wrote on the actor's record.
 _OWNERSHIP_VIOLATION_REPLY = (
     "Sorry — I couldn't complete that. Please try again, or contact "
     "support if the issue persists."
 )
 
 
-@router.get("/chat", response_class=HTMLResponse)
-async def chat_page(
-    request: Request,
-    session: str | None = None,
-    cap_tripped: str | None = None,
-    retry_at: str | None = None,
-    customer_id: str = Depends(requires_linked_customer),
-) -> HTMLResponse:
-    """The chat page. Renders three states inline:
-
-    * Default — empty form ready for the customer's question.
-    * ``?session=<sid>`` — opens an SSE stream to /chat/events/{sid}
-      and renders the user's question + a streaming agent log.
-    * ``?cap_tripped=<reason>`` — renders the templated cap banner
-      with retry guidance; the form is hidden.
-    """
-    turn = None
-    if session:
-        store = request.app.state.chat_turn_store
-        turn = await store.get(session)
-        if turn is None or turn.customer_id != customer_id:
-            # Stale session id or someone else's — fall back to empty
-            # state. Cross-customer impersonation via crafted session
-            # url is blocked here on the route side; the SSE handler
-            # also re-checks.
-            turn = None
-            session = None
-
-    return templates.TemplateResponse(
-        request,
-        "chat_page.html",
-        {
-            "customer_id": customer_id,
-            "session_id": session,
-            "turn": turn,
-            "cap_tripped": cap_tripped,
-            "retry_at": retry_at,
-        },
-    )
+# ── Helpers ──────────────────────────────────────────────────────────
 
 
-@router.post("/chat/message")
-async def chat_message(
-    request: Request,
-    message: str = Form(...),
-    customer_id: str = Depends(requires_linked_customer),
-) -> RedirectResponse:
-    """Handle a chat submission. Cap-check first; if blocked, redirect
-    to the chat page with the cap-tripped banner. Otherwise create the
-    turn and redirect to the SSE-connected chat page.
-
-    Doctrine: cap-trip → templated response; never invoke the LLM.
-    """
-    text = message.strip()
-    if not text:
-        return RedirectResponse(url="/chat", status_code=303)
-
-    status = await check_caps(customer_id)
-    if not status.allowed:
-        params: dict[str, str] = {"cap_tripped": status.reason or "cap_check_failed"}
-        if status.retry_at is not None:
-            params["retry_at"] = status.retry_at.isoformat()
-        log.info(
-            "chat.cap_tripped",
-            customer_id=customer_id,
-            reason=status.reason,
-        )
-        return RedirectResponse(
-            url=f"/chat?{urlencode(params)}", status_code=303
-        )
-
-    store = request.app.state.chat_turn_store
-    turn = await store.create(customer_id=customer_id, question=text)
-    return RedirectResponse(
-        url=f"/chat?session={turn.session_id}", status_code=303
-    )
+def _is_htmx(request: Request) -> bool:
+    return request.headers.get("hx-request", "").lower() == "true"
 
 
-@router.get("/chat/events/{session_id}")
-async def chat_events(
-    request: Request,
-    session_id: str,
-    customer_id: str = Depends(requires_linked_customer),
-) -> StreamingResponse:
-    """SSE stream of agent events for one chat turn."""
-    store = request.app.state.chat_turn_store
-    turn = await store.get(session_id)
-    if turn is None:
-        raise HTTPException(status_code=404, detail="chat turn not found")
-    # Defence-in-depth — even if the URL was crafted, only the owning
-    # customer can stream this turn. The trip-wire would also catch
-    # any leaked-output bug, but blocking at the route is cheaper.
-    if turn.customer_id != customer_id:
-        log.warning(
-            "chat.cross_customer_session_attempt",
-            actor=customer_id,
-            session_id=session_id,
-            owner=turn.customer_id,
-        )
-        raise HTTPException(status_code=403, detail="not your chat session")
-
-    # Build the customer-chat system prompt for this session. The
-    # subscription read is best-effort — if it fails the prompt
-    # renders ``(loading)`` placeholders rather than crashing the
-    # stream. Prompt build runs once per turn (5-10s LLM dwarfs it).
+async def _load_customer_context(customer_id: str) -> dict:
+    """Read customer + primary subscription for the system prompt.
+    Best-effort: failures fall through to ``(loading)`` placeholders
+    rather than blocking the chat turn."""
     clients = get_clients()
     customer_dict: dict = {}
     primary_sub: dict | None = None
@@ -212,22 +107,239 @@ async def chat_events(
         )
         if primary_sub:
             plan_id = primary_sub.get("offeringId") or plan_id
-    except Exception as exc:  # noqa: BLE001 — best-effort prompt build
+    except Exception as exc:  # noqa: BLE001
         log.warning(
             "chat.prompt_context_load_failed",
             customer_id=customer_id,
             error=str(exc),
         )
+    return {
+        "customer_dict": customer_dict,
+        "primary_sub": primary_sub,
+        "customer_email": customer_email,
+        "customer_name": customer_name,
+        "plan_id": plan_id,
+    }
 
-    system_prompt = build_customer_chat_prompt(
-        customer_name=customer_name,
-        customer_email=customer_email,
-        account_state=customer_dict.get("status", "active"),
-        current_plan=plan_id,
-        balance_summary=build_balance_summary(primary_sub),
+
+def _render_widget_context(
+    *,
+    customer_id: str,
+    conversation,
+    session_id: str | None,
+    cap_tripped: str | None,
+    retry_at: str | None,
+) -> dict:
+    """Shared template context for both the standalone page and the
+    popup widget. The widget partial and the page template both pull
+    from this so the layout stays in sync."""
+    messages = []
+    if conversation is not None:
+        for m in conversation.messages:
+            messages.append({"role": m.role, "body": m.body})
+    return {
+        "customer_id": customer_id,
+        "session_id": session_id,
+        "messages": messages,
+        "has_history": bool(messages),
+        "cap_tripped": cap_tripped,
+        "retry_at": retry_at,
+    }
+
+
+# ── Routes ───────────────────────────────────────────────────────────
+
+
+async def _resolve_session(
+    request: Request, session: str | None, customer_id: str
+) -> str | None:
+    """Validate ``?session=<sid>`` against the turn store. Returns
+    the id when valid + owned by the actor, otherwise ``None`` so
+    the template skips the SSE host. Cross-customer impersonation
+    via a crafted URL is blocked here (the SSE handler enforces too)."""
+    if not session:
+        return None
+    turn = await request.app.state.chat_turn_store.get(session)
+    if turn is None or turn.customer_id != customer_id:
+        return None
+    return session
+
+
+@router.get("/chat", response_class=HTMLResponse)
+async def chat_page(
+    request: Request,
+    cap_tripped: str | None = None,
+    retry_at: str | None = None,
+    session: str | None = None,
+    customer_id: str = Depends(requires_linked_customer),
+) -> HTMLResponse:
+    """Standalone chat page. Always shows the running conversation
+    plus the input form. ``?session=<sid>`` activates the SSE stream
+    for an in-flight turn so the assistant's reply lands as it arrives."""
+    conv = await request.app.state.chat_conversation_store.get(customer_id)
+    valid_session = await _resolve_session(request, session, customer_id)
+    return templates.TemplateResponse(
+        request,
+        "chat_page.html",
+        _render_widget_context(
+            customer_id=customer_id,
+            conversation=conv,
+            session_id=valid_session,
+            cap_tripped=cap_tripped,
+            retry_at=retry_at,
+        ),
     )
 
-    transcript = f"User: {turn.question}\n"
+
+@router.get("/chat/widget", response_class=HTMLResponse)
+async def chat_widget(
+    request: Request,
+    session: str | None = None,
+    cap_tripped: str | None = None,
+    retry_at: str | None = None,
+    customer_id: str = Depends(requires_linked_customer),
+) -> HTMLResponse:
+    """The popup widget partial. Loaded by the FAB's ``hx-get``
+    into the ``#chat-widget-host`` div on every post-login page.
+    Same context as the standalone page; the partial decides the
+    fixed-position bottom-right styling."""
+    conv = await request.app.state.chat_conversation_store.get(customer_id)
+    valid_session = await _resolve_session(request, session, customer_id)
+    return templates.TemplateResponse(
+        request,
+        "chat_widget.html",
+        _render_widget_context(
+            customer_id=customer_id,
+            conversation=conv,
+            session_id=valid_session,
+            cap_tripped=cap_tripped,
+            retry_at=retry_at,
+        ),
+    )
+
+
+@router.post("/chat/message")
+async def chat_message(
+    request: Request,
+    message: str = Form(...),
+    customer_id: str = Depends(requires_linked_customer),
+):
+    """Append the user's message to the conversation and either
+    redirect (full-page) or return a widget refresh (HTMX) so the
+    SSE stream picks up the new turn."""
+    text = message.strip()
+    if not text:
+        if _is_htmx(request):
+            return await chat_widget(request, customer_id=customer_id)
+        return RedirectResponse(url="/chat", status_code=303)
+
+    cap = await check_caps(customer_id)
+    if not cap.allowed:
+        params: dict[str, str] = {"cap_tripped": cap.reason or "cap_check_failed"}
+        if cap.retry_at is not None:
+            params["retry_at"] = cap.retry_at.isoformat()
+        log.info(
+            "chat.cap_tripped",
+            customer_id=customer_id,
+            reason=cap.reason,
+        )
+        if _is_htmx(request):
+            return await chat_widget(
+                request,
+                customer_id=customer_id,
+                cap_tripped=cap.reason or "cap_check_failed",
+                retry_at=cap.retry_at.isoformat() if cap.retry_at else None,
+            )
+        return RedirectResponse(
+            url=f"/chat?{urlencode(params)}", status_code=303
+        )
+
+    conv_store = request.app.state.chat_conversation_store
+    conv = await conv_store.get_or_create(customer_id)
+    conv.append("user", text)
+
+    turn_store = request.app.state.chat_turn_store
+    turn = await turn_store.create(customer_id=customer_id, question=text)
+
+    if _is_htmx(request):
+        # Widget refresh: render the partial with the new
+        # session_id so the SSE-bound elements are present in the
+        # swap response.
+        return await chat_widget(
+            request, session=turn.session_id, customer_id=customer_id
+        )
+    return RedirectResponse(
+        url=f"/chat?session={turn.session_id}", status_code=303
+    )
+
+
+@router.post("/chat/reset")
+async def chat_reset(
+    request: Request,
+    customer_id: str = Depends(requires_linked_customer),
+):
+    """Clear the running conversation. The next message starts a
+    fresh history — no prior context."""
+    await request.app.state.chat_conversation_store.reset(customer_id)
+    if _is_htmx(request):
+        return await chat_widget(request, customer_id=customer_id)
+    return RedirectResponse(url="/chat", status_code=303)
+
+
+@router.get("/chat/events/{session_id}")
+async def chat_events(
+    request: Request,
+    session_id: str,
+    customer_id: str = Depends(requires_linked_customer),
+) -> StreamingResponse:
+    """SSE stream for one in-flight chat turn.
+
+    The customer's running conversation is loaded so prior
+    user/assistant turns appear as inline context in the system
+    prompt — the LLM answers the *next* user message in continuity.
+    On FinalMessage, the assistant's full reply is appended to the
+    conversation so subsequent turns see it.
+    """
+    turn_store = request.app.state.chat_turn_store
+    turn = await turn_store.get(session_id)
+    if turn is None:
+        raise HTTPException(status_code=404, detail="chat turn not found")
+    if turn.customer_id != customer_id:
+        log.warning(
+            "chat.cross_customer_session_attempt",
+            actor=customer_id,
+            session_id=session_id,
+            owner=turn.customer_id,
+        )
+        raise HTTPException(status_code=403, detail="not your chat session")
+
+    conv_store = request.app.state.chat_conversation_store
+    conv = await conv_store.get_or_create(customer_id)
+
+    ctx = await _load_customer_context(customer_id)
+    primary_sub = ctx["primary_sub"]
+
+    # Prior messages = everything in the conversation EXCEPT the
+    # latest user message (the one this turn is answering — the
+    # LLM sees it as ``prompt``, not as prior context).
+    prior_pairs: list[tuple[str, str]] = [
+        (m.role, m.body)
+        for m in conv.messages
+        if not (m.role == "user" and m.body == turn.question)
+    ]
+
+    system_prompt = build_customer_chat_prompt(
+        customer_name=ctx["customer_name"],
+        customer_email=ctx["customer_email"],
+        account_state=ctx["customer_dict"].get("status", "active"),
+        current_plan=ctx["plan_id"],
+        balance_summary=build_balance_summary(primary_sub),
+        prior_messages=prior_pairs,
+    )
+
+    # Transcript for case.open_for_me — full running text, including
+    # the latest user message.
+    transcript = conv.transcript_text()
 
     async def stream() -> AsyncIterator[bytes]:
         if turn.done:
@@ -247,8 +359,7 @@ async def chat_events(
                 system_prompt=system_prompt,
                 transcript=transcript,
             ):
-                # Token-usage event is housekeeping only — record cost
-                # and don't render it to the chat log.
+                # Token-usage: record cost; don't render.
                 if isinstance(event, AgentEventTurnUsage):
                     try:
                         await record_chat_turn(
@@ -265,49 +376,54 @@ async def chat_events(
                         )
                     continue
 
-                # Trip-wire surfaces as an AgentEventError with
-                # ``AgentOwnershipViolation`` in the message — render
-                # the generic safety reply instead of leaking the
-                # name of the offending tool to the customer.
+                # Trip-wire — generic safety reply, never leaked detail.
                 if isinstance(event, AgentEventError) and (
                     "AgentOwnershipViolation" in event.message
                 ):
                     turn.ownership_violation = True
                     turn.error = "ownership_violation"
                     turn.final_text = _OWNERSHIP_VIOLATION_REPLY
+                    conv.append("assistant", _OWNERSHIP_VIOLATION_REPLY)
                     yield _sse_frame(
                         "message",
-                        _safety_reply_html(_OWNERSHIP_VIOLATION_REPLY),
+                        _chat_assistant_html(_OWNERSHIP_VIOLATION_REPLY, error=True),
                     )
                     yield _sse_frame("status", _status_html("error"))
                     return
 
                 if isinstance(event, AgentEventError):
                     turn.error = event.message
-                    yield _sse_frame("message", render_html(event))
+                    fallback = "Sorry — something went wrong. Please try again."
+                    conv.append("assistant", fallback)
+                    yield _sse_frame(
+                        "message", _chat_assistant_html(fallback, error=True)
+                    )
                     yield _sse_frame("status", _status_html("error"))
                     return
 
-                try:
-                    yield _sse_frame("message", render_html(event))
-                except Exception as render_exc:  # noqa: BLE001
-                    log.warning(
-                        "chat.render_failed",
-                        error=str(render_exc),
-                        event_kind=type(event).__name__,
+                # Tool calls render as small inline pills so the
+                # customer can see what the agent is doing.
+                if isinstance(event, AgentEventToolCallStarted):
+                    yield _sse_frame(
+                        "message", _chat_tool_pill_html(event.name)
                     )
                     continue
 
                 if isinstance(event, AgentEventFinalMessage):
-                    # v0.12 — TurnUsage was already consumed above
-                    # (astream_once yields it BEFORE FinalMessage so
-                    # cost accounting lands before the SSE consumer
-                    # disconnects on "done"). FinalMessage is the
-                    # last frame the route emits.
+                    text = event.text or ""
                     turn.done = True
-                    turn.final_text = event.text or ""
+                    turn.final_text = text
+                    conv.append("assistant", text)
+                    yield _sse_frame(
+                        "message", _chat_assistant_html(text)
+                    )
                     yield _sse_frame("status", _status_html("done"))
                     return
+
+                # Everything else (intermediate AIMessages without
+                # tool_calls, ToolMessage results) is hidden from the
+                # chat log — the audit row + bss trace carry the
+                # forensic record.
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -325,14 +441,24 @@ async def chat_events(
     )
 
 
-def _safety_reply_html(text: str) -> str:
-    """Render the ownership-violation safety reply as a chat-log
-    fragment matching the agent_event partial's row shape."""
-    import html as _html
+# ── Inline HTML renderers (chat-flavoured, not agent-log shaped) ─────
 
+
+def _chat_assistant_html(text: str, *, error: bool = False) -> str:
+    """Full assistant reply as a chat bubble. Newlines preserved
+    via ``white-space: pre-wrap`` on the .chat-bubble class."""
+    css = "chat-bubble chat-bubble-assistant"
+    if error:
+        css += " chat-bubble-error"
+    safe = _html.escape(text)
+    safe = safe.replace("\n", "<br>")
+    return f'<div class="{css}">{safe}</div>'
+
+
+def _chat_tool_pill_html(tool_name: str) -> str:
     return (
-        '<div class="chat-event chat-event-error">'
-        f'<span class="icon">⚠</span>'
-        f'<span class="title">{_html.escape(text)}</span>'
+        '<div class="chat-tool-pill">'
+        f'<span class="chat-tool-icon">≈</span>'
+        f'<span class="chat-tool-name">{_html.escape(tool_name)}</span>'
         "</div>"
     )

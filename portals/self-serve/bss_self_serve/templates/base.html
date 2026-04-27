@@ -92,15 +92,26 @@
   </script>
   {% endif %}
 
-  {# v0.12 — floating chat launcher. Renders on every post-login
-     page (any page that has request.state.customer_id) except
-     /chat itself, so the customer can reach the chat surface from
-     anywhere in the portal without hunting for the dashboard CTA. #}
+  {# v0.12 PR13 — floating chat launcher + popup host. The FAB
+     loads the widget partial into ``#chat-widget-host`` via HTMX
+     so the chat opens in place; no navigation. The host div is
+     always present (so HTMX has a target) but stays empty until
+     the customer clicks. The widget's own close button (×)
+     swaps the host back to empty. /chat itself uses the same
+     partial as a full-page render. #}
   {% if request.state.customer_id and request.url.path != "/chat" %}
-  <a class="chat-fab" href="/chat" aria-label="Open chat with us">
+  <div id="chat-widget-host" class="chat-widget-host"></div>
+  <button
+    type="button"
+    class="chat-fab"
+    aria-label="Open chat with us"
+    hx-get="/chat/widget"
+    hx-target="#chat-widget-host"
+    hx-swap="innerHTML"
+  >
     <span class="chat-fab-icon" aria-hidden="true"></span>
     <span>Chat with us</span>
-  </a>
+  </button>
   {% endif %}
 
   <footer class="portal-footer">

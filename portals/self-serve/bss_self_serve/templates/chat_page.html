@@ -12,98 +12,14 @@
     </p>
   </header>
 
-  {% if cap_tripped %}
-    <div class="chat-cap-tripped" role="alert">
-      {% if cap_tripped == "monthly_cost_cap" %}
-        <h2>You've reached this month's chat budget.</h2>
-        <p>
-          The chat assistant is rate-limited per customer per month.
-          {% if retry_at %}You can chat again on
-            <code>{{ retry_at[:10] }}</code>.{% endif %}
-          In the meantime, the dashboard, billing history, and plan
-          options on the site cover everything chat can do.
-        </p>
-      {% elif cap_tripped == "hourly_rate_cap" %}
-        <h2>You're chatting fast — try again in a moment.</h2>
-        <p>
-          We cap requests per hour per customer to keep the assistant
-          fair to everyone.
-          {% if retry_at %}Retry after <code>{{ retry_at[:16] }}</code>.{% endif %}
-        </p>
-      {% else %}
-        <h2>Chat is briefly unavailable.</h2>
-        <p>
-          Please try again in a few minutes. If this keeps happening,
-          please contact support.
-        </p>
-      {% endif %}
-      <p class="chat-cap-tripped-actions">
-        <a class="welcome-cta" href="/">Back to my account</a>
-      </p>
-    </div>
-  {% else %}
-
-    {% if turn %}
-    {# v0.12 PR12 — the entire conversation panel sits INSIDE the
-       sse-connect host so the htmx-sse extension can route ``status``
-       and ``message`` events to the swappable elements below. The
-       previous shape kept the ``hx-ext="sse"`` element as a sibling,
-       which silently dropped every event because htmx-sse only
-       reaches descendants. #}
-    <div
-      class="chat-thread-host"
-      hx-ext="sse"
-      sse-connect="/chat/events/{{ session_id }}"
-    >
-      <article class="chat-thread">
-        <div class="chat-message chat-message-user">
-          <header><strong>You</strong></header>
-          <p>{{ turn.question }}</p>
-        </div>
-        <div class="chat-message chat-message-assistant">
-          <header>
-            <strong>Assistant</strong>
-            <span class="chat-status" sse-swap="status">
-              <span class="dot idle"></span> connecting…
-            </span>
-          </header>
-          <div
-            class="chat-log"
-            id="chat-log"
-            sse-swap="message"
-            hx-swap="beforeend"
-          ></div>
-        </div>
-      </article>
-    </div>
-    {% endif %}
-
-    {# Hide the form during an in-flight turn so the page state is
-       readable. The next turn is just a refresh away. #}
-    {% if not turn %}
-    <form class="chat-form" method="post" action="/chat/message">
-      <label for="chat-message" class="form-label">Your question</label>
-      <textarea
-        id="chat-message"
-        name="message"
-        rows="3"
-        required
-        placeholder="e.g. how much data do I have left this month?"
-      ></textarea>
-      <button type="submit" class="welcome-cta">Send</button>
-    </form>
-    {% else %}
-    <p class="chat-after-turn">
-      <a class="welcome-cta" href="/chat">Ask another question</a>
-      <a class="welcome-cta welcome-cta-secondary" href="/">Back to my account</a>
-    </p>
-    {% endif %}
-
-    <p class="chat-fineprint">
-      We only act on your own account. We escalate fraud, billing
-      disputes, regulator complaints, identity recovery, and
-      bereavement to a human — never the AI.
-    </p>
-  {% endif %}
+  {# v0.12 PR13 — the standalone /chat page embeds the same widget
+     partial used by the FAB popup. ``chat-widget-inline`` overrides
+     the popup's fixed-position framing so the widget fills the
+     page column. Both surfaces share the conversation, the
+     SSE wiring, the form, and the "Sensitive issues escalate"
+     fineprint — keeping them in sync is a one-template task. #}
+  <div class="chat-widget-inline">
+    {% include "chat_widget.html" %}
+  </div>
 </section>
 {% endblock %}
