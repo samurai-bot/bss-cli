@@ -264,9 +264,42 @@ async def verify_email_login(
 
     matched.consumed_at = now
 
+    # v0.10 fix — auto-link a verified identity to a pre-existing CRM
+    # customer if the email matches exactly one active email contact
+    # medium. Returning customers whose CRM record predates the portal
+    # identity (e.g. created via CLI or imported) would otherwise log
+    # in to an empty dashboard because their identity_id has
+    # customer_id=NULL until the signup funnel's harvest hook runs.
+    # The crm.contact_medium uniqueness invariant guarantees at most
+    # one match, so the lookup is safe.
+    if identity.customer_id is None:
+        from bss_models import ContactMedium, Customer
+
+        cm = (
+            await db.execute(
+                select(ContactMedium).where(
+                    ContactMedium.medium_type == "email",
+                    ContactMedium.value == email,
+                    ContactMedium.valid_to.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if cm is not None:
+            cust = (
+                await db.execute(
+                    select(Customer).where(Customer.party_id == cm.party_id)
+                )
+            ).scalar_one_or_none()
+            if cust is not None:
+                identity.customer_id = cust.id
+
     if identity.email_verified_at is None:
         identity.email_verified_at = now
         identity.status = "registered" if identity.customer_id else "verified"
+    elif identity.customer_id is not None and identity.status != "registered":
+        # Auto-link just bound the identity — promote status accordingly so
+        # the session middleware can route the customer to the dashboard.
+        identity.status = "registered"
     identity.last_login_at = now
 
     sess = Session(
