@@ -142,12 +142,29 @@ class AgentEventError:
     message: str
 
 
+@dataclass(frozen=True)
+class AgentEventTurnUsage:
+    """v0.12 — token counts for the completed turn so the chat route
+    can call ``chat_caps.record_chat_turn`` with the right numbers.
+
+    Emitted once at stream end after ``AgentEventFinalMessage`` when
+    the LLM's response surfaced ``usage_metadata``. ``model`` carries
+    the model identifier used so the rate table looks up the right
+    rates even if ``BSS_LLM_MODEL`` changes between turns.
+    """
+
+    prompt_tok: int
+    completion_tok: int
+    model: str
+
+
 AgentEvent = Union[
     AgentEventPromptReceived,
     AgentEventToolCallStarted,
     AgentEventToolCallCompleted,
     AgentEventFinalMessage,
     AgentEventError,
+    AgentEventTurnUsage,
 ]
 
 
@@ -381,6 +398,7 @@ async def astream_once(
             )
             seen_call_ids: set[str] = set()
             last_ai_text = ""
+            usage_total = {"input_tokens": 0, "output_tokens": 0, "model": ""}
 
             try:
                 async for update in graph.astream(
@@ -412,6 +430,26 @@ async def astream_once(
                                 text = _ai_text(msg)
                                 if text and not tool_calls:
                                     last_ai_text = text
+                                # v0.12 — accumulate per-turn token
+                                # counts so the chat route can record
+                                # cost via chat_caps.record_chat_turn.
+                                # langchain_openai surfaces usage_metadata
+                                # on the final assistant message; some
+                                # providers also emit on tool-call AI
+                                # messages, so accumulate across all of
+                                # them.
+                                um = getattr(msg, "usage_metadata", None)
+                                if um:
+                                    usage_total["input_tokens"] += int(
+                                        um.get("input_tokens") or 0
+                                    )
+                                    usage_total["output_tokens"] += int(
+                                        um.get("output_tokens") or 0
+                                    )
+                                rm = getattr(msg, "response_metadata", None) or {}
+                                model_name = rm.get("model_name") or rm.get("model")
+                                if model_name:
+                                    usage_total["model"] = model_name
                             elif isinstance(msg, ToolMessage):
                                 full = (
                                     str(msg.content) if msg.content is not None else ""
@@ -467,6 +505,17 @@ async def astream_once(
                 return
 
             yield AgentEventFinalMessage(text=last_ai_text)
+            # v0.12 — emit token totals so the chat route can call
+            # chat_caps.record_chat_turn. Always emitted (even when
+            # totals are 0) so downstream consumers can rely on the
+            # event being present; the route ignores zero-token
+            # turns. ``model`` falls back to the configured default
+            # when the provider doesn't echo it.
+            yield AgentEventTurnUsage(
+                prompt_tok=usage_total["input_tokens"],
+                completion_tok=usage_total["output_tokens"],
+                model=usage_total["model"] or "",
+            )
         finally:
             if identity_reset_token is not None:
                 reset_service_identity_token(identity_reset_token)

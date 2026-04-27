@@ -122,3 +122,46 @@ async def test_actor_omitted_keeps_auth_context_default() -> None:
     # actor=None means the wrappers would refuse — confirms the seam
     # never silently inherits a stale actor from a prior stream.
     assert auth_context.current().actor is None
+
+
+async def test_turn_usage_event_emitted_at_stream_end() -> None:
+    """v0.12 PR5 — the chat route reads AgentEventTurnUsage to call
+    chat_caps.record_chat_turn with the right token counts."""
+    from bss_orchestrator.session import AgentEventTurnUsage
+
+    final_msg = AIMessage(
+        content="done",
+        usage_metadata={
+            "input_tokens": 1234,
+            "output_tokens": 567,
+            "total_tokens": 1801,
+        },
+        response_metadata={"model_name": "google/gemma-4-26b-a4b-it"},
+    )
+    fake = _FakeGraph([{"agent": {"messages": [final_msg]}}])
+
+    with patch("bss_orchestrator.session.build_graph", return_value=fake):
+        events = await _collect(astream_once("ping"))
+
+    usage = [e for e in events if isinstance(e, AgentEventTurnUsage)]
+    assert len(usage) == 1
+    assert usage[0].prompt_tok == 1234
+    assert usage[0].completion_tok == 567
+    assert usage[0].model == "google/gemma-4-26b-a4b-it"
+
+
+async def test_turn_usage_event_emits_zero_when_no_metadata() -> None:
+    """No usage_metadata → still emit a TurnUsage event with zeros so
+    the route can rely on the event being present without a None-check."""
+    from bss_orchestrator.session import AgentEventTurnUsage
+
+    fake = _FakeGraph(
+        [{"agent": {"messages": [AIMessage(content="done")]}}]
+    )
+    with patch("bss_orchestrator.session.build_graph", return_value=fake):
+        events = await _collect(astream_once("ping"))
+
+    usage = [e for e in events if isinstance(e, AgentEventTurnUsage)]
+    assert len(usage) == 1
+    assert usage[0].prompt_tok == 0
+    assert usage[0].completion_tok == 0

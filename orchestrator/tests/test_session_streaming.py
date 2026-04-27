@@ -92,14 +92,26 @@ async def test_tool_call_started_and_completed_pairs() -> None:
 
 
 async def test_final_message_emitted_last() -> None:
+    """FinalMessage is the last agent-rendered event; v0.12 PR5 added
+    a trailing AgentEventTurnUsage as the housekeeping signal for
+    chat_caps.record_chat_turn — assert FinalMessage is the last
+    content event, with TurnUsage following."""
+    from bss_orchestrator.session import AgentEventTurnUsage
+
     fake = _FakeGraph([
         {"agent": {"messages": [AIMessage(content="done")]}},
     ])
     with patch("bss_orchestrator.session.build_graph", return_value=fake):
         events = await _collect(astream_once("finish"))
 
-    assert isinstance(events[-1], AgentEventFinalMessage)
-    assert events[-1].text == "done"
+    final_msgs = [e for e in events if isinstance(e, AgentEventFinalMessage)]
+    assert len(final_msgs) == 1
+    assert final_msgs[0].text == "done"
+    # The TurnUsage event lands strictly after FinalMessage.
+    final_idx = events.index(final_msgs[0])
+    assert any(
+        isinstance(e, AgentEventTurnUsage) for e in events[final_idx + 1 :]
+    )
 
 
 async def test_tool_call_de_duplication() -> None:
