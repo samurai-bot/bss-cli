@@ -1,11 +1,12 @@
 """Activation progress page — /activation/{order_id}?session=...
 
-By the time the user lands here, the SSE stream has usually already
-finished and the session knows the subscription_id + activation code,
-so we jump straight to /confirmation. If the user arrived early (or
-refreshed) and the order is not yet done, we render a polling shell
-that refreshes itself via HTMX until ``order.get`` reports
-``state == completed``.
+v0.4 used this page as the "still running" shell while the SSE-driven
+agent finished the order. v0.11 keeps the URL shape (deep links from
+the v0.10 era still resolve) but the page is now reached directly
+from the signup chain's HX-Redirect when the poll route resolves the
+subscription. If the user lands here without a known subscription_id
+on the in-memory session, we fall back to HTMX polling of
+``com.get_order`` until ``state == completed``.
 """
 
 from __future__ import annotations
@@ -40,7 +41,6 @@ async def activation(request: Request, order_id: str, session: str) -> HTMLRespo
         "activation.html",
         {
             "session_id": session,
-            "stream_live": True,  # the agent may still be running
             "order_id": order_id,
             "plan_id": sig.plan,
         },

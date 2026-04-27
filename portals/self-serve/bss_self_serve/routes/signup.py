@@ -1,12 +1,12 @@
 """Signup form + direct-write chain (v0.11+).
 
-v0.4 ran the signup chain through the LLM orchestrator (one
-``astream_once`` call streamed every tool invocation through SSE).
-v0.11 replaces that with a deterministic direct-API chain: each of
-the five steps is its own route, each route makes exactly one
-``bss-clients`` call, and the progress page chains them via HTMX
-``hx-post`` triggers. Wall time drops from ~85s to under 10s because
-no LLM round-trips happen on the signup path.
+v0.4 ran the signup chain through the LLM orchestrator (one streaming
+agent call drove every tool invocation through SSE). v0.11 replaces
+that with a deterministic direct-API chain: each of the five steps is
+its own route, each route makes exactly one ``bss-clients`` call, and
+the progress page chains them via HTMX ``hx-post`` triggers. Wall time
+drops from ~85s to under 10s because no LLM round-trips happen on the
+signup path.
 
 Step routes (one BSS write or zero per route):
 
@@ -29,10 +29,10 @@ Step routes (one BSS write or zero per route):
 
 Doctrine (V0_11_0.md + CLAUDE.md ``(v0.11+ / chat only)``):
 
-* No ``agent_bridge`` / ``astream_once`` import. Greppable: the
-  signup routes are no longer in the carve-out whitelist for
-  ``rg 'astream_once' portals/self-serve/bss_self_serve/routes/``;
-  the only orchestrator-mediated route is ``/chat`` (when it lands).
+* No orchestrator imports. The signup routes are no longer in the
+  carve-out whitelist for ``rg`` against the orchestrator entrypoint
+  identifier under ``portals/self-serve/bss_self_serve/routes/``; the
+  only orchestrator-mediated route is ``/chat`` (when it lands).
 * ``request.state.identity`` is the only source of email and
   identity_id. The form never carries ``email`` server-side.
 * ``portal_action`` audit row per write step (label from
