@@ -129,7 +129,13 @@ async def signup_submit(
     name: str = Form(...),
     phone: str = Form(...),
     msisdn: str = Form(...),
-    card_pan: str = Form(...),
+    # v0.11 — ``card_pan`` is OPTIONAL on the route signature so the
+    # second-line / returning-customer path works even when the form
+    # omits the field entirely. Returning users skip the add-card
+    # step server-side (existing default COF pays); new users still
+    # need a valid PAN — the route enforces that below by branching
+    # on identity.customer_id.
+    card_pan: str = Form(default=""),
     identity: IdentityView = Depends(requires_verified_email),
 ) -> Response:
     """Run step 1 (``crm.create_customer``) and bind the verified
@@ -168,6 +174,15 @@ async def signup_submit(
     # left an orphan CUST in CRM if link_to_customer rejected the
     # second link — that's the bug a returning visitor reported.
     existing_customer_id = identity.customer_id
+
+    # New customers MUST supply a PAN — the COF step will need it.
+    # Returning customers reuse the existing default method and don't.
+    if not existing_customer_id and not card_pan.strip():
+        await store.update(session)
+        return await _render_failed(
+            request, session, "policy.payment.method.invalid_card"
+        )
+
     if existing_customer_id:
         session.customer_id = existing_customer_id
         # Skip create-customer (already exists), KYC (already attested
