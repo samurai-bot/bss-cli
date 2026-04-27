@@ -11,8 +11,9 @@
   --fg: #d8d8d4;
   --fg-muted: #8a8f99;
   --fg-dim: #5a5e66;
-  --accent: #9fe870;           /* phosphor green */
-  --accent-dim: #5a7d3a;
+  --accent: #74d535;           /* phosphor green — deepened v0.11 for contrast */
+  --accent-bright: #9fe870;    /* the previous shade, kept as the hover lift */
+  --accent-dim: #4d8a22;
   --accent-amber: #ffb454;
   --accent-error: #ff6b6b;
   --border: #2a2e38;
@@ -47,7 +48,7 @@ a {
   text-underline-offset: 2px;
 }
 a:visited { color: var(--accent); }
-a:hover { color: #cdf5a8; text-decoration-color: var(--accent); }
+a:hover { color: var(--accent-bright); text-decoration-color: var(--accent); }
 a:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
