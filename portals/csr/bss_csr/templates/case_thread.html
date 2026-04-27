@@ -59,4 +59,27 @@
   <p class="empty-state">No notes yet. The operator can add one by asking the agent on the customer's 360 view.</p>
   {% endif %}
 </section>
+
+{# v0.12 — chat transcript (only when the case was opened from the
+   customer chat surface via case.open_for_me). The hash is rendered
+   so the operator can quote it; the body is pre-formatted so
+   indentation and newlines from the conversation survive. #}
+{% if case.chat_transcript_hash %}
+<section class="three-sixty-section chat-transcript-section">
+  <h2>Chat transcript</h2>
+  <p class="chat-transcript-meta">
+    Linked transcript hash: <code>{{ case.chat_transcript_hash[:16] }}…</code>
+    {% if transcript and transcript.recorded_at %}
+      · recorded <code>{{ transcript.recorded_at[:19] | replace('T', ' ') }}</code>
+    {% endif %}
+  </p>
+  {% if transcript and transcript.body %}
+    <pre class="chat-transcript-body">{{ transcript.body }}</pre>
+  {% elif transcript and transcript.error %}
+    <p class="empty-state">{{ transcript.error }}</p>
+  {% else %}
+    <p class="empty-state">Transcript is linked but not yet loaded.</p>
+  {% endif %}
+</section>
+{% endif %}
 {% endblock %}
