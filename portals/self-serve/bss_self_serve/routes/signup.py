@@ -79,6 +79,25 @@ async def signup_form(
     plan = find_plan(flatten_offerings(raw), plan_id)
     if plan is None:
         raise HTTPException(status_code=404, detail=f"Unknown plan: {plan_id}")
+
+    # v0.11 — second-line UX. If the verified identity is already
+    # linked to a customer, pre-fill the name field from the CRM
+    # individual record so the user doesn't retype "Ada Lovelace"
+    # the second time they add a line. Best-effort read; falls back
+    # to empty placeholder behaviour if the CRM call fails.
+    prefill_name = ""
+    is_returning = bool(identity.customer_id)
+    if is_returning:
+        try:
+            cust = await clients.crm.get_customer(identity.customer_id)
+            ind = cust.get("individual") if isinstance(cust, dict) else None
+            if isinstance(ind, dict):
+                given = ind.get("givenName") or ind.get("given_name") or ""
+                family = ind.get("familyName") or ind.get("family_name") or ""
+                prefill_name = f"{given} {family}".strip()
+        except Exception:  # noqa: BLE001 — best-effort read
+            prefill_name = ""
+
     return templates.TemplateResponse(
         request,
         "signup.html",
@@ -88,6 +107,8 @@ async def signup_form(
             "msisdn_display": _format_msisdn(msisdn),
             "kyc_attestation_id": KYC_PREBAKED_ATTESTATION_ID,
             "identity_email": identity.email,
+            "prefill_name": prefill_name,
+            "is_returning": is_returning,
         },
     )
 

@@ -71,13 +71,18 @@ body { display: flex; flex-direction: column; }
   margin: 0 auto;
 }
 /* v0.11+ — single-column variant for pages without the agent-log
-   sidebar. Centers the main column at a comfortable reading width
-   instead of stretching it across the 2-col grid (which read as
-   "afterthought" once the right-hand widget went away). Set on
-   ``<main>`` whenever ``show_agent_log`` is falsy in base.html. */
+   sidebar. The grid collapses to a single ``1fr`` column, and the
+   main card is constrained + centered via its own max-width + auto
+   margins (more reliable across browsers than ``justify-content``
+   on a CSS-grid track). Set on ``<main>`` whenever ``show_agent_log``
+   is falsy in base.html. */
 .portal-layout--single-column {
-  grid-template-columns: minmax(0, 720px);
-  justify-content: center;
+  grid-template-columns: 1fr;
+}
+.portal-layout--single-column .portal-main {
+  max-width: 800px;
+  width: 100%;
+  margin: 0 auto;
 }
 .portal-main {
   background: var(--bg-elev);
@@ -87,6 +92,25 @@ body { display: flex; flex-direction: column; }
   min-height: 500px;
 }
 .portal-aside { display: flex; flex-direction: column; }
+
+/* v0.11+ — narrow-viewport polish. The portal is desktop-first by
+   doctrine but signup is increasingly opened on phones (real-portal
+   feedback 2026-04-27). Below 720px: collapse the 2-col grid (agent
+   log drops below main), squeeze padding, let plan cards stack. */
+@media (max-width: 720px) {
+  .portal-layout {
+    grid-template-columns: 1fr;
+    padding: 12px;
+    gap: 16px;
+  }
+  .portal-main {
+    padding: 18px;
+    min-height: 0;
+  }
+  .portal-layout--single-column .portal-main {
+    max-width: none;
+  }
+}
 
 .portal-footer {
   padding: 12px 28px;

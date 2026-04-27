@@ -29,13 +29,31 @@
       <span class="signed-in-as-note">— this email will be used for the new account</span>
     </div>
     <label>Name
-      <input type="text" name="name" required autocomplete="name" placeholder="Ada Lovelace" />
+      <input type="text" name="name" required autocomplete="name"
+             placeholder="Ada Lovelace"
+             value="{{ prefill_name or '' }}" />
     </label>
     <label>Contact phone
       <input type="tel" name="phone" required autocomplete="tel" placeholder="+65 9000 0000" value="+65" />
     </label>
+    {% if is_returning %}
+    <p class="form-hint">
+      Welcome back — your name's pre-filled from your existing line.
+      The new line will be charged to the card on file you used last
+      time, so you don't need to re-enter card details.
+    </p>
+    {% endif %}
   </fieldset>
 
+  {% if is_returning %}
+    {# v0.11 — second-line shortcut. Returning visitors keep their
+       existing KYC attestation + default card on file; the chain
+       skips both steps server-side, so the form drops the prompts
+       too. ``card_pan`` is still submitted as an empty hidden field
+       to satisfy the POST /signup form contract; the route ignores
+       it on the reuse path. #}
+    <input type="hidden" name="card_pan" value="" />
+  {% else %}
   <fieldset>
     <legend>Identity verification</legend>
     <div class="kyc-badge">
@@ -57,7 +75,8 @@
     </label>
     <p class="form-hint">Mock tokenizer — any Luhn-valid PAN approves. <code>4242 4242 4242 4242</code> is the test card.</p>
   </fieldset>
+  {% endif %}
 
-  <button class="form-submit" type="submit">Activate {{ plan.id }}</button>
+  <button class="form-submit" type="submit">{% if is_returning %}Add line on {{ plan.id }}{% else %}Activate {{ plan.id }}{% endif %}</button>
 </form>
 {% endblock %}
