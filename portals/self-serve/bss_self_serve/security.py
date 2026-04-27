@@ -43,6 +43,9 @@ PUBLIC_EXACT_PATHS: Final[frozenset[str]] = frozenset({
     "/health/live",
     "/welcome",
     "/plans",
+    # v0.12 PR20 — legal pages public by design.
+    "/terms",
+    "/privacy",
     # Convenience: `/` redirects to /welcome for anonymous visitors,
     # which the dashboard route does itself by raising RedirectToLogin.
 })

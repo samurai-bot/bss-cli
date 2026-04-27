@@ -157,6 +157,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         confirmation,
         esim,
         landing,
+        legal,
         msisdn_picker,
         payment_methods,
         plan_change,
@@ -169,6 +170,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(auth.router)
     app.include_router(welcome.router)
+    # v0.12 PR20 — public legal pages.
+    app.include_router(legal.router)
     app.include_router(landing.router)
     app.include_router(msisdn_picker.router)
     app.include_router(signup.router)
