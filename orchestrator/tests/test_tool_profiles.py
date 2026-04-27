@@ -229,3 +229,158 @@ async def test_payment_method_list_mine_binds_actor(reset_actor_after) -> None:
 
     assert result == [{"id": "PM-1"}]
     fake_clients.payment.list_methods.assert_called_once_with("CUST-042")
+
+
+# ─── 4. Write wrappers (PR3) ────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_vas_purchase_for_me_blocks_cross_customer(
+    reset_actor_after,
+) -> None:
+    from bss_orchestrator.tools.mine_wrappers import (
+        _NotOwnedByActor,
+        vas_purchase_for_me,
+    )
+
+    fake_clients = AsyncMock()
+    fake_clients.subscription.get = AsyncMock(
+        return_value={"id": "SUB-9", "customerId": "CUST-OTHER"}
+    )
+
+    token = auth_context.set_actor("CUST-042")
+    try:
+        with patch(
+            "bss_orchestrator.tools.mine_wrappers.get_clients",
+            return_value=fake_clients,
+        ):
+            with pytest.raises(_NotOwnedByActor):
+                await vas_purchase_for_me("SUB-9", "VAS_DATA_5GB")
+    finally:
+        auth_context.reset_actor(token)
+    fake_clients.subscription.purchase_vas.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_vas_purchase_for_me_passes_through_when_owned(
+    reset_actor_after,
+) -> None:
+    from bss_orchestrator.tools.mine_wrappers import vas_purchase_for_me
+
+    fake_clients = AsyncMock()
+    fake_clients.subscription.get = AsyncMock(
+        return_value={"id": "SUB-9", "customerId": "CUST-042"}
+    )
+    fake_clients.subscription.purchase_vas = AsyncMock(
+        return_value={"id": "SUB-9", "state": "active"}
+    )
+
+    token = auth_context.set_actor("CUST-042")
+    try:
+        with patch(
+            "bss_orchestrator.tools.mine_wrappers.get_clients",
+            return_value=fake_clients,
+        ):
+            result = await vas_purchase_for_me("SUB-9", "VAS_DATA_5GB")
+    finally:
+        auth_context.reset_actor(token)
+
+    assert result == {"id": "SUB-9", "state": "active"}
+    fake_clients.subscription.purchase_vas.assert_called_once_with(
+        "SUB-9", "VAS_DATA_5GB"
+    )
+
+
+@pytest.mark.asyncio
+async def test_subscription_terminate_mine_uses_chat_reason(
+    reset_actor_after,
+) -> None:
+    from bss_orchestrator.tools.mine_wrappers import subscription_terminate_mine
+
+    fake_clients = AsyncMock()
+    fake_clients.subscription.get = AsyncMock(
+        return_value={"id": "SUB-7", "customerId": "CUST-042"}
+    )
+    fake_clients.subscription.terminate = AsyncMock(
+        return_value={"id": "SUB-7", "state": "terminated"}
+    )
+
+    token = auth_context.set_actor("CUST-042")
+    try:
+        with patch(
+            "bss_orchestrator.tools.mine_wrappers.get_clients",
+            return_value=fake_clients,
+        ):
+            result = await subscription_terminate_mine("SUB-7")
+    finally:
+        auth_context.reset_actor(token)
+
+    assert result["state"] == "terminated"
+    fake_clients.subscription.terminate.assert_called_once_with(
+        "SUB-7", reason="customer_chat"
+    )
+
+
+def test_subscription_terminate_mine_is_destructive() -> None:
+    from bss_orchestrator.safety import DESTRUCTIVE_TOOLS
+
+    assert "subscription.terminate_mine" in DESTRUCTIVE_TOOLS, (
+        "The chat-side terminate wrapper must remain destructive — "
+        "the operation is irreversible regardless of the wrapping."
+    )
+
+
+@pytest.mark.asyncio
+async def test_schedule_plan_change_mine_blocks_cross_customer(
+    reset_actor_after,
+) -> None:
+    from bss_orchestrator.tools.mine_wrappers import (
+        _NotOwnedByActor,
+        subscription_schedule_plan_change_mine,
+    )
+
+    fake_clients = AsyncMock()
+    fake_clients.subscription.get = AsyncMock(
+        return_value={"id": "SUB-9", "customerId": "CUST-OTHER"}
+    )
+
+    token = auth_context.set_actor("CUST-042")
+    try:
+        with patch(
+            "bss_orchestrator.tools.mine_wrappers.get_clients",
+            return_value=fake_clients,
+        ):
+            with pytest.raises(_NotOwnedByActor):
+                await subscription_schedule_plan_change_mine("SUB-9", "PLAN_L")
+    finally:
+        auth_context.reset_actor(token)
+
+
+@pytest.mark.asyncio
+async def test_cancel_pending_plan_change_mine_idempotent_when_owned(
+    reset_actor_after,
+) -> None:
+    from bss_orchestrator.tools.mine_wrappers import (
+        subscription_cancel_pending_plan_change_mine,
+    )
+
+    fake_clients = AsyncMock()
+    fake_clients.subscription.get = AsyncMock(
+        return_value={"id": "SUB-9", "customerId": "CUST-042"}
+    )
+    fake_clients.subscription.cancel_plan_change = AsyncMock(
+        return_value={"id": "SUB-9"}
+    )
+
+    token = auth_context.set_actor("CUST-042")
+    try:
+        with patch(
+            "bss_orchestrator.tools.mine_wrappers.get_clients",
+            return_value=fake_clients,
+        ):
+            result = await subscription_cancel_pending_plan_change_mine("SUB-9")
+    finally:
+        auth_context.reset_actor(token)
+
+    assert result == {"id": "SUB-9"}
+    fake_clients.subscription.cancel_plan_change.assert_called_once_with("SUB-9")

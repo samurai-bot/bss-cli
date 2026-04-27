@@ -42,8 +42,8 @@ TOOL_PROFILES: dict[str, set[str]] = {
     # public catalog read or a ``*.mine``/``*_for_me`` wrapper that
     # binds customer_id from auth_context.
     #
-    # PR2 ships the read-only tools below.
-    # PR3 will add the four write *.mine wrappers.
+    # PR2 shipped the read-only tools.
+    # PR3 added the four write *.mine wrappers.
     # PR6 will add case.open_for_me.
     "customer_self_serve": {
         # public catalog reads — no customer-bound output, safe in any
@@ -60,11 +60,11 @@ TOOL_PROFILES: dict[str, set[str]] = {
         "customer.get_mine",
         "payment.method_list_mine",
         "payment.charge_history_mine",
-        # write .mine wrappers — added in PR3:
-        # "vas.purchase_for_me",
-        # "subscription.schedule_plan_change_mine",
-        # "subscription.cancel_pending_plan_change_mine",
-        # "subscription.terminate_mine",
+        # write .mine wrappers (PR3)
+        "vas.purchase_for_me",
+        "subscription.schedule_plan_change_mine",
+        "subscription.cancel_pending_plan_change_mine",
+        "subscription.terminate_mine",
         # case open — added in PR6:
         # "case.open_for_me",
     },

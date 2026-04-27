@@ -31,7 +31,13 @@ from typing import Any
 
 from .. import auth_context
 from ..clients import get_clients
-from ..types import IsoDatetime, SubscriptionId, UsageEventType
+from ..types import (
+    IsoDatetime,
+    ProductOfferingId,
+    SubscriptionId,
+    UsageEventType,
+    VasOfferingId,
+)
 from ._registry import register
 
 
@@ -309,4 +315,144 @@ async def payment_charge_history_mine(
     actor = _require_actor()
     return await get_clients().payment.list_payments(
         customer_id=actor, limit=limit
+    )
+
+
+# ─── Writes (PR3) ────────────────────────────────────────────────────
+
+
+@register("vas.purchase_for_me")
+async def vas_purchase_for_me(
+    subscription_id: SubscriptionId,
+    vas_offering_id: VasOfferingId,
+) -> dict[str, Any]:
+    """Purchase a VAS top-up for one of the logged-in customer's
+    subscriptions. Charges the customer's default card on file.
+
+    Use this when the customer asks to top up data / minutes / SMS,
+    or to recover from a blocked-on-exhaust line. Pick the VAS id
+    from ``catalog.list_vas`` — never invent one.
+
+    Args:
+        subscription_id: SUB-NNN owned by the actor.
+        vas_offering_id: VAS offering id (e.g. ``VAS_DATA_5GB``)
+            from ``catalog.list_vas``.
+
+    Returns:
+        Updated subscription dict with the refreshed balances. If the
+        line was ``blocked``, expect ``state="active"`` now.
+
+    Raises:
+        policy.subscription.not_owned_by_actor: subscription belongs
+            to another customer.
+        chat.no_actor_bound: invoked outside a chat-scoped session.
+        PolicyViolationFromServer: e.g.
+            ``subscription.vas_purchase.requires_active_cof`` (no
+            valid card on file — the customer must add one in the
+            payment-methods page first).
+    """
+    actor = _require_actor()
+    await _assert_subscription_owned(subscription_id, actor)
+    return await get_clients().subscription.purchase_vas(
+        subscription_id, vas_offering_id
+    )
+
+
+@register("subscription.schedule_plan_change_mine")
+async def subscription_schedule_plan_change_mine(
+    subscription_id: SubscriptionId,
+    new_offering_id: ProductOfferingId,
+) -> dict[str, Any]:
+    """Schedule a plan change on one of the logged-in customer's
+    subscriptions. Applies at the next renewal — **no proration**.
+
+    The new offering's price is snapshotted now; renewal day charges
+    the snapshot regardless of catalog moves in between. Tell the
+    customer the renewal date and that the current plan continues
+    until then.
+
+    Args:
+        subscription_id: SUB-NNN owned by the actor.
+        new_offering_id: Target offering (e.g. ``PLAN_L``). Must be
+            in the active catalog and different from the current
+            plan.
+
+    Returns:
+        Updated subscription dict with ``pendingOfferingId`` /
+        ``pendingOfferingPriceId`` / ``pendingEffectiveAt`` populated.
+
+    Raises:
+        policy.subscription.not_owned_by_actor: subscription belongs
+            to another customer.
+        chat.no_actor_bound: invoked outside a chat-scoped session.
+        PolicyViolationFromServer: e.g.
+            ``subscription.plan_change.same_offering`` /
+            ``subscription.plan_change.already_pending`` /
+            ``subscription.plan_change.target_not_sellable_now``.
+    """
+    actor = _require_actor()
+    await _assert_subscription_owned(subscription_id, actor)
+    return await get_clients().subscription.schedule_plan_change(
+        subscription_id, new_offering_id
+    )
+
+
+@register("subscription.cancel_pending_plan_change_mine")
+async def subscription_cancel_pending_plan_change_mine(
+    subscription_id: SubscriptionId,
+) -> dict[str, Any]:
+    """Cancel a previously-scheduled plan change on one of the
+    logged-in customer's subscriptions. Idempotent — no-op if there
+    is nothing pending.
+
+    Args:
+        subscription_id: SUB-NNN owned by the actor.
+
+    Returns:
+        Updated subscription dict with the pending fields cleared.
+
+    Raises:
+        policy.subscription.not_owned_by_actor: subscription belongs
+            to another customer.
+        chat.no_actor_bound: invoked outside a chat-scoped session.
+    """
+    actor = _require_actor()
+    await _assert_subscription_owned(subscription_id, actor)
+    return await get_clients().subscription.cancel_plan_change(subscription_id)
+
+
+@register("subscription.terminate_mine")
+async def subscription_terminate_mine(
+    subscription_id: SubscriptionId,
+) -> dict[str, Any]:
+    """**DESTRUCTIVE — releases the MSISDN + eSIM, no undo.** Gated
+    by ``safety.py``. Terminate one of the logged-in customer's
+    own subscriptions. Used only when the customer explicitly asks
+    to cancel a specific line by name.
+
+    Never call as a "fix" for a blocked / exhausted subscription;
+    for that, use ``vas.purchase_for_me`` (non-destructive, adds
+    allowance).
+
+    The ``reason`` carried into the audit trail is
+    ``"customer_chat"`` so subsequent investigation distinguishes
+    chat-driven terminations from CSR / scenario / API ones.
+
+    Args:
+        subscription_id: SUB-NNN owned by the actor.
+
+    Returns:
+        Updated subscription dict with ``state="terminated"``.
+
+    Raises:
+        policy.subscription.not_owned_by_actor: subscription belongs
+            to another customer.
+        chat.no_actor_bound: invoked outside a chat-scoped session.
+        PolicyViolationFromServer:
+            ``subscription.terminate.already_terminated``.
+    """
+    actor = _require_actor()
+    await _assert_subscription_owned(subscription_id, actor)
+    return await get_clients().subscription.terminate(
+        subscription_id, reason="customer_chat"
     )

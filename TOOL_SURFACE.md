@@ -205,9 +205,7 @@ sees only the entries below plus the public catalog reads
 ``catalog.list_vas``, ``catalog.list_active_offerings``,
 ``catalog.get_offering``.
 
-PR3 will add the four write wrappers (`vas.purchase_for_me`,
-`subscription.{schedule_plan_change,cancel_pending_plan_change,terminate}_mine`)
-and PR6 adds `case.open_for_me`.
+PR6 adds `case.open_for_me`.
 
 | Tool | Type | Description |
 |---|---|---|
@@ -219,6 +217,10 @@ and PR6 adds `case.open_for_me`.
 | `customer.get_mine` | read | The actor's own customer record. |
 | `payment.method_list_mine` | read | The actor's cards on file. |
 | `payment.charge_history_mine` | read | The actor's payment-attempt history. |
+| `vas.purchase_for_me` | create | VAS top-up on one of the actor's subscriptions; charges default COF. |
+| `subscription.schedule_plan_change_mine` | update | Schedule the next-renewal plan change on the actor's subscription. No proration. |
+| `subscription.cancel_pending_plan_change_mine` | update | Clear a pending plan change. Idempotent. |
+| `subscription.terminate_mine` | destructive | Terminate one of the actor's lines — releases MSISDN + eSIM. Gated by `safety.py`; `reason="customer_chat"` for audit attribution. |
 
 ## Admin tools — `(admin only, not in LLM registry)`
 
