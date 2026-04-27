@@ -57,6 +57,7 @@ Every CLI/LLM action that hits a write tool automatically creates an `interactio
 | `case.update_priority` | update | |
 | `case.transition` | update | Explicit state transition |
 | `case.close` | update | Policy: all tickets resolved + resolution code |
+| `case.show_transcript_for` | read | v0.12 — CSR-side: retrieve the chat transcript linked to a case (when set by `case.open_for_me`). |
 
 ## Ticket tools (CRM)
 
@@ -205,7 +206,7 @@ sees only the entries below plus the public catalog reads
 ``catalog.list_vas``, ``catalog.list_active_offerings``,
 ``catalog.get_offering``.
 
-PR6 adds `case.open_for_me`.
+v0.12 PR6 ships the escalation tool.
 
 | Tool | Type | Description |
 |---|---|---|
@@ -221,6 +222,7 @@ PR6 adds `case.open_for_me`.
 | `subscription.schedule_plan_change_mine` | update | Schedule the next-renewal plan change on the actor's subscription. No proration. |
 | `subscription.cancel_pending_plan_change_mine` | update | Clear a pending plan change. Idempotent. |
 | `subscription.terminate_mine` | destructive | Terminate one of the actor's lines — releases MSISDN + eSIM. Gated by `safety.py`; `reason="customer_chat"` for audit attribution. |
+| `case.open_for_me` | create | Open an escalation case on the actor's behalf for one of the five non-negotiable categories (fraud / billing_dispute / regulator_complaint / identity_recovery / bereavement, plus `other`). The transcript is hashed + persisted; the case carries the hash. |
 
 ## Admin tools — `(admin only, not in LLM registry)`
 

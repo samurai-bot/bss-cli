@@ -156,6 +156,19 @@ TicketState = Literal[
 ]
 CasePriority = Literal["low", "medium", "high", "critical"]
 CaseCategory = Literal["technical", "billing", "account", "information"]
+EscalationCategory = Literal[
+    # The five non-negotiable v0.12 chat escalation categories per
+    # phases/V0_12_0.md §4.4. Plus ``other`` as a catch-all the CSR
+    # re-categorises during triage. Adding a sixth category is a
+    # doctrine decision — the system prompt, the enum here, and the
+    # case-open route encode the same list.
+    "fraud",
+    "billing_dispute",
+    "regulator_complaint",
+    "identity_recovery",
+    "bereavement",
+    "other",
+]
 TicketType = Literal[
     "service_outage",
     "billing_issue",

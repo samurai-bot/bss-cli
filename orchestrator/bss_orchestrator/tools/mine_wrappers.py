@@ -29,9 +29,12 @@ from __future__ import annotations
 
 from typing import Any
 
+import hashlib
+
 from .. import auth_context
 from ..clients import get_clients
 from ..types import (
+    EscalationCategory,
     IsoDatetime,
     ProductOfferingId,
     SubscriptionId,
@@ -455,4 +458,110 @@ async def subscription_terminate_mine(
     await _assert_subscription_owned(subscription_id, actor)
     return await get_clients().subscription.terminate(
         subscription_id, reason="customer_chat"
+    )
+
+
+# ─── Escalation (PR6) ────────────────────────────────────────────────
+
+
+# Map the v0.12 EscalationCategory enum to the existing CRM
+# CaseCategory taxonomy so cases land in the right CSR queue.
+_ESCALATION_TO_CASE_CATEGORY: dict[str, str] = {
+    "fraud": "account",
+    "billing_dispute": "billing",
+    "regulator_complaint": "account",
+    "identity_recovery": "account",
+    "bereavement": "account",
+    "other": "information",
+}
+
+# Default priority per escalation category. Fraud / regulator /
+# identity-recovery skip the queue; bereavement gets human attention
+# but isn't an emergency; billing disputes default to medium and
+# CSRs adjust on triage.
+_ESCALATION_TO_PRIORITY: dict[str, str] = {
+    "fraud": "high",
+    "billing_dispute": "medium",
+    "regulator_complaint": "high",
+    "identity_recovery": "high",
+    "bereavement": "medium",
+    "other": "medium",
+}
+
+
+@register("case.open_for_me")
+async def case_open_for_me(
+    category: EscalationCategory,
+    subject: str,
+    description: str,
+) -> dict[str, Any]:
+    """Open a case on the logged-in customer's behalf for an out-of-
+    scope escalation. Use this when the conversation hits one of the
+    five non-negotiable categories the AI must not attempt to resolve
+    alone:
+
+    - ``fraud`` — unauthorised charges, account takeover suspicion,
+      stolen card.
+    - ``billing_dispute`` — customer disputes a charge or refund
+      decision.
+    - ``regulator_complaint`` — IMDA / regulatory inquiry / formal
+      complaint.
+    - ``identity_recovery`` — account access lost; cannot prove
+      identity through the standard self-serve flow.
+    - ``bereavement`` — customer is calling on behalf of a deceased
+      account holder.
+
+    ``other`` is a CSR-triaged catch-all; CSRs re-categorise on
+    review. Do not invent a sixth category.
+
+    The full chat transcript up to and including this turn is hashed
+    (SHA-256) and persisted via ``crm.store_chat_transcript`` before
+    the case is opened. The case row carries the hash so a CSR can
+    retrieve the conversation via ``case.show_transcript_for``.
+
+    After calling this tool, tell the customer plainly: "I've
+    escalated this to a human agent — you'll hear back within 24
+    hours via email at <email>." Do not promise a faster turnaround;
+    do not attempt the resolution yourself.
+
+    Args:
+        category: One of the five non-negotiable categories or
+            ``other`` for ambiguous escalations.
+        subject: One-line case subject. Concrete, e.g.
+            ``"Disputes charge on 2026-04-25 — claims unauthorised"``.
+        description: One-paragraph free text. Capture what the
+            customer said and any relevant context. The transcript
+            link gives the CSR the full conversation.
+
+    Returns:
+        Case dict from ``crm.open_case``, including the new case id
+        and ``chatTranscriptHash`` field. Render the id back to the
+        customer so they can quote it if calling in.
+
+    Raises:
+        chat.no_actor_bound: invoked outside a chat-scoped session.
+        PolicyViolationFromServer:
+            ``case.open.customer_must_be_active``: customer record is
+            in pending/closed state — escalate via a different path.
+    """
+    actor = _require_actor()
+    transcript = auth_context.current().transcript or ""
+    transcript_hash = hashlib.sha256(transcript.encode("utf-8")).hexdigest()
+
+    # Persist the transcript first; the case carries its hash and
+    # store_chat_transcript is idempotent so a retry on transient
+    # error doesn't double-write.
+    await get_clients().crm.store_chat_transcript(
+        hash_=transcript_hash,
+        customer_id=actor,
+        body=transcript,
+    )
+
+    return await get_clients().crm.open_case(
+        customer_id=actor,
+        subject=subject,
+        category=_ESCALATION_TO_CASE_CATEGORY[category],
+        priority=_ESCALATION_TO_PRIORITY[category],
+        description=f"[{category}] {description}",
+        chat_transcript_hash=transcript_hash,
     )

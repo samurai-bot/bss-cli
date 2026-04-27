@@ -65,8 +65,9 @@ TOOL_PROFILES: dict[str, set[str]] = {
         "subscription.schedule_plan_change_mine",
         "subscription.cancel_pending_plan_change_mine",
         "subscription.terminate_mine",
-        # case open — added in PR6:
-        # "case.open_for_me",
+        # case open (PR6) — escalation to a human via the five
+        # non-negotiable categories.
+        "case.open_for_me",
     },
 }
 

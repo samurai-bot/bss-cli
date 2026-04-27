@@ -31,16 +31,23 @@ from dataclasses import dataclass
 class AuthContext:
     """The orchestrator-process view of who is asking.
 
-    Currently a single field; mirrors the service-side richer
+    Currently two fields; mirrors the service-side richer
     AuthContext (with tenant, roles, etc.) as the surface that needs
-    to grow when Phase 12 ships RBAC. For v0.12 only ``actor`` is
-    consumed.
+    to grow when Phase 12 ships RBAC. For v0.12 only ``actor`` and
+    ``transcript`` are consumed.
 
     actor is the customer id (``CUST-NNN``) for chat sessions, or
     ``None`` outside a chat-scoped invocation.
+
+    transcript is the running text of the current chat session up to
+    the most recent turn. ``case.open_for_me`` reads this when a
+    customer escalates so the resulting case carries the conversation
+    that prompted it. The chat route populates it when starting an
+    ``astream_once`` invocation.
     """
 
     actor: str | None = None
+    transcript: str = ""
 
 
 _NONE = AuthContext(actor=None)
@@ -57,18 +64,19 @@ def current() -> AuthContext:
     return _current.get()
 
 
-def set_actor(actor: str) -> Token[AuthContext]:
-    """Bind ``actor`` for the rest of the current Context.
+def set_actor(actor: str, *, transcript: str = "") -> Token[AuthContext]:
+    """Bind ``actor`` (and optionally a chat transcript) for the rest
+    of the current Context.
 
     Returns a Token so callers can ``reset_actor`` on exit. Use as::
 
-        token = set_actor(customer_id)
+        token = set_actor(customer_id, transcript=running_text)
         try:
             ...
         finally:
             reset_actor(token)
     """
-    return _current.set(AuthContext(actor=actor))
+    return _current.set(AuthContext(actor=actor, transcript=transcript))
 
 
 def reset_actor(token: Token[AuthContext]) -> None:

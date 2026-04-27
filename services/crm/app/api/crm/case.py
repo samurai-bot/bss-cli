@@ -30,6 +30,7 @@ async def open_case(
         priority=body.priority,
         category=body.category,
         opened_by_agent_id=body.opened_by_agent_id,
+        chat_transcript_hash=body.chat_transcript_hash,
     )
     case = await svc.get_case(case.id)
     return to_case_response(case)

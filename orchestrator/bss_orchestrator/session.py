@@ -302,6 +302,7 @@ async def astream_once(
     service_identity: str | None = None,
     tool_filter: str | None = None,
     system_prompt: str | None = None,
+    transcript: str = "",
 ) -> AsyncIterator[AgentEvent]:
     """Streaming variant of ``ask_once``. Yields ``AgentEvent`` as the graph runs.
 
@@ -381,12 +382,16 @@ async def astream_once(
 
         # v0.12 — bind the orchestrator-side auth_context for the
         # duration of this stream so the customer profile's *.mine
-        # wrappers can read auth_context.current().actor. Reset in
-        # finally so a stream that raises still leaves a clean
-        # Context for whatever runs next.
+        # wrappers can read auth_context.current().actor. The
+        # transcript carries the chat-session conversation history
+        # for case.open_for_me's transcript-link when a customer
+        # escalates. Reset in finally so a stream that raises still
+        # leaves a clean Context for whatever runs next.
         auth_reset_token = None
         if actor:
-            auth_reset_token = auth_context.set_actor(actor)
+            auth_reset_token = auth_context.set_actor(
+                actor, transcript=transcript
+            )
 
         try:
             yield AgentEventPromptReceived(prompt=prompt)

@@ -19,6 +19,9 @@ class CaseResponse(BaseModel):
     closed_at: datetime | None = None
     notes: list["CaseNoteResponse"] = []
     ticket_ids: list[str] = []
+    # v0.12 — set when case.open_for_me opens the case from the chat
+    # surface; references audit.chat_transcript.hash. NULL otherwise.
+    chat_transcript_hash: str | None = None
 
 
 class CaseNoteResponse(BaseModel):
@@ -36,6 +39,11 @@ class OpenCaseRequest(BaseModel):
     priority: str = "normal"
     category: str = "general"
     opened_by_agent_id: str | None = None
+    # v0.12 — set by case.open_for_me when the case is opened from
+    # the chat surface. The transcript itself must already have been
+    # POSTed to /crm-api/v1/chat-transcript before this call so the
+    # hash resolves on retrieval.
+    chat_transcript_hash: str | None = None
 
 
 class UpdateCaseRequest(BaseModel):
@@ -81,6 +89,7 @@ def to_case_response(c) -> CaseResponse:
             for n in (c.notes or [])
         ],
         ticket_ids=[t.id for t in (c.tickets or [])],
+        chat_transcript_hash=getattr(c, "chat_transcript_hash", None),
     )
 
 

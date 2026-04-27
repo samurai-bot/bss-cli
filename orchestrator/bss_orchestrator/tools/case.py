@@ -145,6 +145,38 @@ async def case_transition(case_id: CaseId, to_state: CaseState) -> dict[str, Any
     return await get_clients().crm.transition_case(case_id, to_state=to_state)
 
 
+@register("case.show_transcript_for")
+async def case_show_transcript_for(case_id: CaseId) -> dict[str, Any]:
+    """Retrieve the chat transcript linked to a case (if any).
+
+    v0.12 — used by the CSR console's case-detail page to show the
+    conversation that led to an AI-opened escalation. Not in the
+    customer chat profile (CSRs are the audience).
+
+    Args:
+        case_id: Case ID in CASE-NNN format.
+
+    Returns:
+        ``{"transcript": <body>, "customerId": ..., "recordedAt": ...}``
+        when the case has a chat_transcript_hash and the transcript
+        row exists. ``{"transcript": null, "reason":
+        "no_transcript_linked"}`` when the case carries no hash
+        (CSR-opened, scenario-opened, or pre-v0.12 case).
+
+    Raises:
+        NotFound: the case has a hash but the transcript row is
+            missing — investigate (transcript archived, hash
+            corrupted, or DB inconsistency).
+    """
+    case = await get_clients().crm.get_case(case_id)
+    transcript_hash = case.get("chatTranscriptHash") or case.get(
+        "chat_transcript_hash"
+    )
+    if not transcript_hash:
+        return {"transcript": None, "reason": "no_transcript_linked"}
+    return await get_clients().crm.get_chat_transcript(transcript_hash)
+
+
 @register("case.close")
 async def case_close(case_id: CaseId, resolution_code: str) -> dict[str, Any]:
     """Close a case with a resolution code. Requires all child tickets to be

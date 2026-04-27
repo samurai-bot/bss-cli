@@ -110,7 +110,8 @@ OWNERSHIP_PATHS: dict[str, list[str]] = {
     "subscription.schedule_plan_change_mine": ["customerId"],
     "subscription.cancel_pending_plan_change_mine": ["customerId"],
     "subscription.terminate_mine": ["customerId"],
-    # Note: case.open_for_me's entry is added in PR6.
+    # PR6 — the case-open response carries the actor's customerId.
+    "case.open_for_me": ["customerId"],
 }
 
 
