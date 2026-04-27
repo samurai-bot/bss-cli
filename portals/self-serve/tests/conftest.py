@@ -78,8 +78,13 @@ class FakeSubscription:
 class FakeInventory:
     activations: dict[str, dict[str, Any]] = field(default_factory=dict)
     msisdns: list[dict[str, Any]] = field(default_factory=list)
+    next_error: Exception | None = None
 
     async def get_activation_code(self, iccid: str) -> dict[str, Any]:
+        if self.next_error is not None:
+            err = self.next_error
+            self.next_error = None
+            raise err
         if iccid not in self.activations:
             raise KeyError(iccid)
         return dict(self.activations[iccid])
@@ -303,7 +308,8 @@ def client(fake_clients: FakeClientsBundle):
          patch("bss_self_serve.routes.msisdn_picker.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.landing.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.top_up.get_clients", return_value=fake_clients), \
-         patch("bss_self_serve.routes.payment_methods.get_clients", return_value=fake_clients):
+         patch("bss_self_serve.routes.payment_methods.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.esim.get_clients", return_value=fake_clients):
         app = create_app(Settings())
         with TestClient(app) as c:
             yield c
@@ -388,7 +394,8 @@ def authed_client(fake_clients: FakeClientsBundle):
          patch("bss_self_serve.routes.msisdn_picker.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.landing.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.top_up.get_clients", return_value=fake_clients), \
-         patch("bss_self_serve.routes.payment_methods.get_clients", return_value=fake_clients):
+         patch("bss_self_serve.routes.payment_methods.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.esim.get_clients", return_value=fake_clients):
         app = create_app(Settings())
         with TestClient(app) as c:
             c.cookies.set(PORTAL_SESSION_COOKIE, session_id)

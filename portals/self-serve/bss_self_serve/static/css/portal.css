@@ -384,6 +384,67 @@
   font-size: 14px;
 }
 
+/* ─── eSIM view (v0.10) ──────────────────────────────────────── */
+
+.esim-view, .esim-forbidden {
+  max-width: 640px;
+  margin: 32px auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.esim-qr {
+  margin: 0;
+  text-align: center;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 16px;
+}
+.esim-qr img {
+  display: block;
+  margin: 0 auto;
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.esim-qr figcaption {
+  margin-top: 12px;
+  color: var(--fg-muted);
+  font-size: 13px;
+}
+.esim-code-block {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 8px 0;
+}
+.esim-meta-list {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 0;
+  font-size: 13px;
+}
+.esim-meta-list dt { color: var(--fg-muted); }
+.esim-meta-list dd { margin: 0; font-family: var(--mono); }
+.esim-fineprint {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.esim-rearm-note {
+  background: #fff8e1;
+  border: 1px solid #f39c12;
+  border-radius: 4px;
+  padding: 12px 16px;
+  font-size: 14px;
+}
+
 /* ─── Top-up (v0.10) ─────────────────────────────────────────── */
 
 .top-up,

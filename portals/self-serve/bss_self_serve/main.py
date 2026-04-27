@@ -142,6 +142,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         agent_events,
         auth,
         confirmation,
+        esim,
         landing,
         msisdn_picker,
         payment_methods,
@@ -163,6 +164,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # v0.10 — post-login self-serve writes go direct (no orchestrator).
     app.include_router(top_up.router)
     app.include_router(payment_methods.router)
+    app.include_router(esim.router)
 
     return app
 

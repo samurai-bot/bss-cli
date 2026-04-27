@@ -1501,3 +1501,55 @@ DECISIONS entry; the abstraction layer (OpenRouter via openai SDK)
 absorbs it. The Phase-9 design doctrine "code never hardcodes a
 model name — only `.env` does" is what makes this swap a one-line
 change in production, not a refactor.
+
+## 2026-04-27 — v0.10.0 — eSIM redownload is a read-only re-display, not a real rearm
+**Context:** v0.10 PR 6 ships ``/esim/<subscription_id>`` so a
+customer can see their LPA activation code + QR after signup. The
+question that came up during implementation: is this the
+production-realistic flow? In a real GSMA SGP.22 setup, an eSIM
+profile is bound at install time to the device's eUICC EID. Once
+the profile is in ``Installed`` state on SM-DP+, a redownload
+(factory reset, new device, profile lost) typically requires:
+(a) operator-side trigger — BSS calls SM-DP+ to release the
+profile or revoke + mint a new one; (b) SM-DP+ moves the profile
+back to ``Released`` (or issues a fresh activation code with a new
+ICCID/IMSI); (c) the customer scans the new code on the new /
+reset device. Some MVNO setups treat the activation code as a
+stable string for the lifetime of the line (deferred-binding
+profile model), but most operators run the rearm step explicitly.
+**Decision:** Ship a deliberately simplified read-only flow in
+v0.10. The route reads the subscription (ownership-checked) +
+inventory.esim_profile.activation_code and renders the code + an
+inline PNG QR. No SM-DP+ call, no rearm, no device-binding
+semantics, no state change. The simplification is honest in code
+and documented in three places: a CLAUDE.md scope-boundary bullet,
+a ROADMAP non-goal entry naming the future SOM task
+(``ESIM_PROFILE_REARM``), and a route docstring that points at
+this DECISIONS entry. The template caption tells the customer that
+if the code isn't working on a new device they should contact
+support — the operator-side trigger lives outside the customer
+self-serve surface for now.
+**Alternatives:** (a) Punt eSIM from v0.10 entirely — rejected;
+customers couldn't see their LPA at all, including the original
+code from signup, which is the most common request. (b) Land a
+thin "Reinstall on new device" CTA that opens a CSR ticket
+(``case.open(category=esim_rearm)``) — rejected for v0.10; adds a
+new policy + ticket category mid-phase, and the operator-side
+rearm work is missing on the back end. Better to add the CSR-
+ticket bridge in v0.12 alongside the real SM-DP+ adapter than to
+half-ship it now. (c) Build the real rearm flow now — rejected;
+the SM-DP+ adapter is a real-NE-adapter integration concern and
+explicitly out of scope per CLAUDE.md. Half-implementing it
+against the simulator gives a false sense of completeness.
+**Consequences:** Customers see the same activation code each
+time — fine for their original device, fine for v0.10 demo /
+dev. The route is fast, ownership-checked, and produces a
+``portal_action`` audit row only on the admin ``?show_full=1``
+debug branch (no audit row for the regular last-4 view — it's a
+non-sensitive read). Future work is well-scoped: v1.x adds the
+``ESIM_PROFILE_REARM`` SOM task, a ``provisioning.rearm_esim_profile``
+policy, the ``inventory.esim_profile`` state transition, and a
+new POST route on top of the existing read-only one. The seam is
+clean — the simplified read-only re-display stays as the cheap
+default; the rearm bolts on without changing the URL or the
+customer-facing template caption.
