@@ -14,21 +14,22 @@ falls back to ``BSS_API_TOKEN``. Receiving services then resolve
 this with a one-time warning so operators notice and provision the
 named token.
 
-Doctrine note (V0_10_0.md Track 1):
+Doctrine note (V0_10_0.md + V0_11_0.md):
 
-* **(v0.4–v0.9 / signup + chat)** Route handlers on the signup funnel
-  and the ``/chat`` surface continue routing writes through the LLM
-  orchestrator via ``agent_bridge.*`` → ``astream_once``. Reads via
-  this factory.
 * **(v0.10+ / post-login self-serve)** Routes behind
-  ``requires_linked_customer`` may write directly through this
-  factory. The customer principal is bound from
-  ``request.state.customer_id``; per-resource ownership policies and
-  step-up auth gate sensitive writes; one route = one write call.
+  ``requires_linked_customer`` write directly through this factory.
+  The customer principal is bound from ``request.state.customer_id``;
+  per-resource ownership policies and step-up auth gate sensitive
+  writes; one route = one write call.
+* **(v0.11+ / signup)** The signup funnel joins the direct-write side.
+  Steps live in ``routes/signup.py`` (``POST /signup`` →
+  ``/signup/step/{kyc,cof,order,poll}``); each step is one write or
+  zero. The chat surface (when it lands) is the only route that
+  routes writes through the orchestrator.
 
-``make doctrine-check`` enforces the boundary: ``astream_once`` may
-only appear in the chat + signup routes; ``customer_id`` must come
-from ``request.state``, never form/query input.
+``make doctrine-check`` enforces the boundary: the orchestrator
+streaming entrypoint may only appear in chat routes; ``customer_id``
+must come from ``request.state``, never form/query input.
 """
 
 from __future__ import annotations
