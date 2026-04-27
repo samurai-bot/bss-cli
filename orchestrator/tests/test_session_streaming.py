@@ -92,10 +92,11 @@ async def test_tool_call_started_and_completed_pairs() -> None:
 
 
 async def test_final_message_emitted_last() -> None:
-    """FinalMessage is the last agent-rendered event; v0.12 PR5 added
-    a trailing AgentEventTurnUsage as the housekeeping signal for
-    chat_caps.record_chat_turn — assert FinalMessage is the last
-    content event, with TurnUsage following."""
+    """FinalMessage is the last frame the chat route emits; v0.12 PR11
+    moved the housekeeping AgentEventTurnUsage BEFORE FinalMessage
+    so cost accounting lands before SSE consumers disconnect on
+    "status: done". Assert FinalMessage is genuinely last and
+    TurnUsage precedes it."""
     from bss_orchestrator.session import AgentEventTurnUsage
 
     fake = _FakeGraph([
@@ -107,10 +108,12 @@ async def test_final_message_emitted_last() -> None:
     final_msgs = [e for e in events if isinstance(e, AgentEventFinalMessage)]
     assert len(final_msgs) == 1
     assert final_msgs[0].text == "done"
-    # The TurnUsage event lands strictly after FinalMessage.
     final_idx = events.index(final_msgs[0])
+    # FinalMessage is the last event in the stream.
+    assert final_idx == len(events) - 1
+    # TurnUsage is somewhere before FinalMessage.
     assert any(
-        isinstance(e, AgentEventTurnUsage) for e in events[final_idx + 1 :]
+        isinstance(e, AgentEventTurnUsage) for e in events[: final_idx]
     )
 
 

@@ -299,6 +299,11 @@ async def chat_events(
                     continue
 
                 if isinstance(event, AgentEventFinalMessage):
+                    # v0.12 — TurnUsage was already consumed above
+                    # (astream_once yields it BEFORE FinalMessage so
+                    # cost accounting lands before the SSE consumer
+                    # disconnects on "done"). FinalMessage is the
+                    # last frame the route emits.
                     turn.done = True
                     turn.final_text = event.text or ""
                     yield _sse_frame("status", _status_html("done"))

@@ -183,9 +183,12 @@ class SyntheticCustomer:
 
             sid = m.group(1)
 
-            # Drain the SSE stream. The chat route's SSE response ends
-            # when it emits ``status: done`` or ``status: error``;
-            # consume in chunks and look for those markers.
+            # Drain the SSE stream. The chat route emits
+            # ``event: status`` frames whose data is an HTML span with
+            # the class ``dot done`` / ``dot error`` (rendered by
+            # ``bss_portal_ui.sse.status_html``). Match the class
+            # token, not the bare word — "done" / "error" appear as
+            # parts of other event payloads too.
             done = False
             saw_error = False
             async with client.stream(
@@ -194,11 +197,13 @@ class SyntheticCustomer:
                 cookies=self._cookies(),
                 timeout=30.0,
             ) as resp:
+                buf = ""
                 async for chunk in resp.aiter_text():
-                    if "status: done" in chunk or "data: done" in chunk:
+                    buf += chunk
+                    if 'class="dot done"' in buf or "dot done" in buf:
                         done = True
                         break
-                    if "status: error" in chunk or "data: error" in chunk:
+                    if 'class="dot error"' in buf or "dot error" in buf:
                         saw_error = True
                         break
 

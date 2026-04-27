@@ -509,18 +509,21 @@ async def astream_once(
                 yield AgentEventError(message=f"{type(exc).__name__}: {exc}")
                 return
 
-            yield AgentEventFinalMessage(text=last_ai_text)
-            # v0.12 — emit token totals so the chat route can call
-            # chat_caps.record_chat_turn. Always emitted (even when
-            # totals are 0) so downstream consumers can rely on the
-            # event being present; the route ignores zero-token
-            # turns. ``model`` falls back to the configured default
-            # when the provider doesn't echo it.
+            # v0.12 — emit token totals BEFORE FinalMessage so the
+            # chat route can call chat_caps.record_chat_turn before
+            # closing the SSE response. Earlier we tried ordering
+            # this AFTER FinalMessage, but the chat-route's SSE
+            # consumer (browsers, soak runner) disconnects on the
+            # "status: done" frame the FinalMessage triggers; the
+            # next yield then raises GeneratorExit and the housekeeping
+            # never lands. Putting TurnUsage first keeps cost
+            # accounting honest.
             yield AgentEventTurnUsage(
                 prompt_tok=usage_total["input_tokens"],
                 completion_tok=usage_total["output_tokens"],
                 model=usage_total["model"] or "",
             )
+            yield AgentEventFinalMessage(text=last_ai_text)
         finally:
             if identity_reset_token is not None:
                 reset_service_identity_token(identity_reset_token)
