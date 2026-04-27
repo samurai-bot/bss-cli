@@ -138,6 +138,16 @@ def test_sse_stream_emits_expected_frames_for_full_signup(client_with_agent_mock
 
 
 def test_sse_stream_populates_session_with_harvested_ids(client_with_agent_mock):  # type: ignore[no-untyped-def]
+    """Legacy v0.4 contract — the agent stream harvests CUST/ORD/SUB ids
+    out of tool results into the in-memory session.
+
+    v0.11 — POST /signup now populates ``customer_id`` directly (CRM
+    fake's auto-counter returns ``CUST-001``), so the agent-side harvest
+    only fills the fields the direct chain didn't yet set (order_id,
+    subscription_id, activation_code, done). This test is preserved
+    until PR3 deletes ``agent_events.py`` outright; it documents the
+    transitional invariant.
+    """
     sub = client_with_agent_mock.post(
         "/signup",
         data={
@@ -156,14 +166,15 @@ def test_sse_stream_populates_session_with_harvested_ids(client_with_agent_mock)
     assert resp.status_code == 200
     _ = resp.text  # drain the stream
 
-    # Pull the session back via the portal's own GET /signup/{plan}/progress
-    # route — which will 404 if the store lost it and 200 if the harvested
-    # IDs are there. Harder-facing assertion: scrape the rendered HTML.
     store = client_with_agent_mock.app.state.session_store
     import asyncio
     sig = asyncio.run(store.get(session_id))
     assert sig is not None
-    assert sig.customer_id == "CUST-042"
+    # Direct chain set CUST-001 at POST /signup; agent harvest skipped
+    # the field because it was already populated.
+    assert sig.customer_id == "CUST-001"
+    # Agent harvest still wins for order_id / subscription_id / activation
+    # code — the direct chain hasn't run those step routes in this test.
     assert sig.order_id == "ORD-014"
     assert sig.subscription_id == "SUB-007"
     assert sig.activation_code.startswith("LPA:1$")
