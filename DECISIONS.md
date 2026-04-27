@@ -1553,3 +1553,67 @@ new POST route on top of the existing read-only one. The seam is
 clean — the simplified read-only re-display stays as the cheap
 default; the rearm bolts on without changing the URL or the
 customer-facing template caption.
+
+## 2026-04-27 — v0.11.0 (committed) — Signup funnel migrates to direct API; v0.4 agent-log artifact retired
+**Context:** v0.10's direct-API carve-out for post-login self-serve
+exposed a follow-on question: should the signup funnel stay
+orchestrator-mediated? It was made LLM-driven in v0.4 as the demo
+artifact for "the agent pattern works on a customer-facing flow"
+— the agent-log widget streaming during signup was the
+project's signature visual proof that BSS-CLI is LLM-native. By
+v0.10 the cost showed up in the hero suite: ``portal_self_serve_signup_v0_8``
+takes ~85 seconds wall-time per run because it's 5–8 LLM
+round-trips at 8–15s each. None of those round-trips need
+LLM judgment — signup is a deterministic sequence (pick plan
+→ MSISDN → KYC attest → COF → place order → wait for SOM
+activation), each step has one correct next step, no branching
+benefits from reasoning. The v0.10 carve-out's logic — "v0.4's
+purpose was demoing the agent pattern; v0.10's purpose is daily
+use; routine flows shouldn't pay the LLM tax" — applies word-for-
+word to signup.
+**Decision:** Migrate the signup funnel from orchestrator-mediated
+to direct API calls from route handlers in v0.11.0. Same shape as
+v0.10 post-login routes: one route → one BSS write,
+ownership-where-applicable, audited where applicable, sub-second
+per step (excluding the SOM activation poll). URL shapes preserve
+exactly so existing customer links keep working. The agent-log
+SSE widget and ``agent_bridge.drive_signup`` are deleted from the
+portal; ``agent_events.py`` is replaced by a small deterministic
+progress UI that polls ``order.get`` every 500ms and ticks the
+five-step timeline. The v0.4 demo artifact is retired from the
+primary signup path; the educational story (watching an agent
+drive a customer flow) survives via the existing
+``llm_troubleshoot_blocked_subscription`` and ``portal_csr_blocked_diagnosis``
+heroes (LLM adds value where judgment is required) plus the chat
+surface (still orchestrator-mediated, scoped further in v0.12).
+The chat surface becomes the **only** orchestrator-mediated
+route post-v0.11. The CLAUDE.md anti-pattern splits one more time:
+``(v0.4–v0.10 / signup + chat) → orchestrator``; ``(v0.11+ / chat
+only) → orchestrator``. The new ``phases/V0_11_0.md`` is the
+implementation guide; existing chat-scoping work (was V0_11) is
+pushed to V0_12.
+**Alternatives:** (a) Keep signup orchestrator-mediated for the
+demo artifact — rejected; the cost (~85s per signup, several LLM
+calls per customer at scale) is too high for a flow that doesn't
+need LLM judgment, and the daily-use principle that anchored
+v0.10 applies identically here. (b) Dual-path with both
+``/signup/agent/*`` (LLM demo) and ``/signup/*`` (direct) —
+rejected for v0.11; preserving the demo as a separate path is a
+feature flag that nobody owns, with rot risk. The git history at
+``tag v0.10.0`` is the demo archive. If a future deliverable
+genuinely needs the agent-driven path back, that's a fresh
+DECISIONS entry, not a feature flag we ship preemptively. (c)
+Defer the decision to a v0.11 open question — rejected; we made
+the call, capture it now so the doctrine evolution stays
+trackable.
+**Consequences:** v0.11 hero suite drops the 85s signup runtime
+to under 10s (target). Phase ordering is preserved cleanly: v0.10
+post-login → v0.11 signup direct → v0.12 chat scoping → v1.0
+real Singpass / Stripe / SM-DP+ swap. The doctrine boundary is
+dramatically simpler: only ``/chat`` is orchestrator-mediated
+post-v0.11, and v0.12 then narrows that to a per-customer scoped
+profile with caps + escalation. Future "should X be LLM-mediated"
+questions get a clean answer: routine flows go direct, judgment
+flows go through the chat surface. The v0.4 historical record
+(phase doc, DECISIONS entry, git tag) stays intact — phase docs
+are append-only frozen records and we don't backfill them.
