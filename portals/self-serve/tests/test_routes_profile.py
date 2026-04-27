@@ -658,6 +658,93 @@ async def test_email_change_verify_rolls_back_on_partial_failure(
     assert any(r.action == "email_change" for r in failures)
 
 
+# ── Name update (Party.individual.given_name / family_name) ─────────────
+
+
+@pytest.mark.asyncio
+async def test_get_renders_name_field_above_contact_mediums(seed_db, fake_clients):
+    """Name lives on the customer record, not on a contact medium —
+    the page must surface it as a separate section."""
+    sid, _, _ = await _setup(seed_db)
+    fake_clients.crm.individual_by_customer["CUST-T-A1B2C3"] = {
+        "given_name": "Ada",
+        "family_name": "Lovelace",
+    }
+    _seed_email(fake_clients, customer_id="CUST-T-A1B2C3")
+
+    with patch(
+        "bss_self_serve.routes.profile.get_clients", return_value=fake_clients
+    ):
+        app = create_app(Settings())
+        with TestClient(app) as c:
+            c.cookies.set(PORTAL_SESSION_COOKIE, sid)
+            resp = c.get("/profile/contact")
+            assert resp.status_code == 200
+            body = resp.text
+            assert "Ada" in body
+            assert "Lovelace" in body
+            # Name-update form is the maintenance area for the field.
+            assert 'action="/profile/contact/name/update"' in body
+            # Copy explicitly tells the customer they won't re-enter at signup.
+            assert "won&#39;t be asked to re-enter" in body or \
+                   "won't be asked to re-enter" in body
+
+
+@pytest.mark.asyncio
+async def test_name_update_requires_step_up(seed_db, fake_clients):
+    sid, _, _ = await _setup(seed_db)
+    fake_clients.crm.individual_by_customer["CUST-T-A1B2C3"] = {
+        "given_name": "Ada", "family_name": "Lovelace",
+    }
+
+    with patch(
+        "bss_self_serve.routes.profile.get_clients", return_value=fake_clients
+    ):
+        app = create_app(Settings())
+        with TestClient(app) as c:
+            c.cookies.set(PORTAL_SESSION_COOKIE, sid)
+            resp = c.post(
+                "/profile/contact/name/update",
+                data={"given_name": "Augusta", "family_name": "Byron"},
+                follow_redirects=False,
+            )
+            assert resp.status_code == 303
+            assert "/auth/step-up" in resp.headers["location"]
+            assert fake_clients.crm.individual_update_calls == []
+
+
+@pytest.mark.asyncio
+async def test_name_update_succeeds_and_audits(seed_db, fake_clients):
+    sid, _, grant = await _setup(seed_db, with_grant_for="name_update")
+    fake_clients.crm.individual_by_customer["CUST-T-A1B2C3"] = {
+        "given_name": "Ada", "family_name": "Lovelace",
+    }
+
+    with patch(
+        "bss_self_serve.routes.profile.get_clients", return_value=fake_clients
+    ):
+        app = create_app(Settings())
+        with TestClient(app) as c:
+            c.cookies.set(PORTAL_SESSION_COOKIE, sid)
+            c.cookies.set("bss_portal_step_up", grant)
+            resp = c.post(
+                "/profile/contact/name/update",
+                data={"given_name": "Augusta", "family_name": "King"},
+                follow_redirects=False,
+            )
+            assert resp.status_code == 303
+            assert resp.headers["location"] == (
+                "/profile/contact?flash=name_update"
+            )
+
+    assert fake_clients.crm.individual_update_calls == [
+        ("CUST-T-A1B2C3", "Augusta", "King")
+    ]
+    rows = await _portal_actions(seed_db)
+    assert rows[0].action == "name_update"
+    assert rows[0].success is True
+
+
 # ── Email change: cancel pending ─────────────────────────────────────────
 
 

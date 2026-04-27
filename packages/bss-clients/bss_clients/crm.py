@@ -146,6 +146,33 @@ class CRMClient(BSSClient):
         )
         return resp.json() if resp.content else {"id": medium_id, "removed": True}
 
+    async def update_individual(
+        self,
+        customer_id: str,
+        *,
+        given_name: str | None = None,
+        family_name: str | None = None,
+    ) -> dict[str, Any]:
+        """PATCH /tmf-api/customerManagement/v4/customer/{id}/individual.
+
+        v0.10 — partial update of the customer's display name. Used by
+        the portal's /profile/contact name-update flow. At least one
+        of ``given_name`` / ``family_name`` must be provided; the
+        server raises ``policy.customer.individual.update.no_fields``
+        otherwise.
+        """
+        body: dict[str, Any] = {}
+        if given_name is not None:
+            body["givenName"] = given_name
+        if family_name is not None:
+            body["familyName"] = family_name
+        resp = await self._request(
+            "PATCH",
+            f"/tmf-api/customerManagement/v4/customer/{customer_id}/individual",
+            json=body,
+        )
+        return resp.json()
+
     async def update_contact_medium(
         self, customer_id: str, medium_id: str, *, value: str
     ) -> dict[str, Any]:

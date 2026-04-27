@@ -173,20 +173,56 @@ class FakeCRM:
 
     Pre-seed by setting ``mediums_by_customer[customer_id] = [{...}, ...]``.
     Each medium dict mirrors the camelCase TMF629 ContactMedium shape:
-    {id, mediumType, value, isPrimary, validFrom}.
+    {id, mediumType, value, isPrimary, validFrom}. v0.10 patch — also
+    seeds ``individual_by_customer[customer_id]`` for the name-update
+    surface.
     """
 
     mediums_by_customer: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    individual_by_customer: dict[str, dict[str, str]] = field(default_factory=dict)
     update_calls: list[tuple[str, str, str]] = field(default_factory=list)
+    individual_update_calls: list[tuple[str, str | None, str | None]] = field(
+        default_factory=list
+    )
     next_error: Exception | None = None
 
     async def get_customer(self, customer_id: str) -> dict[str, Any]:
+        ind = self.individual_by_customer.get(customer_id, {})
         return {
             "id": customer_id,
+            "individual": (
+                {
+                    "givenName": ind.get("given_name", ""),
+                    "familyName": ind.get("family_name", ""),
+                }
+                if ind
+                else None
+            ),
             "contactMedium": [
                 dict(cm) for cm in self.mediums_by_customer.get(customer_id, [])
             ],
         }
+
+    async def update_individual(
+        self,
+        customer_id: str,
+        *,
+        given_name: str | None = None,
+        family_name: str | None = None,
+    ) -> dict[str, Any]:
+        if self.next_error is not None:
+            err = self.next_error
+            self.next_error = None
+            raise err
+        self.individual_update_calls.append(
+            (customer_id, given_name, family_name)
+        )
+        ind = self.individual_by_customer.setdefault(customer_id, {})
+        if given_name is not None:
+            ind["given_name"] = given_name
+        if family_name is not None:
+            ind["family_name"] = family_name
+        return await self.get_customer(customer_id)
 
     async def list_contact_mediums(
         self, customer_id: str

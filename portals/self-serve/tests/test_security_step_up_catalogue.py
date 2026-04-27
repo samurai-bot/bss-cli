@@ -31,6 +31,7 @@ EXPECTED_LABELS = frozenset({
     "email_change",
     "phone_update",
     "address_update",
+    "name_update",
     "plan_change_schedule",
     "plan_change_cancel",
 })

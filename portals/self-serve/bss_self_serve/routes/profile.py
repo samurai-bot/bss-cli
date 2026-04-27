@@ -91,6 +91,24 @@ async def _list_active_mediums(
     return await clients.crm.list_contact_mediums(customer_id)
 
 
+async def _get_individual(
+    clients: Any, customer_id: str
+) -> dict[str, Any]:
+    """Pull the customer's display name off the TMF629 response.
+
+    v0.10 — name lives on ``crm.individual``, not on
+    ``contact_medium``. The /profile/contact page renders both
+    surfaces in one view; this helper keeps the route handler
+    free of TMF-shape extraction logic.
+    """
+    cust = await clients.crm.get_customer(customer_id)
+    ind = cust.get("individual") or {}
+    return {
+        "given_name": ind.get("givenName") or "",
+        "family_name": ind.get("familyName") or "",
+    }
+
+
 async def _check_medium_owned(
     clients: Any, cm_id: str, customer_id: str
 ) -> dict[str, Any] | None:
@@ -111,6 +129,7 @@ async def contact_view(
 ) -> Response:
     clients = get_clients()
     mediums = await _list_active_mediums(clients, customer_id)
+    individual = await _get_individual(clients, customer_id)
 
     factory = request.app.state.db_session_factory
     pending = None
@@ -140,10 +159,92 @@ async def contact_view(
         "profile_contact.html",
         {
             "mediums": mediums,
+            "individual": individual,
             "pending_email_change": pending,
             "error": None,
             "flash": None,
         },
+    )
+
+
+# ── POST /profile/contact/name/update ────────────────────────────────────
+
+
+@router.post("/profile/contact/name/update")
+async def name_update(
+    request: Request,
+    given_name: str = Form(..., min_length=1, max_length=100),
+    family_name: str = Form(..., min_length=1, max_length=100),
+    customer_id: str = Depends(requires_linked_customer),
+    _step_up: None = Depends(requires_step_up("name_update")),
+) -> Response:
+    """Update the customer's display name (Party.individual.given_name / family_name).
+
+    Captured at signup time and persisted on the customer record;
+    the /profile/contact page surfaces it for view + edit. v0.11's
+    signup-direct migration will pre-fill these on the second-line
+    signup form so the customer doesn't re-enter them.
+    """
+    clients = get_clients()
+    factory = request.app.state.db_session_factory
+    iid = _identity(request).id
+
+    try:
+        await clients.crm.update_individual(
+            customer_id,
+            given_name=given_name.strip(),
+            family_name=family_name.strip(),
+        )
+    except PolicyViolationFromServer as exc:
+        async with factory() as db:
+            await record_portal_action(
+                db,
+                customer_id=customer_id,
+                identity_id=iid,
+                action="name_update",
+                route="/profile/contact/name/update",
+                method="POST",
+                success=False,
+                error_rule=exc.rule,
+                step_up_consumed=True,
+                ip=_client_ip(request),
+                user_agent=_client_ua(request),
+            )
+            await db.commit()
+        if not is_known(exc.rule):
+            log.info("portal.profile.unknown_policy_rule", rule=exc.rule, action="name_update")
+        mediums = await _list_active_mediums(clients, customer_id)
+        individual = await _get_individual(clients, customer_id)
+        return templates.TemplateResponse(
+            request,
+            "profile_contact.html",
+            {
+                "mediums": mediums,
+                "individual": individual,
+                "pending_email_change": None,
+                "error": render(exc.rule),
+                "flash": None,
+            },
+            status_code=422,
+        )
+
+    async with factory() as db:
+        await record_portal_action(
+            db,
+            customer_id=customer_id,
+            identity_id=iid,
+            action="name_update",
+            route="/profile/contact/name/update",
+            method="POST",
+            success=True,
+            step_up_consumed=True,
+            ip=_client_ip(request),
+            user_agent=_client_ua(request),
+        )
+        await db.commit()
+
+    return RedirectResponse(
+        url="/profile/contact?flash=name_update", status_code=303
     )
 
 

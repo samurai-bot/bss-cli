@@ -128,6 +128,36 @@ class UpdateContactMediumRequest(BaseModel):
     value: str
 
 
+class UpdateIndividualRequest(BaseModel):
+    """v0.10 — partial update on the customer's display name."""
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+    given_name: str | None = None
+    family_name: str | None = None
+
+
+@router.patch(
+    "/customer/{customer_id}/individual",
+    response_model=Tmf629Customer,
+    response_model_by_alias=True,
+)
+async def update_individual(
+    customer_id: str,
+    body: UpdateIndividualRequest,
+    svc: CustomerService = Depends(get_customer_service),
+) -> Tmf629Customer:
+    """v0.10 — update the customer's display name. Used by the portal's
+    /profile/contact name-update flow. At least one of given_name /
+    family_name must be provided."""
+    await svc.update_individual_name(
+        customer_id,
+        given_name=body.given_name,
+        family_name=body.family_name,
+    )
+    cust = await svc.get_customer(customer_id)
+    return to_tmf629_customer(cust)
+
+
 @router.patch(
     "/customer/{customer_id}/contactMedium/{cm_id}",
     response_model=ContactMediumSchema,

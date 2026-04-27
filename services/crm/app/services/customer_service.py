@@ -268,6 +268,72 @@ class CustomerService:
         await self._session.commit()
         return cm
 
+    async def update_individual_name(
+        self,
+        customer_id: str,
+        *,
+        given_name: str | None = None,
+        family_name: str | None = None,
+    ):
+        """v0.10 — update the customer's display name on /profile/contact.
+
+        At least one of ``given_name`` / ``family_name`` must be provided;
+        callers passing both empty get a no-op + the current row back.
+        """
+        if given_name is None and family_name is None:
+            from app.policies.base import PolicyViolation
+            raise PolicyViolation(
+                rule="customer.individual.update.no_fields",
+                message="At least one of given_name or family_name is required",
+                context={"customer_id": customer_id},
+            )
+
+        cust = await self._customer_repo.get(customer_id)
+        if not cust:
+            from app.policies.base import PolicyViolation
+            raise PolicyViolation(
+                rule="customer.contact.not_found",
+                message=f"Customer {customer_id} not found",
+                context={"customer_id": customer_id},
+            )
+        ind = await self._customer_repo.get_individual_for_party(cust.party_id)
+        if ind is None:
+            from app.policies.base import PolicyViolation
+            raise PolicyViolation(
+                rule="customer.individual.not_found",
+                message=f"Customer {customer_id} has no individual record",
+                context={"customer_id": customer_id},
+            )
+
+        await self._customer_repo.update_individual_name(
+            ind, given_name=given_name, family_name=family_name
+        )
+
+        ctx = auth_context.current()
+        await publisher.publish(
+            self._session,
+            event_type="customer.individual_updated",
+            aggregate_type="customer",
+            aggregate_id=customer_id,
+            payload={"fields": [
+                f for f in ("given_name", "family_name")
+                if locals().get(f) is not None
+            ]},
+        )
+        await self._interaction_repo.create(
+            Interaction(
+                id=_next_id("INT"),
+                customer_id=customer_id,
+                channel=ctx.channel,
+                direction="inbound",
+                summary="Customer updated their display name",
+                occurred_at=clock_now(),
+                tenant_id=ctx.tenant,
+            )
+        )
+        await self._session.commit()
+        return ind
+
     async def update_contact_medium(
         self, customer_id: str, cm_id: str, *, value: str
     ) -> ContactMedium:

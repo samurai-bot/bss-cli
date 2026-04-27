@@ -14,6 +14,8 @@
     <p class="form-flash" role="status">Email updated.</p>
   {% elif flash == 'email_change_cancelled' %}
     <p class="form-flash" role="status">Pending email change cancelled.</p>
+  {% elif flash == 'name_update' %}
+    <p class="form-flash" role="status">Name updated.</p>
   {% endif %}
 
   {% if error %}
@@ -32,6 +34,36 @@
       </form>
     </aside>
   {% endif %}
+
+  {# Display name lives on the Party (crm.individual), not on a contact_medium.
+     Captured at signup, edited here. Stays separate from the email/phone/
+     address rows below which are TMF629 ContactMedium entries. #}
+  <section class="profile-cm profile-cm--name">
+    <header class="profile-cm-header">
+      <span class="profile-cm-type">name</span>
+      <span class="profile-cm-value">
+        {{ individual.given_name }} {{ individual.family_name }}
+      </span>
+    </header>
+    <form method="post" action="/profile/contact/name/update" class="profile-cm-form">
+      <label>
+        <span>Given name</span>
+        <input type="text" name="given_name" value="{{ individual.given_name }}"
+               required maxlength="100">
+      </label>
+      <label>
+        <span>Family name</span>
+        <input type="text" name="family_name" value="{{ individual.family_name }}"
+               required maxlength="100">
+      </label>
+      <button type="submit" class="welcome-cta">Update name</button>
+    </form>
+    <p class="page-subtitle profile-cm-fineprint">
+      Your name is captured once at signup. Update it here if it
+      changes; you won't be asked to re-enter it when adding another
+      line.
+    </p>
+  </section>
 
   <ul class="profile-contact-list">
     {% for cm in mediums %}

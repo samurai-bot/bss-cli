@@ -72,6 +72,7 @@ SENSITIVE_ACTION_LABELS: Final[frozenset[str]] = frozenset({
     "email_change",
     "phone_update",  # weak gate; still required for any contact-medium write
     "address_update",
+    "name_update",   # display name (Party.individual.given_name/family_name)
     "plan_change_schedule",
     "plan_change_cancel",
 })
