@@ -33,15 +33,29 @@ def signup_prompt(
 ) -> str:
     """Build the NL instruction the agent sees when a signup form is submitted.
 
-    The phrasing deliberately lists steps in order and asks for the
-    final subscription + activation details. The agent plans the tool
-    chain from this; we do not enumerate tool names (that would be
-    back-channel imperative programming in prose).
+    Phrasing notes (v0.10 hardening — Gemma 4 was truncating after step 3):
+
+    * Lead with the success criterion (return a SUB-* + LPA code), not a
+      step list. The model anchors on "what does done look like" before
+      it plans the chain.
+    * Steps are framed as prerequisites for the success criterion, not
+      a checklist with optional terminations. The "I am NOT done until"
+      clause makes the system prompt's "Stop when the job is done" rule
+      resolve to the FULL chain rather than the first numbered item.
+    * No tool names — the agent plans the chain from semantics. Putting
+      tool names in the prose is back-channel imperative programming
+      and creates brittleness when the tool surface evolves.
     """
     signature = _signature_for(email)
     return (
         f"A new customer just completed the self-serve signup form. "
-        f"Please: "
+        f"You are NOT done until you have an active subscription with an "
+        f"id like 'SUB-XXXX' and you've returned both the subscription "
+        f"id AND the eSIM activation code. Adding a payment method on "
+        f"file is NOT enough; placing an order is NOT enough; you must "
+        f"wait for the order to reach 'completed' state and report the "
+        f"resulting SUB-* id + LPA activation code. "
+        f"To get there, do all of: "
         f"(1) create a customer named '{name}' with email '{email}' and phone '{phone}'; "
         f"(2) attest their KYC using the pre-verified Myinfo attestation "
         f"with signature '{signature}' "
@@ -49,6 +63,11 @@ def signup_prompt(
         f"(3) add card {card_pan} as their payment method on file; "
         f"(4) place an order for offering '{plan}', passing msisdn_preference='{msisdn}' "
         f"so the customer gets the number they picked on the portal; "
-        f"(5) wait for the order to reach 'completed' and report the "
-        f"resulting subscription id plus the eSIM activation code."
+        f"(5) wait for the order to reach 'completed' "
+        f"(use the polling tool — the order activation is asynchronous "
+        f"and takes ~1 second). "
+        f"The activation code lives on the resulting subscription. "
+        f"If any step fails with a structured error, follow the "
+        f"suggested recovery and continue — do not stop until you have "
+        f"the SUB-* id and the LPA code."
     )
