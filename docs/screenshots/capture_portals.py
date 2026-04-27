@@ -16,6 +16,7 @@ The script assumes:
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -26,6 +27,27 @@ from playwright.sync_api import Page, sync_playwright
 
 OUT = Path(__file__).resolve().parent
 VIEWPORT = {"width": 1280, "height": 800}
+
+
+def _resolve_chromium() -> str | None:
+    """If ``playwright install chromium`` failed for this OS (e.g.
+    Ubuntu 26.04 isn't on the supported list), fall back to an
+    already-cached chromium under ``~/.cache/ms-playwright``.
+    Set ``PLAYWRIGHT_CHROMIUM_EXECUTABLE`` to override. Returns
+    ``None`` to let playwright pick its bundled default."""
+    explicit = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE")
+    if explicit and Path(explicit).is_file():
+        return explicit
+    cache = Path.home() / ".cache" / "ms-playwright"
+    if not cache.is_dir():
+        return None
+    candidates = sorted(
+        cache.glob("chromium-*/chrome-linux64/chrome"), reverse=True
+    )
+    for c in candidates:
+        if c.is_file() and os.access(c, os.X_OK):
+            return str(c)
+    return None
 
 
 def _optimize(path: Path) -> None:
@@ -174,7 +196,12 @@ def _csr_case_with_transcript(page: Page) -> None:
 
 def main() -> int:
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        launch_kwargs: dict = {"headless": True}
+        chromium_path = _resolve_chromium()
+        if chromium_path:
+            launch_kwargs["executable_path"] = chromium_path
+            print(f"using chromium: {chromium_path}")
+        browser = p.chromium.launch(**launch_kwargs)
         ctx = browser.new_context(viewport=VIEWPORT, color_scheme="dark")
         page = ctx.new_page()
 
