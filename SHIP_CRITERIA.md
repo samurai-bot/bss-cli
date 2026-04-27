@@ -63,7 +63,7 @@
 
 - [x] `make doctrine-check` enforces the four grep guards as a single CI-runnable target:
   - `datetime.now/utcnow` only allowed in `bss-clock` impl, the `bss clock` cmd surface, tests, and explicitly `# noqa: bss-clock`-annotated lines.
-  - Portal route handlers must not call mutating `bss-clients` methods (writes go through `agent_bridge` → orchestrator).
+  - Portal route handlers on the chat surface must not call mutating `bss-clients` methods (chat writes go through the orchestrator). v0.10+ post-login self-serve routes and v0.11+ signup routes are explicit carve-outs that may write directly via `bss-clients`; the doctrine guard maintains an allowlist for them.
   - OTel SDK imports must not leak into `services/*/app/services/` or `services/*/app/policies/`.
   - The string `campaignos` must not appear in code (alembic migrations excepted — they reference it in comments to document what we *don't* touch).
 
