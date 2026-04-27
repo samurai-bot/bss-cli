@@ -266,13 +266,20 @@ async def interaction_log(
     summary: str,
     body: str | None = None,
 ) -> dict[str, Any]:
-    """Log a customer interaction note (TMF683). Call this ONCE when wrapping
-    up a troubleshooting conversation so the next CSR has context.
+    """**Always call this at the end of a troubleshoot or fix.** Log a
+    customer interaction note (TMF683) so the next CSR opening this
+    customer's record sees what already happened. Skipping this leaves
+    them flying blind — it is the close of the work, not a follow-up.
+
+    Call exactly once per troubleshoot, AFTER the fix tool succeeded
+    (e.g. after ``subscription.purchase_vas`` returned a successful
+    response). The summary is the one-line story of what you did and
+    what the outcome was — no more, no less.
 
     Args:
         customer_id: Customer ID in CUST-NNN format.
         summary: One-line summary of the interaction (required). Example:
-            ``"Purchased VAS_DATA_1GB — subscription unblocked."``
+            ``"Purchased VAS_DATA_1GB — subscription SUB-007 unblocked."``
         body: Optional longer free text (diagnosis steps, cited IDs, etc.).
 
     Returns:
