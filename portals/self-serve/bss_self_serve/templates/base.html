@@ -92,6 +92,17 @@
   </script>
   {% endif %}
 
+  {# v0.12 — floating chat launcher. Renders on every post-login
+     page (any page that has request.state.customer_id) except
+     /chat itself, so the customer can reach the chat surface from
+     anywhere in the portal without hunting for the dashboard CTA. #}
+  {% if request.state.customer_id and request.url.path != "/chat" %}
+  <a class="chat-fab" href="/chat" aria-label="Open chat with us">
+    <span class="chat-fab-icon" aria-hidden="true"></span>
+    <span>Chat with us</span>
+  </a>
+  {% endif %}
+
   <footer class="portal-footer">
     <span>demo only · email + magic-link auth · signup goes direct via bss-clients (v0.11+)</span>
   </footer>

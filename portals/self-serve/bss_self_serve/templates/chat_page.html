@@ -3,12 +3,14 @@
 
 {% block main %}
 <section class="chat-page">
-  <h1 class="page-title">Chat with us</h1>
-  <p class="page-subtitle">
-    Ask about your line — top up, schedule a plan change, redownload
-    your eSIM, or get a quick answer. Sensitive issues are escalated
-    to a human within 24 hours.
-  </p>
+  <header class="chat-page-header">
+    <h1 class="page-title">Chat with us</h1>
+    <p class="page-subtitle">
+      Ask about your line — top up, schedule a plan change, redownload
+      your eSIM, or get a quick answer. Sensitive issues are escalated
+      to a human within 24 hours.
+    </p>
+  </header>
 
   {% if cap_tripped %}
     <div class="chat-cap-tripped" role="alert">
@@ -40,7 +42,19 @@
       </p>
     </div>
   {% else %}
+
     {% if turn %}
+    {# v0.12 PR12 — the entire conversation panel sits INSIDE the
+       sse-connect host so the htmx-sse extension can route ``status``
+       and ``message`` events to the swappable elements below. The
+       previous shape kept the ``hx-ext="sse"`` element as a sibling,
+       which silently dropped every event because htmx-sse only
+       reaches descendants. #}
+    <div
+      class="chat-thread-host"
+      hx-ext="sse"
+      sse-connect="/chat/events/{{ session_id }}"
+    >
       <article class="chat-thread">
         <div class="chat-message chat-message-user">
           <header><strong>You</strong></header>
@@ -61,15 +75,12 @@
           ></div>
         </div>
       </article>
-
-      <div
-        class="chat-sse-host"
-        hx-ext="sse"
-        sse-connect="/chat/events/{{ session_id }}"
-        hidden
-      ></div>
+    </div>
     {% endif %}
 
+    {# Hide the form during an in-flight turn so the page state is
+       readable. The next turn is just a refresh away. #}
+    {% if not turn %}
     <form class="chat-form" method="post" action="/chat/message">
       <label for="chat-message" class="form-label">Your question</label>
       <textarea
@@ -81,6 +92,12 @@
       ></textarea>
       <button type="submit" class="welcome-cta">Send</button>
     </form>
+    {% else %}
+    <p class="chat-after-turn">
+      <a class="welcome-cta" href="/chat">Ask another question</a>
+      <a class="welcome-cta welcome-cta-secondary" href="/">Back to my account</a>
+    </p>
+    {% endif %}
 
     <p class="chat-fineprint">
       We only act on your own account. We escalate fraud, billing
