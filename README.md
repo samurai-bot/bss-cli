@@ -37,7 +37,7 @@ For engineers learning telco BSS/OSS, for a small MVNO that wants a deployable M
 - **`bss trace` swimlane** — distributed trace of a signup chain, ASCII rendered in the terminal (cropped at v0.12 from the original ~2200px capture for README scrollability):
   ![bss trace swimlane](docs/screenshots/bss_trace_swimlane_v0_2.png)
 
-> The three v0.12-suffixed images aren't checked in yet — run `python docs/screenshots/capture_portals.py` against the live stack to produce them. The script's v0.12 capture functions are in place; see [`docs/screenshots/CAPTURE.md`](docs/screenshots/CAPTURE.md) for the seeding prerequisites.
+> All screenshots above are checked in. To re-capture against your own stack run `python docs/screenshots/capture_portals.py`; see [`docs/screenshots/CAPTURE.md`](docs/screenshots/CAPTURE.md) for the seeding prerequisites and the chromium-fallback for Ubuntu hosts where `playwright install` rejects the OS.
 
 ## The LLM agent story
 
