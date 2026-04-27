@@ -1,12 +1,14 @@
-"""Audit schema — 1 table.
+"""Audit schema — 3 tables.
 
 domain_event (outbox + replay substrate).
+chat_usage (v0.12 — per-customer monthly rate + cost counters).
+chat_transcript (v0.12 — content-addressed transcripts for escalation).
 """
 
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import BigInteger, Boolean, Index, SmallInteger, Text
+from sqlalchemy import BigInteger, Boolean, Index, Integer, SmallInteger, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -57,4 +59,48 @@ class DomainEvent(Base):
     schema_version: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1)
     published_to_mq: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
+    )
+
+
+class ChatUsage(Base):
+    """v0.12 — per-customer per-month chat counters.
+
+    One row per (customer, period_yyyymm). Incremented atomically by
+    chat_caps.record_chat_turn after each completed turn. Used by
+    check_caps to enforce the monthly cost cap; the hourly rate cap
+    is in-memory and not stored here.
+    """
+
+    __tablename__ = "chat_usage"
+    __table_args__ = {"schema": SCHEMA}
+
+    customer_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    period_yyyymm: Mapped[int] = mapped_column(Integer, primary_key=True)
+    requests_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    cost_cents: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    last_updated: Mapped[datetime] = mapped_column(
+        TZDateTime, nullable=False, server_default=func.now()
+    )
+
+
+class ChatTranscript(Base):
+    """v0.12 — content-addressed transcript storage.
+
+    A chat transcript is hashed (SHA-256 of the concatenated turn
+    bodies) and persisted once; cases reference the hash via
+    crm.case.chat_transcript_hash. Append-only.
+    """
+
+    __tablename__ = "chat_transcript"
+    __table_args__ = {"schema": SCHEMA}
+
+    hash: Mapped[str] = mapped_column(Text, primary_key=True)
+    customer_id: Mapped[str] = mapped_column(Text, nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TZDateTime, nullable=False, server_default=func.now()
     )

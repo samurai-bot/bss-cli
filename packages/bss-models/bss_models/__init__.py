@@ -67,8 +67,8 @@ from .mediation import UsageEvent
 # Billing (2 tables)
 from .billing import BillingAccount, CustomerBill
 
-# Audit (1 table)
-from .audit import DomainEvent
+# Audit (3 tables — v0.12 added ChatUsage + ChatTranscript)
+from .audit import ChatTranscript, ChatUsage, DomainEvent
 
 # Portal Auth (4 tables) — v0.8
 from .portal_auth import (
@@ -135,6 +135,8 @@ __all__ = [
     "CustomerBill",
     # Audit
     "DomainEvent",
+    "ChatUsage",
+    "ChatTranscript",
     # Portal Auth (v0.8 + v0.10 PortalAction + v0.10 EmailChangePending)
     "Identity",
     "LoginToken",
