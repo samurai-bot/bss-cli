@@ -33,6 +33,27 @@ async def charge(
     return to_payment_attempt_response(attempt)
 
 
+# NOTE: /payment/count MUST be declared before /payment/{attempt_id}
+# in this file. FastAPI matches routes top-to-bottom; if the
+# parameterised /payment/{attempt_id} route comes first, a GET to
+# /payment/count is interpreted as attempt_id="count" and 404s with
+# "Payment attempt count not found" — which is the v0.10 charge-
+# history regression I shipped before catching this. Order matters.
+@router.get("/payment/count", include_in_schema=False)
+async def count_payments(
+    customerId: str,
+    svc: PaymentService = Depends(get_payment_service),
+) -> dict[str, int]:
+    """v0.10 — total count for paginated listings.
+
+    Internal endpoint (not part of TMF676): the portal needs the
+    total to render "Page N of M" / "Next disabled". Lives under
+    /payment/count rather than as a header on /payment so existing
+    callers' response shape is unchanged.
+    """
+    return {"count": await svc.count_attempts(customerId)}
+
+
 @router.get(
     "/payment/{attempt_id}",
     response_model=PaymentAttemptResponse,
@@ -67,18 +88,3 @@ async def list_payments(
     """
     attempts = await svc.list_attempts(customerId, limit=limit, offset=offset)
     return [to_payment_attempt_response(a) for a in attempts]
-
-
-@router.get("/payment/count", include_in_schema=False)
-async def count_payments(
-    customerId: str,
-    svc: PaymentService = Depends(get_payment_service),
-) -> dict[str, int]:
-    """v0.10 — total count for paginated listings.
-
-    Internal endpoint (not part of TMF676): the portal needs the
-    total to render "Page N of M" / "Next disabled". Lives under
-    /payment/count rather than as a header on /payment so existing
-    callers' response shape is unchanged.
-    """
-    return {"count": await svc.count_attempts(customerId)}
