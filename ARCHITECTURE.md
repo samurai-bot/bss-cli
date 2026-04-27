@@ -16,7 +16,10 @@ Three callers — **CLI** (terminal-native), **self-serve portal** (public signu
    │ (signup, post- │    │  → astream_once  │               │
    │  login, reads) │    └─────────┬────────┘               │
    │ chat → astream │              │                        │
-   │  (when it lands)              │                        │
+   │ (customer_     │              │                        │
+   │  self_serve    │              │                        │
+   │  profile,      │              │                        │
+   │  v0.12)        │              │                        │
    └────────┬───────┘              │                        │
             │                      ▼                        ▼
             │      ┌──────────────────────────────────────────────────┐
@@ -144,20 +147,23 @@ A portal is a **channel** onto the BSS — a thin HTTP surface that translates a
 
 | # | Portal | Port | Audience | Writes go through… | Inbound auth |
 |---|---|---|---|---|---|
-| 1 | self-serve | 9001 | Prospect browsing / signing up + post-login customer self-serve | **(v0.11+)** All routine flows — signup funnel + post-login self-serve — write *directly* via `bss-clients`. The chat surface (when it lands) remains orchestrator-mediated via `astream_once(channel="portal-self-serve")`; v0.12 narrows that scope further. | **email + magic link / OTP (v0.8)** — see "Portal authentication" below |
+| 1 | self-serve | 9001 | Prospect browsing / signing up + post-login customer self-serve + chat | **(v0.11+)** All routine flows — signup funnel + post-login self-serve — write *directly* via `bss-clients`. The chat surface (v0.12) is the *only* orchestrator-mediated route, invoked via `astream_once(channel="portal-chat", actor=customer_id, tool_filter="customer_self_serve", service_identity="portal_self_serve")`. | **email + magic link / OTP (v0.8)**; chat additionally caps + scopes per customer (v0.12). See "Portal authentication" + "Chat scoping" below. |
 | 2 | csr | 9002 | CSR operators | `agent_bridge.ask_about_customer` → `astream_once(channel="portal-csr", actor=<op>)` | stub login (cookie); Phase 12 swaps for real OAuth |
 
-The portal-write story split (consolidated through v0.11):
+The portal-write story split (consolidated through v0.12):
 
 * **(v0.4–v0.10)** *Historical:* signup + chat routed through the LLM orchestrator; v0.4 shipped the agent-log SSE widget as the demo artifact for "the agent pattern works on a customer-facing flow."
 * **(v0.10+)** Post-login customer self-serve routes write *directly* via `bss-clients` from the route handler. The customer principal is bound from `request.state.customer_id` (verified session); per-resource ownership policies and step-up auth gate sensitive writes; one route = one BSS write.
 * **(v0.11+)** The signup funnel joins the direct-write side. Signup is a deterministic routine flow (pick plan → MSISDN → KYC attest → COF → place order → poll for activation); each step has one correct next step and benefits nothing from LLM reasoning. Wall time per signup drops from ~85s (orchestrator-mediated) to under 10s (direct). The chat surface is now the *only* orchestrator-mediated route in the self-serve portal.
+* **(v0.12+)** Chat ships, scoped to the logged-in customer via the `customer_self_serve` tool profile (16 curated tools: 3 public catalog reads + 8 read `*.mine` wrappers + 4 write `*.mine` wrappers + `case.open_for_me`). No `*.mine` tool accepts `customer_id` — the binding comes from `auth_context.current().actor`, set per-stream from `request.state.customer_id`. Output ownership trip-wire (`assert_owned_output` + `OWNERSHIP_PATHS`) catches the day a server-side policy misses a case. Per-customer rate + monthly cost caps (`audit.chat_usage`, fail-closed). Five non-negotiable escalation categories — fraud, billing_dispute, regulator_complaint, identity_recovery, bereavement — via `case.open_for_me` with SHA-256-hashed transcript stored in `audit.chat_transcript` + linked from `crm.case.chat_transcript_hash`. See "Chat scoping" below.
 
 ```
 ┌─ portal-self-serve (9001) ──────────────────────────────────┐
 │                                                              │
-│  chat (/chat) ─ when it lands ──────► astream_once ─────────►│ ← orchestrator (chat ONLY)
-│                                                              │   (v0.12 narrows further)
+│  chat (/chat, /chat/widget, /chat/events/{sid}) ────────────►│ ← orchestrator (v0.12 only)
+│      → astream_once(tool_filter="customer_self_serve",       │   16-tool profile,
+│                     actor=customer_id, ...)                  │   trip-wire, caps,
+│                                                              │   5 escalation cats
 │                                                              │
 │  DIRECT (v0.10+ post-login, v0.11+ signup)                   │
 │    /signup/{plan}/msisdn   ─────► inventory.list_msisdns    │
@@ -197,13 +203,13 @@ Reads have always gone direct (the doctrine never required mediating a pass-thro
 
 ### Shared package: `packages/bss-portal-ui` (v0.5+)
 
-The agent log widget, SSE plumbing helpers (`format_frame`, `status_html`), event-projection logic (`project`, `render_html`), base CSS (palette + layout primitives + agent log styling), and vendored HTMX (`htmx.min.js` + `htmx-sse.js`) live in a single shared package. Both portals consume it via:
+The agent-log widget primitives, SSE plumbing helpers (`format_frame`, `status_html`), event-projection logic (`project`, `render_html`), base CSS (palette + layout primitives + agent-log + chat-bubble styling), and vendored HTMX (`htmx.min.js` + `htmx-sse.js`) live in a single shared package. Both portals consume it via:
 - a Jinja `ChoiceLoader` that resolves portal-local templates first then falls back to the package's shared partials, and
 - a `StaticFiles` mount at `/portal-ui/static/` that serves the package's CSS + JS.
 
-Extracted in v0.5 (before the second portal was written) to prevent the agent log widget from drifting between portals — a fix landing only in self-serve when both need it would surface as a demo bug a month later. Documented in `DECISIONS.md` 2026-04-23.
+Extracted in v0.5 (before the second portal was written) to prevent the agent-log widget from drifting between portals — a fix landing only in self-serve when both need it would surface as a demo bug a month later. Documented in `DECISIONS.md` 2026-04-23.
 
-The hero artifact on every portal page is the **Agent Activity** log widget — a side panel streaming the LLM's tool-call sequence live. Strip it out and the portal looks like any CRUD frontend; keep it in and the viewer can see the LLM is doing the work, tool by tool. Details in `phases/V0_4_0.md` and `phases/V0_5_0.md`.
+**Where the streaming-tool-call surface lives now:** the v0.4 self-serve signup widget is retired (signup went direct in v0.11). The CSR `ask` flow on `/customer/{id}` still streams agent events via SSE through `bss_portal_ui.agent_log.render_html` — this is where the agent-log shape earns its keep. The v0.12 self-serve chat surface is a different shape — it streams chat-bubble HTML (full assistant text + minimal markdown), not truncated agent-log rows — and so it ships its own renderers in `portals/self-serve/bss_self_serve/routes/chat.py` while still consuming the package's `format_frame` + `status_html` for the SSE wire format. Details in `phases/V0_4_0.md`, `phases/V0_5_0.md`, and `phases/V0_12_0.md`.
 
 ### Named-token perimeter (v0.9)
 
@@ -278,7 +284,7 @@ v0.8 puts a login wall in front of the self-serve portal. CSR console retains it
   ```
   request -> RequestIdMiddleware -> PortalSessionMiddleware -> route -> bss-clients (NamedTokenAuthProvider) -> services
   ```
-  Chat (when it lands) is the one self-serve route that goes `route -> agent_bridge -> astream_once -> bss-clients`. CSR portal: same shape as direct-write, minus `PortalSessionMiddleware` (its session story is the v0.5 stub-cookie path); the `ask` flow goes through `agent_bridge` like chat. When Phase 12 lands per-principal OAuth/JWT, both portals' inbound middleware is replaced; everything below the gate stays untouched.
+  Chat (v0.12) is the one self-serve route that goes `route -> astream_once -> bss-clients` (with `tool_filter="customer_self_serve"` narrowing the LLM-visible surface — see "Chat scoping" below). CSR portal: same shape as direct-write, minus `PortalSessionMiddleware` (its session story is the v0.5 stub-cookie path); the `ask` flow goes through `astream_once` like chat. When Phase 12 lands per-principal OAuth/JWT, both portals' inbound middleware is replaced; everything below the gate stays untouched.
 - **Runbook:** `docs/runbooks/portal-auth.md` (token pepper generation + rotation, dev mailbox tail, brute-force investigation, unverified-identity cleanup).
 
 The **Inventory sub-domain** (MSISDN pool + eSIM profile pool) lives inside the CRM service on port 8002, mounted under `/inventory-api/v1/...`. It has its own schema (`inventory`), repositories, policies, and HTTP endpoints — just no separate container. SOM and Subscription call it via `bss-clients` as if it were a distinct service. If it outgrows CRM, extraction to an 11th container is mechanical because the boundary is already enforced.
@@ -524,12 +530,12 @@ Migration tracked as a Phase 11 backlog item. See DECISIONS.md "Per-service Dock
 
 ### Footprint budget (motto #6)
 
-Re-measured during v0.6 against the post-v0.5 stack (9 services + 2 portals + OTel SDK + middleware). BYOI numbers from `docker stats --no-stream` after 5 minutes idle; bundled numbers added to all-in-one infra (Postgres + RabbitMQ + Metabase + Jaeger). v0.1 numbers retained for reference.
+Last full re-measurement was v0.6 against the post-v0.5 stack (9 services + 2 portals + OTel SDK + middleware). v0.7–v0.12 added schema-only migrations (catalog versioning, `portal_auth`, `audit.chat_usage`, `audit.chat_transcript`, `crm.case.chat_transcript_hash`) plus per-process in-memory state (chat conversation store, hourly sliding window) — no new container, no measurable RAM bump. The numbers below still represent the practical envelope.
 
 | Component | v0.1 RAM | v0.6 RAM | Notes |
 |---|---|---|---|
 | 9 × BSS service | ~1.2 GB | ~830 MB | OTel SDK + middleware ~5-10 MB per service |
-| 2 × portal (self-serve + csr) | — | ~270 MB | New v0.4 / v0.5 |
+| 2 × portal (self-serve + csr) | — | ~270 MB | New v0.4 / v0.5; portal-auth + chat-conversation-store add tens of KB of in-memory state per active customer in v0.8/v0.12, immaterial vs the process baseline |
 | Postgres (dev config) | ~400 MB | ~400 MB | Unchanged |
 | RabbitMQ | ~350 MB | ~350 MB | Unchanged |
 | Metabase | ~600 MB | ~600 MB | Unchanged |
@@ -537,7 +543,7 @@ Re-measured during v0.6 against the post-v0.5 stack (9 services + 2 portals + OT
 | **Total (BYOI, services + portals only)** | **~1.5 GB** | **~1.1 GB** | Comfortably under 2 GB |
 | **Total (all-in-one, +infra +Jaeger)** | **~2.85 GB** | **~2.65 GB** | Under the 4 GB motto |
 
-BYOI mode fits on a t3.small; all-in-one fits on a t3.medium. The motto-#6 4 GB ceiling holds with headroom.
+BYOI mode fits on a t3.small; all-in-one fits on a t3.medium. The motto-#6 4 GB ceiling holds with headroom. Re-measure pending v1.0 — real Singpass / Stripe / SM-DP+ adapters will add some footprint (predictably small; SDK clients only).
 
 ## Domain boundaries
 
@@ -702,25 +708,29 @@ Cost estimate: **~$4,000-8,000/month**.
 
 ### Deployability matrix
 
-| Capability | v0.6 status | Notes |
+(Tier-3 view — every capability needed to ship the platform onto a scaled MVNO. The v0.11 / v0.12 / v1.0 matrix above is the v0.12 readiness pass for the chat surface specifically.)
+
+| Capability | v0.12 status | Notes |
 |---|---|---|
 | Docker Compose bring-up | ✅ | BYOI is the default shape; all-in-one compose exists for quickstart |
 | ECS Fargate | ✅ | Each service is a task definition |
-| EKS | ✅ | Same containers, need K8s manifests (not in v0.6) |
+| EKS | ✅ | Same containers, need K8s manifests (not in v0.12) |
 | Horizontal scale stateless services | ✅ | Catalog, rating, provisioning-sim scale trivially |
 | Horizontal scale stateful services | ⚠️ | Requires consistent-hash routing by customer_id (Phase 13) |
 | Multi-AZ database | ✅ | Postgres connection URL is env-driven |
 | Zero-downtime deploys | ⚠️ | Needs graceful SIGTERM handler (wired in Phase 3 reference slice) |
 | TLS termination | ➖ | Expected at ALB / ingress layer, not per-service |
-| Auth between services | ⚠️ | Shared API token (v0.3) via `BSSApiTokenMiddleware` + `TokenAuthProvider`. Per-principal OAuth2 + JWT is Phase 12. `auth_context.py` seam unchanged — Phase 12 fills the principal from JWT claims. |
-| Per-portal named tokens | ✅ | v0.9 splits the perimeter into a `TokenMap` of named tokens. Self-serve portal carries `BSS_PORTAL_SELF_SERVE_API_TOKEN` → `service_identity="portal_self_serve"`; orchestrator + CSR keep `BSS_API_TOKEN` (default identity). `service_identity` flows into `audit.domain_event`, structlog, OTel spans. Rotation is per-token, restart-based. |
-| Operator-facing portal | ⚠️ | CSR console (v0.5) on port 9002 ships with stub login (NOT real auth). Real OAuth Phase 12. Trusted-network deploy only. |
-| Customer-facing portal | ⚠️ | Self-serve signup (v0.4) on port 9001 ships with no inbound auth (it's a public signup surface by design). Network exposure control required. |
-| Rate limiting per principal | ❌ | Phase 12 |
+| Auth between services | ⚠️ | Shared API token (v0.3) via `BSSApiTokenMiddleware` + `TokenAuthProvider`; v0.9 splits the perimeter into named tokens (`TokenMap`). Per-principal OAuth2 + JWT is Phase 12. `auth_context.py` seam unchanged — Phase 12 fills the principal from JWT claims. |
+| Per-portal named tokens | ✅ | v0.9 splits the perimeter. Self-serve portal carries `BSS_PORTAL_SELF_SERVE_API_TOKEN` → `service_identity="portal_self_serve"`; orchestrator + CSR keep `BSS_API_TOKEN` (default identity). `service_identity` flows into `audit.domain_event`, structlog, OTel spans. Rotation is per-token, restart-based. |
+| Operator-facing portal auth | ⚠️ | CSR console (v0.5) on port 9002 ships with stub login (NOT real auth). Real OAuth Phase 12. Trusted-network deploy only. |
+| Customer-facing portal auth | ✅ | Self-serve portal on 9001 ships with v0.8 email + magic-link / OTP behind `PortalSessionMiddleware`; v0.10 adds step-up auth gating every sensitive write (`SENSITIVE_ACTION_LABELS`). Public-route allowlist (`/welcome`, `/plans`, `/auth/*`, `/terms`, `/privacy`) explicit. `/signup/*` is gated on `requires_verified_email`. Per-principal OAuth Phase 12. |
+| Customer chat surface scoping | ✅ | v0.12 — `customer_self_serve` tool profile (16 curated `*.mine` wrappers + public catalog reads) + output ownership trip-wire + per-customer rate + monthly cost caps (`audit.chat_usage`, fail-closed). Five non-negotiable escalation categories via `case.open_for_me` with SHA-256-hashed transcript. 14-day soak: zero ownership trips, zero cross-customer leaks, drift 0%. |
+| Rate limiting per principal | ⚠️ | v0.12 caps the chat surface per customer (rate + monthly cost). General per-principal rate limiting on every BSS endpoint is Phase 12. |
 | Distributed tracing | ✅ | OpenTelemetry to Jaeger (v0.2). W3C traceparent through HTTP / MQ / SQL. `bss trace` renders ASCII swimlanes. |
 | Metrics export | ❌ | Counters/histograms go to structlog only. OTel metrics export decision pending — see ROADMAP.md "Near-term". |
-| uv workspace builds in CI | ⚠️ | Per-service Dockerfile with `sed` rewrite workaround (Phase 4 expedient). v0.6 re-evaluated; outcome documented in DECISIONS.md. |
+| uv workspace builds in CI | ⚠️ | Per-service Dockerfile with `sed` rewrite workaround (Phase 4 expedient). |
 | Schema boundary enforcement | ✅ | Each service only references its own schema; verified by grep. Co-tenant with Campaign OS in dev proves this. |
+| KYC / payment / eSIM provisioning | ⚠️ | All three mocked in v0.12 (`KYC-PREBAKED-001` attestation, sandbox card tokenizer, provisioning-sim). v1.0 swaps Singpass + Stripe + real SM-DP+ behind the existing seams; nothing else in v0.7–v0.12 is renegotiated. |
 
 ## Observability (v0.2)
 
