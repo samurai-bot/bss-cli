@@ -1491,6 +1491,9 @@
   background: var(--bg);
   min-height: 220px;
   max-height: 50vh;
+  /* v0.12 PR19 — smooth-scroll on the inline JS auto-stick
+     so each SSE frame's append animates rather than jumping. */
+  scroll-behavior: smooth;
 }
 .chat-widget-inline .chat-widget-thread {
   max-height: 60vh;

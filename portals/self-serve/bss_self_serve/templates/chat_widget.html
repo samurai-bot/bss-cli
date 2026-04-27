@@ -121,3 +121,24 @@ element only — the ``chat-thread-host`` div MUST wrap the
     complaints, identity recovery, and bereavement go to a human.
   </p>
 </div>
+
+{# v0.12 PR19 — auto-scroll the thread to the bottom (a) on
+   initial load so the latest message is in view, (b) on every
+   SSE frame swap so the streaming reply stays visible without
+   manual scrolling. The script is part of the partial; HTMX
+   evaluates it on widget mount + on post-form re-render. #}
+<script>
+(function(){
+  var t = document.getElementById('chat-widget-thread');
+  if (!t) return;
+  var stick = function(){ t.scrollTop = t.scrollHeight; };
+  // Initial mount: jump to the bottom (no smooth — instant).
+  requestAnimationFrame(stick);
+  // Each SSE message frame appends a child to .chat-log inside
+  // this thread. htmx:afterSwap bubbles up; smooth-scroll keeps
+  // the streaming feel.
+  t.addEventListener('htmx:afterSwap', function(){
+    requestAnimationFrame(stick);
+  });
+})();
+</script>
