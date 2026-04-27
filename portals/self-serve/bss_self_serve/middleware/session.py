@@ -31,6 +31,7 @@ from http.cookies import SimpleCookie
 from typing import Final
 
 import structlog
+from bss_clients.base import set_context as set_bss_context
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from bss_portal_auth import (
@@ -68,6 +69,27 @@ class PortalSessionMiddleware:
         state["identity"] = None
         state["customer_id"] = None
 
+        # v0.11 — stamp the bss-clients ContextVars so every outbound
+        # call from this request carries ``X-BSS-Channel: portal-self-serve``.
+        # CRM's interaction auto-log reads the channel header off the
+        # incoming request and writes it onto every interaction row, so
+        # forensic queries answer "which surface initiated this" without
+        # ambiguity. Actor defaults to ``portal-anon`` until the cookie
+        # resolves to a verified identity below; the resolved identity's
+        # email then overrides via a second set_bss_context call. The
+        # ContextVar set here is per-asyncio-Task, so concurrent requests
+        # don't bleed into each other.
+        request_id = ""
+        for k, v in scope.get("headers") or []:
+            if k == b"x-request-id":
+                request_id = v.decode("latin-1", errors="replace")
+                break
+        set_bss_context(
+            actor="portal-anon",
+            channel="portal-self-serve",
+            request_id=request_id,
+        )
+
         cookie_value = _read_cookie(scope, PORTAL_SESSION_COOKIE)
 
         rotated_session_id: str | None = None
@@ -89,6 +111,16 @@ class PortalSessionMiddleware:
                     state["session"] = sess_view
                     state["identity"] = identity_view
                     state["customer_id"] = identity_view.customer_id
+
+                    # v0.11 — once the verified identity resolves, lift
+                    # actor from ``portal-anon`` to the identity's email.
+                    # Channel stays ``portal-self-serve``; that's the
+                    # surface, not the user.
+                    set_bss_context(
+                        actor=identity_view.email,
+                        channel="portal-self-serve",
+                        request_id=request_id,
+                    )
 
                     rotated = await rotate_if_due(db, sess_view.id)
                     if rotated is not None:

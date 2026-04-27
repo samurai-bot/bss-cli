@@ -494,21 +494,26 @@ async def signup_step_poll(
     state = order.get("state") if isinstance(order, dict) else None
     if state == "completed":
         sub_id = _extract_subscription_id(order)
+        if not sub_id:
+            # Order is "completed" on the COM side but the
+            # ``targetSubscriptionId`` hasn't been stamped onto the
+            # order item yet — the SOM service emits the activation
+            # event before the COM event handler updates the order
+            # row, so there's a small race window. Treat as still in
+            # progress and re-trigger the poll on the next tick. The
+            # next call will see the stamped id.
+            return _render_step_fragment(request, sig)
         sig.subscription_id = sub_id
         sig.activation_code = _extract_activation_code(order)
         sig.step = "completed"
         sig.done = True
         await store.update(sig)
         # HTMX consumes ``HX-Redirect`` and navigates the whole page.
-        if sub_id:
-            resp = HTMLResponse(content="")
-            resp.headers["HX-Redirect"] = (
-                f"/confirmation/{sub_id}?session={sig.session_id}"
-            )
-            return resp
-        # Sub id missing — fall through to fragment so the user at
-        # least sees the "completed" state and can navigate manually.
-        return _render_step_fragment(request, sig)
+        resp = HTMLResponse(content="")
+        resp.headers["HX-Redirect"] = (
+            f"/confirmation/{sub_id}?session={sig.session_id}"
+        )
+        return resp
 
     if state in ("failed", "cancelled"):
         sig.step = "failed"
@@ -657,29 +662,41 @@ def _local_tokenize(card_number: str) -> dict[str, str]:
     return {"cardToken": token, "last4": last4, "brand": brand}
 
 
+_SUB_ID_KEYS = (
+    "targetSubscriptionId",  # COM's TMF622 order-item envelope (real shape)
+    "target_subscription_id",
+    "subscriptionId",
+    "subscription_id",
+)
+
+
 def _extract_subscription_id(order: dict[str, Any]) -> str | None:
     """Pull the SUB-* id off a completed order payload.
 
-    COM's order envelope carries the resulting subscription id in
-    ``items[*].subscriptionId`` once SOM activation completes. Scan
-    every item; the first SUB-* wins. Returns ``None`` if the field
-    isn't there yet (caller falls back to next-tick polling).
+    COM's TMF622 order envelope carries the resulting subscription id
+    in ``items[*].targetSubscriptionId`` once SOM activation completes
+    (verified against ``GET /tmf-api/productOrderingManagement/v4/productOrder/{id}``).
+    Scan every item; the first SUB-* wins. Falls back to a few legacy
+    aliases (subscriptionId / subscription_id, top-level keys) so
+    older envelope shapes and the unit-test fakes both resolve.
+    Returns ``None`` if the field isn't there yet — the poll route
+    treats that as "still in progress" and retriggers.
     """
-    items = order.get("items") if isinstance(order, dict) else None
-    if not isinstance(items, list):
-        # Fallbacks for variant envelopes that hoist the id to top-level.
-        for key in ("subscriptionId", "subscription_id"):
-            v = order.get(key) if isinstance(order, dict) else None
-            if isinstance(v, str) and v.startswith("SUB-"):
-                return v
+    if not isinstance(order, dict):
         return None
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        for key in ("subscriptionId", "subscription_id"):
-            v = item.get(key)
-            if isinstance(v, str) and v.startswith("SUB-"):
-                return v
+    for key in _SUB_ID_KEYS:
+        v = order.get(key)
+        if isinstance(v, str) and v.startswith("SUB-"):
+            return v
+    items = order.get("items")
+    if isinstance(items, list):
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            for key in _SUB_ID_KEYS:
+                v = item.get(key)
+                if isinstance(v, str) and v.startswith("SUB-"):
+                    return v
     return None
 
 
