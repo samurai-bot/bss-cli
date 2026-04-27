@@ -132,6 +132,47 @@ class FakeCOM:
 
 
 @dataclass
+class FakeCRM:
+    """v0.10 PR 8 — CRM client fake for contact-medium routes.
+
+    Pre-seed by setting ``mediums_by_customer[customer_id] = [{...}, ...]``.
+    Each medium dict mirrors the camelCase TMF629 ContactMedium shape:
+    {id, mediumType, value, isPrimary, validFrom}.
+    """
+
+    mediums_by_customer: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    update_calls: list[tuple[str, str, str]] = field(default_factory=list)
+    next_error: Exception | None = None
+
+    async def get_customer(self, customer_id: str) -> dict[str, Any]:
+        return {
+            "id": customer_id,
+            "contactMedium": [
+                dict(cm) for cm in self.mediums_by_customer.get(customer_id, [])
+            ],
+        }
+
+    async def list_contact_mediums(
+        self, customer_id: str
+    ) -> list[dict[str, Any]]:
+        return [dict(cm) for cm in self.mediums_by_customer.get(customer_id, [])]
+
+    async def update_contact_medium(
+        self, customer_id: str, medium_id: str, *, value: str
+    ) -> dict[str, Any]:
+        if self.next_error is not None:
+            err = self.next_error
+            self.next_error = None
+            raise err
+        self.update_calls.append((customer_id, medium_id, value))
+        for cm in self.mediums_by_customer.get(customer_id, []):
+            if cm["id"] == medium_id:
+                cm["value"] = value
+                return dict(cm)
+        raise KeyError(medium_id)
+
+
+@dataclass
 class FakePayment:
     methods_by_customer: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     create_calls: list[dict[str, Any]] = field(default_factory=list)
@@ -219,7 +260,7 @@ class FakeClientsBundle:
     # v0.10 — added so post-login route tests can pre-seed responses.
     payment: FakePayment = field(default_factory=FakePayment)
     provisioning: Any = None
-    crm: Any = None
+    crm: FakeCRM = field(default_factory=FakeCRM)
 
 
 SAMPLE_VAS = [
@@ -327,7 +368,8 @@ def client(fake_clients: FakeClientsBundle):
          patch("bss_self_serve.routes.top_up.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.payment_methods.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.esim.get_clients", return_value=fake_clients), \
-         patch("bss_self_serve.routes.cancel.get_clients", return_value=fake_clients):
+         patch("bss_self_serve.routes.cancel.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.profile.get_clients", return_value=fake_clients):
         app = create_app(Settings())
         with TestClient(app) as c:
             yield c
@@ -414,7 +456,8 @@ def authed_client(fake_clients: FakeClientsBundle):
          patch("bss_self_serve.routes.top_up.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.payment_methods.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.esim.get_clients", return_value=fake_clients), \
-         patch("bss_self_serve.routes.cancel.get_clients", return_value=fake_clients):
+         patch("bss_self_serve.routes.cancel.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.profile.get_clients", return_value=fake_clients):
         app = create_app(Settings())
         with TestClient(app) as c:
             c.cookies.set(PORTAL_SESSION_COOKIE, session_id)

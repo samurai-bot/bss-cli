@@ -146,6 +146,36 @@ class CRMClient(BSSClient):
         )
         return resp.json() if resp.content else {"id": medium_id, "removed": True}
 
+    async def update_contact_medium(
+        self, customer_id: str, medium_id: str, *, value: str
+    ) -> dict[str, Any]:
+        """PATCH /tmf-api/customerManagement/v4/customer/{id}/contactMedium/{cm}.
+
+        v0.10 — phone + address updates from the self-serve portal go
+        through this. Email updates go through the cross-schema
+        ``bss_portal_auth.email_change`` flow; calling this with an
+        email-typed medium is rejected server-side with
+        ``policy.customer.contact_medium.email_must_use_change_flow``.
+        """
+        resp = await self._request(
+            "PATCH",
+            f"/tmf-api/customerManagement/v4/customer/{customer_id}/contactMedium/{medium_id}",
+            json={"value": value},
+        )
+        return resp.json()
+
+    async def list_contact_mediums(
+        self, customer_id: str
+    ) -> list[dict[str, Any]]:
+        """Convenience: return the customer's active contact mediums.
+
+        Wraps ``get_customer`` and pulls the ``contactMedium`` list off
+        the TMF629 response. v0.10 — saves portal route handlers from
+        re-implementing the extraction.
+        """
+        cust = await self.get_customer(customer_id)
+        return list(cust.get("contactMedium") or [])
+
     async def close_customer(self, customer_id: str) -> dict[str, Any]:
         """PATCH customer with status=closed (policy-gated)."""
         return await self.update_customer(customer_id, {"status": "closed"})

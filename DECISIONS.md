@@ -1502,6 +1502,68 @@ absorbs it. The Phase-9 design doctrine "code never hardcodes a
 model name — only `.env` does" is what makes this swap a one-line
 change in production, not a refactor.
 
+## 2026-04-27 — v0.10.0 PR 8 — Email-change cross-schema atomic write (doctrine bend)
+**Context:** v0.10 PR 8 ships email-change on the self-serve portal.
+The flow has two atomicity-critical writes that must commit
+together: ``crm.contact_medium`` (the email row on the customer's
+party) and ``portal_auth.identity.email`` (the row the login flow
+reads). If they don't commit together, the customer's CRM record
+shows the new email but they still log in with the old one (or
+vice versa), and there's no easy recovery path. V0_10_0.md "Do not
+silently downgrade the email-change flow's atomicity" calls this
+out as the explicit anti-pattern.
+The two affected schemas live in the same Postgres instance, so
+"a single transaction spanning both schemas" is the right answer
+the phase doc points at. But the natural way for the portal to
+write to ``crm.contact_medium`` is via the CRM service's HTTP API
+(through bss-clients), which has its own commit boundary. Doing
+that plus a separate ``portal_auth.identity`` write in the portal
+is exactly the half-commit trap.
+**Decision:** Add ``bss_portal_auth.email_change.verify_email_change``
+that writes to BOTH ``crm.contact_medium`` AND
+``portal_auth.identity.email`` (plus the
+``portal_auth.email_change_pending`` row) in a single
+``AsyncSession`` transaction. The function is the one named place
+where the cross-schema write lives. The portal route handler
+(``routes/profile.py::email_change_verify_submit``) opens a session,
+calls the function, and either commits everything or rolls back
+everything; the caller never sees a half-state.
+This is a deliberate, narrow exception to the project's
+"writes go through service-side policies" rule. The justification:
+splitting the update across two HTTP calls (CRM, then portal_auth)
+is exactly the half-committed state the doctrine forbids, and the
+two schemas live in the same Postgres instance so a single
+transaction spans them naturally. Email-change is the ONLY flow
+in v0.10–v0.11 that crosses the schema boundary; future flows
+that need similar atomicity must either (a) add a service-side
+composite operation, (b) use a documented saga with explicit
+compensation, or (c) extend this exception with their own
+DECISIONS entry. The default remains "go through the service
+HTTP API."
+**Alternatives:** (a) Add a server-side composite endpoint in CRM
+that ALSO writes to ``portal_auth.identity.email`` — rejected;
+forces the CRM service to know about the portal_auth schema, a
+layering violation that bleeds across other future portal-vs-CRM
+changes. (b) Saga with compensation: portal writes CRM via HTTP,
+then portal_auth, with a compensating CRM rollback if portal_auth
+fails — rejected per the phase doc's "occasionally end up with
+mismatched states and no easy way to detect or recover" warning;
+the compensation itself can fail and you're back to the same
+problem. (c) Two-phase commit / XA — rejected as massive
+infrastructure overkill for a once-per-customer-lifetime flow.
+**Consequences:** The email-change atomicity claim is enforceable
+and tested. ``test_routes_profile.py::test_email_change_verify_rolls_back_on_partial_failure``
+plants a synthetic mid-transaction failure and asserts NEITHER
+schema's row was flipped — that's the load-bearing test for the
+"atomic" claim. The new ``bss_portal_auth.email_change`` module
+is small (~250 lines) and reviewable; future changes that touch
+it get extra scrutiny. The doctrine bend is documented in three
+places: this DECISIONS entry, the module-level docstring on
+``email_change.py``, and a comment in ``routes/profile.py``.
+Re-introducing similar cross-schema writes elsewhere requires its
+own justification — the prohibition still applies in the general
+case.
+
 ## 2026-04-27 — v0.10.0 — eSIM redownload is a read-only re-display, not a real rearm
 **Context:** v0.10 PR 6 ships ``/esim/<subscription_id>`` so a
 customer can see their LPA activation code + QR after signup. The

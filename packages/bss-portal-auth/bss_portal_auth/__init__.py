@@ -28,6 +28,14 @@ fallback; the dataclasses (``IdentityView``, ``SessionView``,
 
 from .audit import record_portal_action
 from .config import Settings
+from .email_change import (
+    EmailChangeApplied,
+    EmailChangeFailed,
+    EmailChangeStarted,
+    cancel_pending_email_change,
+    start_email_change,
+    verify_email_change,
+)
 from .email import (
     EmailAdapter,
     LoggingEmailAdapter,
@@ -89,4 +97,11 @@ __all__ = [
     "consume_step_up_token",
     # v0.10 — portal-side per-write audit
     "record_portal_action",
+    # v0.10 PR 8 — cross-schema atomic email change
+    "start_email_change",
+    "verify_email_change",
+    "cancel_pending_email_change",
+    "EmailChangeStarted",
+    "EmailChangeApplied",
+    "EmailChangeFailed",
 ]

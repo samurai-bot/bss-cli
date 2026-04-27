@@ -147,6 +147,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         landing,
         msisdn_picker,
         payment_methods,
+        profile,
         session_api,
         signup,
         top_up,
@@ -167,6 +168,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(payment_methods.router)
     app.include_router(esim.router)
     app.include_router(cancel.router)
+    app.include_router(profile.router)
 
     return app
 

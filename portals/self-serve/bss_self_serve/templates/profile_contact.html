@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Contact details · bss-cli self-serve{% endblock %}
+
+{% block main %}
+<section class="profile-contact">
+  <h1 class="page-title">Contact details</h1>
+
+  {% set flash = request.query_params.get('flash') %}
+  {% if flash == 'phone_update' %}
+    <p class="form-flash" role="status">Phone number updated.</p>
+  {% elif flash == 'address_update' %}
+    <p class="form-flash" role="status">Address updated.</p>
+  {% elif flash == 'email_change' %}
+    <p class="form-flash" role="status">Email updated.</p>
+  {% elif flash == 'email_change_cancelled' %}
+    <p class="form-flash" role="status">Pending email change cancelled.</p>
+  {% endif %}
+
+  {% if error %}
+    <p class="form-error" role="alert">{{ error }}</p>
+  {% endif %}
+
+  {% if pending_email_change %}
+    <aside class="profile-pending-banner">
+      <strong>Email change pending.</strong>
+      We sent a verification code to <code>{{ pending_email_change.new_email }}</code>.
+      Enter the code at <a href="/profile/contact/email/verify">/profile/contact/email/verify</a>
+      to finish the change. Your current email keeps working until then.
+      <form method="post" action="/profile/contact/email/cancel"
+            class="profile-pending-cancel">
+        <button type="submit" class="line-card-cta-link">Cancel pending change</button>
+      </form>
+    </aside>
+  {% endif %}
+
+  <ul class="profile-contact-list">
+    {% for cm in mediums %}
+      <li class="profile-cm
+                 {% if cm.mediumType == 'email' %}profile-cm--email{% endif %}">
+        <header class="profile-cm-header">
+          <span class="profile-cm-type">{{ cm.mediumType }}</span>
+          <span class="profile-cm-value">{{ cm.value }}</span>
+        </header>
+
+        {% if cm.mediumType == 'email' %}
+          {% if not pending_email_change %}
+            <form method="post" action="/profile/contact/email/change" class="profile-cm-form">
+              <label>
+                <span>New email</span>
+                <input type="email" name="new_email" required>
+              </label>
+              <button type="submit" class="welcome-cta">
+                Send verification to new email
+              </button>
+            </form>
+            <p class="page-subtitle profile-cm-fineprint">
+              Email is your account identity. Changing it requires
+              verifying the new address with a 6-digit code we send
+              there. Your current email keeps working until you finish.
+            </p>
+          {% endif %}
+        {% elif cm.mediumType == 'mobile' %}
+          <form method="post" action="/profile/contact/phone/update" class="profile-cm-form">
+            <input type="hidden" name="cm_id" value="{{ cm.id }}">
+            <label>
+              <span>New phone</span>
+              <input type="tel" name="value" value="{{ cm.value }}" required>
+            </label>
+            <button type="submit" class="welcome-cta">Update phone</button>
+          </form>
+          <p class="page-subtitle profile-cm-fineprint">
+            This is your contact phone — separate from the MSISDN on
+            your line(s). Updating it doesn't affect your service.
+          </p>
+        {% elif cm.mediumType == 'postal' %}
+          <form method="post" action="/profile/contact/address/update" class="profile-cm-form">
+            <input type="hidden" name="cm_id" value="{{ cm.id }}">
+            <label>
+              <span>Address</span>
+              <input type="text" name="value" value="{{ cm.value }}" required>
+            </label>
+            <button type="submit" class="welcome-cta">Update address</button>
+          </form>
+        {% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+
+  <div class="dashboard-actions">
+    <a class="welcome-cta" href="/">Back to dashboard</a>
+  </div>
+</section>
+{% endblock %}

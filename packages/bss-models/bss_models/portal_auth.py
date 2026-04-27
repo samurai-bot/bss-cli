@@ -124,6 +124,48 @@ class LoginAttempt(Base, TenantMixin):
     stage: Mapped[str | None] = mapped_column(Text)
 
 
+class EmailChangePending(Base, TenantMixin):
+    """v0.10 — pending email-change verification.
+
+    The customer entered a new email and received an OTP at it. Until
+    they verify or the row expires (24h), the OTP can be redeemed to
+    atomically swap the email on both ``crm.contact_medium`` and
+    ``portal_auth.identity.email``. Re-starting the flow voids the
+    prior pending row.
+    """
+
+    __tablename__ = "email_change_pending"
+    __table_args__ = (
+        Index(
+            "uq_email_change_pending_identity_active",
+            "identity_id",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+        ),
+        Index(
+            "ix_email_change_pending_expires",
+            "expires_at",
+            postgresql_where=text("status = 'pending'"),
+        ),
+        {"schema": SCHEMA},
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    identity_id: Mapped[str] = mapped_column(
+        Text, ForeignKey(f"{SCHEMA}.identity.id"), nullable=False
+    )
+    new_email: Mapped[str] = mapped_column(Text, nullable=False)
+    code_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(TZDateTime)
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="pending", server_default="pending"
+    )
+    ip: Mapped[str | None] = mapped_column(Text)
+    user_agent: Mapped[str | None] = mapped_column(Text)
+
+
 class PortalAction(Base, TenantMixin):
     """v0.10 — per-write portal-side audit row.
 

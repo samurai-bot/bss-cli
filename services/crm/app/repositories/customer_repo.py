@@ -155,6 +155,20 @@ class CustomerRepository:
         await self._s.delete(cm)
         await self._s.flush()
 
+    async def update_contact_medium_value(
+        self, cm: ContactMedium, new_value: str
+    ) -> ContactMedium:
+        """Set ``cm.value = new_value`` and flush. v0.10 — used by phone/address.
+
+        Email changes do NOT go through this method; the cross-schema
+        atomic flow in ``bss_portal_auth.email_change`` writes
+        ``ContactMedium.value`` directly within a single transaction
+        spanning ``crm`` + ``portal_auth``.
+        """
+        cm.value = new_value
+        await self._s.flush()
+        return cm
+
     # ── Agent ───────────────────────────────────────────────────────
 
     async def get_agent(self, agent_id: str) -> Agent | None:

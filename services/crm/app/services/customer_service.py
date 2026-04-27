@@ -268,6 +268,70 @@ class CustomerService:
         await self._session.commit()
         return cm
 
+    async def update_contact_medium(
+        self, customer_id: str, cm_id: str, *, value: str
+    ) -> ContactMedium:
+        """Update the ``value`` of an existing contact medium.
+
+        v0.10 — phone / address updates from the self-serve portal go
+        through this method. Email updates do NOT — they go through
+        ``bss_portal_auth.email_change`` so the CRM update + the
+        ``portal_auth.identity.email`` update commit atomically.
+        Calling this method with ``cm.medium_type == 'email'`` raises
+        ``policy.customer.contact_medium.email_must_use_change_flow``.
+        """
+        cust = await self._customer_repo.get(customer_id)
+        if not cust:
+            from app.policies.base import PolicyViolation
+            raise PolicyViolation(
+                rule="customer.contact.not_found",
+                message=f"Customer {customer_id} not found",
+                context={"customer_id": customer_id},
+            )
+        cm = await self._customer_repo.get_contact_medium(cm_id)
+        if not cm or cm.party_id != cust.party_id:
+            from app.policies.base import PolicyViolation
+            raise PolicyViolation(
+                rule="customer.contact_medium.unknown",
+                message=f"Contact medium {cm_id} not found for customer {customer_id}",
+                context={"customer_id": customer_id, "cm_id": cm_id},
+            )
+        if cm.medium_type == "email":
+            from app.policies.base import PolicyViolation
+            raise PolicyViolation(
+                rule="customer.contact_medium.email_must_use_change_flow",
+                message=(
+                    "Email updates must use the verified email-change flow "
+                    "(start_email_change → verify_email_change), not the "
+                    "direct contact-medium update."
+                ),
+                context={"customer_id": customer_id, "cm_id": cm_id},
+            )
+
+        await self._customer_repo.update_contact_medium_value(cm, value)
+
+        ctx = auth_context.current()
+        await publisher.publish(
+            self._session,
+            event_type="customer.contact_medium_updated",
+            aggregate_type="customer",
+            aggregate_id=customer_id,
+            payload={"cm_id": cm_id, "medium_type": cm.medium_type},
+        )
+        await self._interaction_repo.create(
+            Interaction(
+                id=_next_id("INT"),
+                customer_id=customer_id,
+                channel=ctx.channel,
+                direction="inbound",
+                summary=f"Contact medium updated: {cm.medium_type}",
+                occurred_at=clock_now(),
+                tenant_id=ctx.tenant,
+            )
+        )
+        await self._session.commit()
+        return cm
+
     async def remove_contact_medium(self, customer_id: str, cm_id: str) -> None:
         cust = await self._customer_repo.get(customer_id)
         if not cust:

@@ -384,6 +384,109 @@
   font-size: 14px;
 }
 
+/* ─── Profile / contact medium (v0.10) ───────────────────────── */
+
+.profile-contact,
+.profile-email-pending,
+.profile-email-verify,
+.profile-forbidden {
+  max-width: 640px;
+  margin: 32px auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.profile-pending-banner {
+  background: #fff8e1;
+  border: 1px solid #f39c12;
+  border-radius: 4px;
+  padding: 12px 16px;
+  font-size: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.profile-pending-cancel { margin: 0; }
+.profile-contact-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.profile-cm {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 16px;
+  background: var(--bg-inset);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.profile-cm--email {
+  border-color: var(--accent);
+}
+.profile-cm-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+.profile-cm-type {
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  color: var(--fg-muted);
+  background: var(--bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+.profile-cm-value {
+  font-family: var(--mono);
+  font-size: 14px;
+}
+.profile-cm-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.profile-cm-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.profile-cm-form label > span {
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+.profile-cm-form input {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: var(--mono);
+  background: var(--bg);
+  color: var(--fg);
+}
+.profile-cm-fineprint {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.profile-email-verify-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.profile-email-verify-form input {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 16px;
+  letter-spacing: 0.2em;
+  background: var(--bg);
+  color: var(--fg);
+}
+
 /* ─── Cancel a line (v0.10) ──────────────────────────────────── */
 
 .cancel-confirm,

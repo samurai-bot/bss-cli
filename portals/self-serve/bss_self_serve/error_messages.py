@@ -76,6 +76,21 @@ RULE_MESSAGES: Final[Mapping[str, str]] = {
     "policy.customer.contact_medium.unknown": (
         "We couldn't find that contact entry. Please refresh the page."
     ),
+    "policy.customer.contact_medium.email_must_use_change_flow": (
+        "Email changes need a verified new address. Use the email-change "
+        "flow on the contact-details page."
+    ),
+    "policy.customer.contact_medium.no_active_pending": (
+        "There's no email-change pending right now. Start a new one from "
+        "the contact-details page."
+    ),
+    "policy.customer.contact_medium.wrong_code": (
+        "That code doesn't match. Try again, or restart the change."
+    ),
+    "policy.customer.contact_medium.expired": (
+        "Your verification code has expired. Restart the email change "
+        "from the contact-details page."
+    ),
     # Cross-resource ownership (server-side checks)
     "policy.ownership.subscription_not_owned": (
         "That line doesn't belong to your account."
