@@ -134,10 +134,39 @@ A portal is a **channel** onto the BSS — a thin HTTP surface that translates a
 
 | # | Portal | Port | Audience | Writes go through… | Inbound auth |
 |---|---|---|---|---|---|
-| 1 | self-serve | 9001 | Prospect browsing / signing up | `agent_bridge.drive_signup` → `astream_once(channel="portal-self-serve")` | **email + magic link / OTP (v0.8)** — see "Portal authentication" below |
+| 1 | self-serve | 9001 | Prospect browsing / signing up + post-login customer self-serve | **Signup funnel + chat** → `agent_bridge.*` → `astream_once(channel="portal-self-serve")`. **Post-login self-serve (v0.10+)** → direct `bss-clients` writes from route handlers, gated by step-up + ownership. | **email + magic link / OTP (v0.8)** — see "Portal authentication" below |
 | 2 | csr | 9002 | CSR operators | `agent_bridge.ask_about_customer` → `astream_once(channel="portal-csr", actor=<op>)` | stub login (cookie); Phase 12 swaps for real OAuth |
 
-The defining property of a portal is that **every write routes through the LLM orchestrator**. The route handler never imports `CustomerClient.create`, `OrderClient.create`, or any other mutating bss-clients method. It builds a natural-language instruction, passes it to `astream_once`, and streams the resulting events (tool call started, tool call completed, final message) back to the browser via Server-Sent Events.
+The portal-write story split in v0.10:
+
+* **Signup funnel + chat** continue to route through the LLM orchestrator. The route handler builds a natural-language instruction, passes it to `astream_once`, and streams events to the browser via SSE. This is what v0.4 shipped.
+* **(v0.10+) Post-login customer self-serve** routes write *directly* via `bss-clients` from the route handler. The customer principal is bound from `request.state.customer_id` (verified session); per-resource ownership policies and step-up auth gate sensitive writes; one route = one BSS write. Eight pages today: `/`, `/top-up`, `/payment-methods*`, `/esim/<id>`, `/subscription/<id>/cancel`, `/profile/contact*`, `/billing/history`, `/plan/change*`. See `CLAUDE.md` (v0.10+) anti-pattern + DECISIONS 2026-04-27 for the doctrine carve-out rationale.
+
+```
+┌─ portal-self-serve (9001) ────────────────────────────────┐
+│                                                            │
+│  signup funnel (/signup/*)  ──────► agent_bridge ──────►   │ ← orchestrator (v0.4-v0.10)
+│  chat (/chat)               ──────► astream_once ──────►   │   v0.11 signup migrates direct
+│                                                            │   v0.12 narrows the chat scope
+│  POST-LOGIN DIRECT (v0.10+)                                │
+│    /                       ─────► subscription.list_for_  │
+│    /top-up                 ─────► subscription.purchase_  │
+│    /payment-methods/*      ─────► payment.{create,remove, │ ─► direct via bss-clients
+│                                    set_default}_method    │   (NamedTokenAuthProvider —
+│    /esim/<id>              ─────► subscription.get +      │    "portal_self_serve")
+│                                    inventory.get_activ.   │
+│    /subscription/<id>/cancel ───► subscription.terminate  │
+│    /profile/contact/*      ─────► customer.update_contact_│
+│                                    medium + cross-schema  │
+│                                    email-change           │
+│    /billing/history        ─────► payment.list_payments + │
+│                                    count_payments         │
+│    /plan/change*           ─────► subscription.schedule_  │
+│                                    plan_change + cancel   │
+└────────────────────────────────────────────────────────────┘
+```
+
+Reads have always gone direct (the doctrine never required mediating a pass-through GET). The v0.10 carve-out extends that posture to writes that are deterministic + customer-scoped + frequent — precisely the routine flows where an LLM round-trip is latency tax with no judgment-quality benefit.
 
 - **Reads go direct.** Listing offerings, fetching a customer 360, polling order state — all direct `bss-clients` calls. LLM-mediating a pass-through read is pointless latency.
 - **`X-BSS-Channel` attribution.** Every outbound call carries the portal's channel name (`portal-self-serve` or `portal-csr`) so CRM's interaction auto-log attributes the write to the right surface. The hero scenarios assert this.

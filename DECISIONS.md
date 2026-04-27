@@ -1405,3 +1405,277 @@ including historical rows. The v0.9 phase doc's "audit by surface"
 queries (in the rotation runbook) work correctly against pre-v0.9
 data: a leak detection query on the past 90 days returns sane
 counts because the historical baseline is `'default'`, not `NULL`.
+
+## 2026-04-27 — v0.10.0 — Post-login self-serve writes go direct via `bss-clients` (doctrine carve-out)
+**Context:** v0.4 established "every portal write goes through the
+LLM orchestrator via `agent_bridge` → `astream_once`" as a blanket
+rule. That rule existed because the v0.4 demo's purpose was to show
+the agent pattern works end-to-end on a customer-facing surface. By
+v0.10 the purpose has shifted: the post-login dashboard, top-up,
+COF management, eSIM redownload, cancel, contact update, charge
+history, and plan change are routine flows a customer performs
+daily. Routing each of those through an LLM round-trip costs ~2–5s
+of latency, burns tokens for deterministic operations, and obscures
+the audit trail (the LLM's tool call vs. the customer's intent). The
+doctrine question: do we keep the v0.4 blanket rule, or carve out
+authenticated post-login self-serve as a direct-API surface?
+**Decision:** Carve out authenticated post-login customer self-serve
+as a direct-API surface. Route handlers behind `requires_linked_customer`
+may call `bss-clients` directly. The customer principal is bound
+from `request.state.customer_id` (verified session, never form/query
+input); per-resource ownership policies (`check_subscription_owned_by`,
+`check_service_owned_by`, `check_payment_method_owned_by`) gate every
+cross-resource access; sensitive writes require step-up auth via the
+`requires_step_up(label)` dependency, with `SENSITIVE_ACTION_LABELS`
+as the greppable source of truth. One route = one `bss-clients` write
+(or zero) — no composition. The signup funnel (v0.4 / v0.8) and the
+chat surface (v0.4–v0.11) continue going through the orchestrator;
+they remain the surfaces where the LLM is a feature, not a tax.
+**Alternatives:** (a) Keep the v0.4 blanket rule — rejected; the
+latency cost on a daily-use page like the dashboard is large and
+visible, and the LLM adds nothing on a deterministic top-up. (b)
+Make everything direct, including signup and chat — rejected; that
+collapses the v0.4 demo's signature artifact (the agent log
+streaming during signup) and pre-empts v0.11's chat scoping work.
+(c) Allow composition in route handlers — rejected; route-handler
+composition is how silent data drift sneaks in (commit A succeeds,
+commit B fails, no rollback). Service-side composite operations or
+the orchestrator are the right place for "do A then B".
+**Consequences:** Eight new self-serve pages run sub-second and
+deterministic. The doctrine is narrower than "everything direct" —
+it explicitly preserves orchestrator-mediation for signup and chat,
+and Phase 12's per-principal OAuth2 swap still lands at the same
+seam (`auth_context.py`). Greppable doctrine guards enforce the
+boundary: `rg 'astream_once' portals/self-serve/bss_self_serve/routes/`
+must match only chat + signup; `rg 'customer_id\s*=\s*(form|body|query|path)'`
+must stay empty in post-login routes. The cross-customer attempt
+suite is non-negotiable — every sensitive route gets a "try as the
+wrong customer" test that asserts 403 + audit row. Future deliverables
+that propose extending the carve-out (e.g., "make the chat direct
+because it'd be faster") require their own DECISIONS entry; they
+don't ride on this one.
+
+## 2026-04-27 — v0.10.0 — Default LLM model swapped from MiMo v2 Flash to google/gemma-4-26b-a4b-it
+**Context:** Phase 9 picked `xiaomi/mimo-v2-flash` as the default
+dev/hero-scenario model: $0.09/M prompt, $0.29/M completion, 262K
+context, clean instruction-following on the Phase 8 pre-flight.
+That choice held through v0.9. During v0.10 development the LLM
+hero scenarios (`llm_troubleshoot_blocked_subscription`,
+`portal_csr_blocked_diagnosis`, `portal_self_serve_signup_v0_8`)
+started spiking from steady ~10–17s/run to 50–180s/run, with
+intermittent failures (10/11, 14/15 step-passes — never the same
+scenario twice in a row, never the same step). The pattern was a
+provider-side latency / availability hiccup on Mimo, not a portal
+or scenario regression: re-running with no code changes flipped
+results, and the failures landed on different scenarios across
+runs. Hero "three runs in a row green" stopped being a deterministic
+ship gate.
+**Decision:** Switch the default model in `.env` (and `.env.example`)
+to `google/gemma-4-26b-a4b-it`, also via OpenRouter. Three back-to-back
+hero runs immediately after the swap: 9/9 PASS each, with steady
+durations (LLM steps 10–15s, no spikes). The phase-doc historical
+record (PHASE_09 / PHASE_10 / V0_2 / V0_4 / V0_5 / V0_11) keeps the
+MiMo references — those are *frozen* records of decisions made at
+the time, not a living description. Live surfaces (`CLAUDE.md` tech
+stack, `.env.example`, the operational diagnostic comment in the
+LLM hero scenario YAML) are updated to point at the current
+default.
+**Alternatives:** (a) Keep MiMo and absorb the flakes via retries —
+rejected; the doctrine "if the LLM scenario is flaky, the fix is the
+semantic layer, not the test" (PHASE_10) means we don't paper over
+provider hiccups with retry loops. (b) Swap to Sonnet 4.6 / Opus
+4.7 — rejected for the *default*; reserved as the explicit override
+for cases where tool-call quality matters more than cost. The
+`BSS_LLM_MODEL` env var is and remains the single switch; no code
+hardcodes a model name. (c) Backfill the historical phase docs to
+say "Gemma" — rejected; phase docs are append-only frozen records
+and rewriting them would lie to future readers about what was true
+when. The DECISIONS log is the running history; this entry is the
+canonical "swap happened on 2026-04-27".
+**Consequences:** Hero-scenario flakes stop. Cost / latency / context
+properties are comparable to MiMo for our workload (small number of
+tool calls per scenario). The swap is reversible — flip
+`BSS_LLM_MODEL` back, restart, done. If Gemma later develops its own
+issues, the next switch is a one-line env change and another
+DECISIONS entry; the abstraction layer (OpenRouter via openai SDK)
+absorbs it. The Phase-9 design doctrine "code never hardcodes a
+model name — only `.env` does" is what makes this swap a one-line
+change in production, not a refactor.
+
+## 2026-04-27 — v0.10.0 PR 8 — Email-change cross-schema atomic write (doctrine bend)
+**Context:** v0.10 PR 8 ships email-change on the self-serve portal.
+The flow has two atomicity-critical writes that must commit
+together: ``crm.contact_medium`` (the email row on the customer's
+party) and ``portal_auth.identity.email`` (the row the login flow
+reads). If they don't commit together, the customer's CRM record
+shows the new email but they still log in with the old one (or
+vice versa), and there's no easy recovery path. V0_10_0.md "Do not
+silently downgrade the email-change flow's atomicity" calls this
+out as the explicit anti-pattern.
+The two affected schemas live in the same Postgres instance, so
+"a single transaction spanning both schemas" is the right answer
+the phase doc points at. But the natural way for the portal to
+write to ``crm.contact_medium`` is via the CRM service's HTTP API
+(through bss-clients), which has its own commit boundary. Doing
+that plus a separate ``portal_auth.identity`` write in the portal
+is exactly the half-commit trap.
+**Decision:** Add ``bss_portal_auth.email_change.verify_email_change``
+that writes to BOTH ``crm.contact_medium`` AND
+``portal_auth.identity.email`` (plus the
+``portal_auth.email_change_pending`` row) in a single
+``AsyncSession`` transaction. The function is the one named place
+where the cross-schema write lives. The portal route handler
+(``routes/profile.py::email_change_verify_submit``) opens a session,
+calls the function, and either commits everything or rolls back
+everything; the caller never sees a half-state.
+This is a deliberate, narrow exception to the project's
+"writes go through service-side policies" rule. The justification:
+splitting the update across two HTTP calls (CRM, then portal_auth)
+is exactly the half-committed state the doctrine forbids, and the
+two schemas live in the same Postgres instance so a single
+transaction spans them naturally. Email-change is the ONLY flow
+in v0.10–v0.11 that crosses the schema boundary; future flows
+that need similar atomicity must either (a) add a service-side
+composite operation, (b) use a documented saga with explicit
+compensation, or (c) extend this exception with their own
+DECISIONS entry. The default remains "go through the service
+HTTP API."
+**Alternatives:** (a) Add a server-side composite endpoint in CRM
+that ALSO writes to ``portal_auth.identity.email`` — rejected;
+forces the CRM service to know about the portal_auth schema, a
+layering violation that bleeds across other future portal-vs-CRM
+changes. (b) Saga with compensation: portal writes CRM via HTTP,
+then portal_auth, with a compensating CRM rollback if portal_auth
+fails — rejected per the phase doc's "occasionally end up with
+mismatched states and no easy way to detect or recover" warning;
+the compensation itself can fail and you're back to the same
+problem. (c) Two-phase commit / XA — rejected as massive
+infrastructure overkill for a once-per-customer-lifetime flow.
+**Consequences:** The email-change atomicity claim is enforceable
+and tested. ``test_routes_profile.py::test_email_change_verify_rolls_back_on_partial_failure``
+plants a synthetic mid-transaction failure and asserts NEITHER
+schema's row was flipped — that's the load-bearing test for the
+"atomic" claim. The new ``bss_portal_auth.email_change`` module
+is small (~250 lines) and reviewable; future changes that touch
+it get extra scrutiny. The doctrine bend is documented in three
+places: this DECISIONS entry, the module-level docstring on
+``email_change.py``, and a comment in ``routes/profile.py``.
+Re-introducing similar cross-schema writes elsewhere requires its
+own justification — the prohibition still applies in the general
+case.
+
+## 2026-04-27 — v0.10.0 — eSIM redownload is a read-only re-display, not a real rearm
+**Context:** v0.10 PR 6 ships ``/esim/<subscription_id>`` so a
+customer can see their LPA activation code + QR after signup. The
+question that came up during implementation: is this the
+production-realistic flow? In a real GSMA SGP.22 setup, an eSIM
+profile is bound at install time to the device's eUICC EID. Once
+the profile is in ``Installed`` state on SM-DP+, a redownload
+(factory reset, new device, profile lost) typically requires:
+(a) operator-side trigger — BSS calls SM-DP+ to release the
+profile or revoke + mint a new one; (b) SM-DP+ moves the profile
+back to ``Released`` (or issues a fresh activation code with a new
+ICCID/IMSI); (c) the customer scans the new code on the new /
+reset device. Some MVNO setups treat the activation code as a
+stable string for the lifetime of the line (deferred-binding
+profile model), but most operators run the rearm step explicitly.
+**Decision:** Ship a deliberately simplified read-only flow in
+v0.10. The route reads the subscription (ownership-checked) +
+inventory.esim_profile.activation_code and renders the code + an
+inline PNG QR. No SM-DP+ call, no rearm, no device-binding
+semantics, no state change. The simplification is honest in code
+and documented in three places: a CLAUDE.md scope-boundary bullet,
+a ROADMAP non-goal entry naming the future SOM task
+(``ESIM_PROFILE_REARM``), and a route docstring that points at
+this DECISIONS entry. The template caption tells the customer that
+if the code isn't working on a new device they should contact
+support — the operator-side trigger lives outside the customer
+self-serve surface for now.
+**Alternatives:** (a) Punt eSIM from v0.10 entirely — rejected;
+customers couldn't see their LPA at all, including the original
+code from signup, which is the most common request. (b) Land a
+thin "Reinstall on new device" CTA that opens a CSR ticket
+(``case.open(category=esim_rearm)``) — rejected for v0.10; adds a
+new policy + ticket category mid-phase, and the operator-side
+rearm work is missing on the back end. Better to add the CSR-
+ticket bridge in v0.12 alongside the real SM-DP+ adapter than to
+half-ship it now. (c) Build the real rearm flow now — rejected;
+the SM-DP+ adapter is a real-NE-adapter integration concern and
+explicitly out of scope per CLAUDE.md. Half-implementing it
+against the simulator gives a false sense of completeness.
+**Consequences:** Customers see the same activation code each
+time — fine for their original device, fine for v0.10 demo /
+dev. The route is fast, ownership-checked, and produces a
+``portal_action`` audit row only on the admin ``?show_full=1``
+debug branch (no audit row for the regular last-4 view — it's a
+non-sensitive read). Future work is well-scoped: v1.x adds the
+``ESIM_PROFILE_REARM`` SOM task, a ``provisioning.rearm_esim_profile``
+policy, the ``inventory.esim_profile`` state transition, and a
+new POST route on top of the existing read-only one. The seam is
+clean — the simplified read-only re-display stays as the cheap
+default; the rearm bolts on without changing the URL or the
+customer-facing template caption.
+
+## 2026-04-27 — v0.11.0 (committed) — Signup funnel migrates to direct API; v0.4 agent-log artifact retired
+**Context:** v0.10's direct-API carve-out for post-login self-serve
+exposed a follow-on question: should the signup funnel stay
+orchestrator-mediated? It was made LLM-driven in v0.4 as the demo
+artifact for "the agent pattern works on a customer-facing flow"
+— the agent-log widget streaming during signup was the
+project's signature visual proof that BSS-CLI is LLM-native. By
+v0.10 the cost showed up in the hero suite: ``portal_self_serve_signup_v0_8``
+takes ~85 seconds wall-time per run because it's 5–8 LLM
+round-trips at 8–15s each. None of those round-trips need
+LLM judgment — signup is a deterministic sequence (pick plan
+→ MSISDN → KYC attest → COF → place order → wait for SOM
+activation), each step has one correct next step, no branching
+benefits from reasoning. The v0.10 carve-out's logic — "v0.4's
+purpose was demoing the agent pattern; v0.10's purpose is daily
+use; routine flows shouldn't pay the LLM tax" — applies word-for-
+word to signup.
+**Decision:** Migrate the signup funnel from orchestrator-mediated
+to direct API calls from route handlers in v0.11.0. Same shape as
+v0.10 post-login routes: one route → one BSS write,
+ownership-where-applicable, audited where applicable, sub-second
+per step (excluding the SOM activation poll). URL shapes preserve
+exactly so existing customer links keep working. The agent-log
+SSE widget and ``agent_bridge.drive_signup`` are deleted from the
+portal; ``agent_events.py`` is replaced by a small deterministic
+progress UI that polls ``order.get`` every 500ms and ticks the
+five-step timeline. The v0.4 demo artifact is retired from the
+primary signup path; the educational story (watching an agent
+drive a customer flow) survives via the existing
+``llm_troubleshoot_blocked_subscription`` and ``portal_csr_blocked_diagnosis``
+heroes (LLM adds value where judgment is required) plus the chat
+surface (still orchestrator-mediated, scoped further in v0.12).
+The chat surface becomes the **only** orchestrator-mediated
+route post-v0.11. The CLAUDE.md anti-pattern splits one more time:
+``(v0.4–v0.10 / signup + chat) → orchestrator``; ``(v0.11+ / chat
+only) → orchestrator``. The new ``phases/V0_11_0.md`` is the
+implementation guide; existing chat-scoping work (was V0_11) is
+pushed to V0_12.
+**Alternatives:** (a) Keep signup orchestrator-mediated for the
+demo artifact — rejected; the cost (~85s per signup, several LLM
+calls per customer at scale) is too high for a flow that doesn't
+need LLM judgment, and the daily-use principle that anchored
+v0.10 applies identically here. (b) Dual-path with both
+``/signup/agent/*`` (LLM demo) and ``/signup/*`` (direct) —
+rejected for v0.11; preserving the demo as a separate path is a
+feature flag that nobody owns, with rot risk. The git history at
+``tag v0.10.0`` is the demo archive. If a future deliverable
+genuinely needs the agent-driven path back, that's a fresh
+DECISIONS entry, not a feature flag we ship preemptively. (c)
+Defer the decision to a v0.11 open question — rejected; we made
+the call, capture it now so the doctrine evolution stays
+trackable.
+**Consequences:** v0.11 hero suite drops the 85s signup runtime
+to under 10s (target). Phase ordering is preserved cleanly: v0.10
+post-login → v0.11 signup direct → v0.12 chat scoping → v1.0
+real Singpass / Stripe / SM-DP+ swap. The doctrine boundary is
+dramatically simpler: only ``/chat`` is orchestrator-mediated
+post-v0.11, and v0.12 then narrows that to a per-customer scoped
+profile with caps + escalation. Future "should X be LLM-mediated"
+questions get a clean answer: routine flows go direct, judgment
+flows go through the chat surface. The v0.4 historical record
+(phase doc, DECISIONS entry, git tag) stays intact — phase docs
+are append-only frozen records and we don't backfill them.

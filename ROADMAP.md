@@ -34,6 +34,33 @@ v0.2 wired distributed tracing. Metrics (counters, histograms) currently go to s
 
 DECISIONS.md 2026-04-13 deferred billing to v0.2. Skipped in v0.2-v0.5. Formally still planned: read-only view layer over `payment.payment_attempt`, statement generation, `/customerBill` TMF678 endpoints. Port 8009 reserved. No dunning, no credit extension — bundled-prepaid doesn't need them. Prioritized when an analytics/reporting use case asks for it.
 
+## v0.11.0 — Signup funnel goes direct
+
+`phases/V0_11_0.md`. Extends the v0.10 post-login carve-out to the
+signup funnel. Migrates `/signup/*` from orchestrator-mediated
+(LLM tool chain via SSE, ~85s wall time per signup) to direct API
+calls from route handlers (sub-second per step, deterministic
+chain). The chat surface becomes the only orchestrator-mediated
+route post-v0.11. The v0.4 demo artifact (agent log streaming
+during signup) is retired from the primary signup path; the
+educational story moves entirely to the LLM heroes
+(`llm_troubleshoot_blocked_subscription`, `portal_csr_blocked_diagnosis`)
+and the chat surface. URL shapes preserved. See DECISIONS
+2026-04-27 for the doctrine consolidation rationale.
+
+## v0.12.0 — Chat scoping, escalation, soak
+
+`phases/V0_12_0.md` (was V0_11 before the v0.11 signup-direct
+phase was committed). Scopes the AI chat to the logged-in
+customer via a `customer_self_serve` tool profile with
+`*.mine` wrappers, adds per-customer rate + monthly cost caps,
+auto-escalates the five out-of-scope categories (fraud, billing
+dispute, regulator complaint, identity recovery, deceased
+customer) into CSR cases with transcript hash, and runs a 14-day
+internal-beta soak. When v0.12 tags, the platform is
+production-shape modulo the three v1.0 swaps (real Singpass,
+real Stripe, real SM-DP+).
+
 ## Phase 12 — Authentication & RBAC
 
 The big post-portals piece. Spec exists in `CLAUDE.md` already.
@@ -59,6 +86,7 @@ These have come up enough to note, not enough to plan. Listed so contributors kn
 - **Customer-initiated chat in the self-serve portal.** Self-serve does signup, not support. A chat surface that escalates to a CSR is a real product, not a v0.x extension.
 - **Webhooks out (TMF688).** Today's outbound MQ events are internal. Real customer integrations would want webhook subscriptions per tenant per event type.
 - **Real eKYC integration.** Out of scope per doctrine — channel-layer concern. If a deployer ever wires Myinfo / Onfido / Jumio, the integration lives in the channel, not in BSS-CLI.
+- **eSIM profile re-arm (`ESIM_PROFILE_REARM` SOM task).** v0.10's `/esim/<subscription_id>` is a read-only re-display of the LPA activation code minted at signup. Real GSMA SGP.22 redownload — operator-side trigger, SM-DP+ release / new activation-code mint, device re-bind — ships when the SM-DP+ adapter is real. Decomposition: new SOM task type, new `provisioning.rearm_esim_profile` policy, an `inventory.esim_profile.state == "released"` transition, a new portal route on top. See DECISIONS 2026-04-27.
 
 ## Non-goals
 

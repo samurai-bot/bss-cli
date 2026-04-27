@@ -100,10 +100,22 @@ class SubscriptionClient(BSSClient):
         )
         return resp.json()
 
-    async def terminate(self, subscription_id: str) -> dict[str, Any]:
-        """POST /subscription-api/v1/subscription/{id}/terminate — destructive."""
+    async def terminate(
+        self, subscription_id: str, *, reason: str | None = None
+    ) -> dict[str, Any]:
+        """POST /subscription-api/v1/subscription/{id}/terminate — destructive.
+
+        ``reason`` is forensic only (carried into the state-history row
+        + ``subscription.terminated`` event). Server defaults to
+        ``"customer_requested"`` when the body is empty, preserving
+        backwards compatibility with v0.x callers that pass no body.
+        v0.10 portal cancel route passes ``"customer_requested"``.
+        """
+        body = {"reason": reason} if reason is not None else None
         resp = await self._request(
-            "POST", f"/subscription-api/v1/subscription/{subscription_id}/terminate"
+            "POST",
+            f"/subscription-api/v1/subscription/{subscription_id}/terminate",
+            json=body,
         )
         return resp.json()
 

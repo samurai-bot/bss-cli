@@ -76,10 +76,19 @@ async def subscription_purchase_vas(
     subscription_id: SubscriptionId,
     vas_offering_id: VasOfferingId,
 ) -> dict[str, Any]:
-    """Purchase a VAS (Value-Added Service) for a subscription and charge
-    the customer's default card-on-file. Use this when a customer is blocked
-    due to bundle exhaustion and wants to top up, or when they want to add
-    extra allowance to an active subscription.
+    """**Non-destructive.** Purchase a VAS (Value-Added Service) for a
+    subscription and charge the customer's default card-on-file.
+
+    **This is the canonical fix for a blocked-on-exhaust subscription.**
+    When a customer reports "data isn't working" / "I'm blocked" and
+    you've confirmed ``state == "blocked"``, the recovery is to call
+    this tool with a data VAS from ``catalog.list_vas``. Do not refuse
+    on a destructive-action caveat — VAS top-up adds allowance, it
+    never removes service. The opposite tool — ``subscription.terminate``
+    — IS destructive and is NOT what to call here.
+
+    Use cases: blocked-on-exhaust recovery (primary), or proactive
+    allowance top-up on an active subscription.
 
     Args:
         subscription_id: Subscription ID in SUB-NNN format.
@@ -89,6 +98,8 @@ async def subscription_purchase_vas(
     Returns:
         Updated subscription dict. If the subscription was ``blocked``, expect
         it to be ``active`` now. Check ``balances`` for the updated allowance.
+        After this returns, call ``interaction.log`` with a one-line summary
+        to close out the troubleshoot.
 
     Raises:
         PolicyViolationFromServer:
@@ -106,8 +117,17 @@ async def subscription_purchase_vas(
 
 @register("subscription.terminate")
 async def subscription_terminate(subscription_id: SubscriptionId) -> dict[str, Any]:
-    """Terminate a subscription — releases MSISDN, recycles eSIM. DESTRUCTIVE —
-    gated by ``safety.py``.
+    """**DESTRUCTIVE — releases MSISDN + eSIM, no undo.** Gated by
+    ``safety.py``. Only call this when the user explicitly asked to
+    terminate THIS subscription by name. Never use as a "fix" for a
+    blocked / exhausted / failing subscription — for those, the right
+    tool is ``subscription.purchase_vas`` (non-destructive, adds
+    allowance, unblocks).
+
+    Effects: subscription state → ``terminated``, eSIM profile released
+    back to inventory, MSISDN released back to inventory, customer's
+    line is gone. Cannot be reversed; the customer would have to sign
+    up again and would NOT get the same number back.
 
     Args:
         subscription_id: Subscription ID in SUB-NNN format.

@@ -55,6 +55,29 @@ PUBLIC_PATH_PREFIXES: Final[tuple[str, ...]] = (
 )
 
 
+# ── Step-up action catalogue (V0_10_0.md Track 10.2) ─────────────────────
+
+# Greppable source of truth for the sensitive-action list. Every label
+# names a single post-login self-serve write that must be gated by
+# step-up auth. A test asserts (a) every label appears in at least one
+# ``requires_step_up(...)`` call site under ``routes/`` and (b) every
+# call site uses a label from this set. Adding a new sensitive route
+# requires extending this set first.
+SENSITIVE_ACTION_LABELS: Final[frozenset[str]] = frozenset({
+    "vas_purchase",
+    "payment_method_add",
+    "payment_method_remove",
+    "payment_method_set_default",
+    "subscription_terminate",
+    "email_change",
+    "phone_update",  # weak gate; still required for any contact-medium write
+    "address_update",
+    "name_update",   # display name (Party.individual.given_name/family_name)
+    "plan_change_schedule",
+    "plan_change_cancel",
+})
+
+
 def is_public_path(path: str) -> bool:
     """True iff ``path`` is reachable without a session.
 
@@ -190,7 +213,19 @@ def requires_step_up(action_label: str) -> Callable[[Request], Awaitable[None]]:
     form field (consumed during request parsing if applicable). On
     success: marks the grant consumed and returns. On failure: raises
     StepUpRequired so the route bounces to ``/auth/step-up``.
+
+    The ``action_label`` MUST be a member of ``SENSITIVE_ACTION_LABELS``
+    — the dependency raises at import time (well, at first invocation)
+    if a typo or unregistered label slips in. This keeps the catalogue
+    greppable: there is exactly one place to add a new sensitive
+    action, and it's not deep inside a route file.
     """
+    if action_label not in SENSITIVE_ACTION_LABELS:
+        raise ValueError(
+            f"requires_step_up: action_label {action_label!r} is not in "
+            "SENSITIVE_ACTION_LABELS. Add it to the catalogue in "
+            "bss_self_serve.security before using it on a route."
+        )
 
     async def _dep(request: Request) -> None:
         sess = requires_session(request)

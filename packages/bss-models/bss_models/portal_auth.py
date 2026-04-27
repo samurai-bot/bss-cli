@@ -12,7 +12,7 @@ completes its first KYC + ``customer.create`` (see
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, ForeignKey, Index, Text, text
+from sqlalchemy import BigInteger, Boolean, ForeignKey, Index, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import Base, TZDateTime, TenantMixin
@@ -122,3 +122,97 @@ class LoginAttempt(Base, TenantMixin):
     # Optional discriminator: 'login_start', 'login_verify', 'step_up_start',
     # 'step_up_verify'. Helps the rate-limiter scope its window queries.
     stage: Mapped[str | None] = mapped_column(Text)
+
+
+class EmailChangePending(Base, TenantMixin):
+    """v0.10 — pending email-change verification.
+
+    The customer entered a new email and received an OTP at it. Until
+    they verify or the row expires (24h), the OTP can be redeemed to
+    atomically swap the email on both ``crm.contact_medium`` and
+    ``portal_auth.identity.email``. Re-starting the flow voids the
+    prior pending row.
+    """
+
+    __tablename__ = "email_change_pending"
+    __table_args__ = (
+        Index(
+            "uq_email_change_pending_identity_active",
+            "identity_id",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+        ),
+        Index(
+            "ix_email_change_pending_expires",
+            "expires_at",
+            postgresql_where=text("status = 'pending'"),
+        ),
+        {"schema": SCHEMA},
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    identity_id: Mapped[str] = mapped_column(
+        Text, ForeignKey(f"{SCHEMA}.identity.id"), nullable=False
+    )
+    new_email: Mapped[str] = mapped_column(Text, nullable=False)
+    code_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(TZDateTime)
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="pending", server_default="pending"
+    )
+    ip: Mapped[str | None] = mapped_column(Text)
+    user_agent: Mapped[str | None] = mapped_column(Text)
+
+
+class PortalAction(Base, TenantMixin):
+    """v0.10 — per-write portal-side audit row.
+
+    Written by every direct post-login self-serve route after the BSS
+    write completes (success or failure). Complements the canonical
+    ``audit.domain_event`` row with portal-side context: which route,
+    which resolved customer principal, was step-up consumed, and the
+    originating ip / user agent. The forensic question this answers
+    is "did customer X actually authorise this?" — not the BSS
+    domain question of "what changed in the canonical record".
+    """
+
+    __tablename__ = "portal_action"
+    __table_args__ = (
+        Index(
+            "ix_portal_action_customer_ts",
+            "customer_id",
+            text("ts DESC"),
+        ),
+        Index(
+            "ix_portal_action_action_ts",
+            "action",
+            text("ts DESC"),
+        ),
+        Index(
+            "ix_portal_action_unknown_rule",
+            "error_rule",
+            text("ts DESC"),
+            postgresql_where=text("error_rule IS NOT NULL"),
+        ),
+        {"schema": SCHEMA},
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    ts: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+    customer_id: Mapped[str | None] = mapped_column(Text)
+    identity_id: Mapped[str | None] = mapped_column(Text)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    route: Mapped[str] = mapped_column(Text, nullable=False)
+    method: Mapped[str] = mapped_column(Text, nullable=False)
+    success: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    error_rule: Mapped[str | None] = mapped_column(Text)
+    step_up_consumed: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+    )
+    ip: Mapped[str | None] = mapped_column(Text)
+    user_agent: Mapped[str | None] = mapped_column(Text)

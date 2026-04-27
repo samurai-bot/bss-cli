@@ -30,27 +30,114 @@ from bss_self_serve.main import create_app
 @dataclass
 class FakeCatalog:
     offerings: list[dict[str, Any]] = field(default_factory=list)
+    vas_offerings: list[dict[str, Any]] = field(default_factory=list)
 
     async def list_offerings(self) -> list[dict[str, Any]]:
+        return list(self.offerings)
+
+    async def list_vas(self) -> list[dict[str, Any]]:
+        return list(self.vas_offerings)
+
+    async def list_active_offerings(self, *, at: Any = None) -> list[dict[str, Any]]:
+        # v0.7 active-as-of query — for tests, return everything seeded.
         return list(self.offerings)
 
 
 @dataclass
 class FakeSubscription:
     records: dict[str, dict[str, Any]] = field(default_factory=dict)
+    by_customer: dict[str, list[str]] = field(default_factory=dict)
+    balances: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    purchase_vas_calls: list[tuple[str, str]] = field(default_factory=list)
+    terminate_calls: list[tuple[str, str | None]] = field(default_factory=list)
+    schedule_plan_change_calls: list[tuple[str, str]] = field(default_factory=list)
+    cancel_plan_change_calls: list[str] = field(default_factory=list)
+    # v0.10 — tests pre-seed an exception here to simulate a server-side
+    # PolicyViolation on the next call to ``purchase_vas`` etc.
+    next_error: Exception | None = None
 
     async def get(self, subscription_id: str) -> dict[str, Any]:
         if subscription_id not in self.records:
             raise KeyError(subscription_id)
         return dict(self.records[subscription_id])
 
+    async def list_for_customer(self, customer_id: str) -> list[dict[str, Any]]:
+        ids = self.by_customer.get(customer_id, [])
+        return [dict(self.records[i]) for i in ids if i in self.records]
+
+    async def get_balance(self, subscription_id: str) -> list[dict[str, Any]]:
+        return [dict(b) for b in self.balances.get(subscription_id, [])]
+
+    async def purchase_vas(
+        self, subscription_id: str, vas_offering_id: str
+    ) -> dict[str, Any]:
+        if self.next_error is not None:
+            err = self.next_error
+            self.next_error = None
+            raise err
+        self.purchase_vas_calls.append((subscription_id, vas_offering_id))
+        if subscription_id in self.records:
+            return dict(self.records[subscription_id])
+        raise KeyError(subscription_id)
+
+    async def terminate(
+        self, subscription_id: str, *, reason: str | None = None
+    ) -> dict[str, Any]:
+        if self.next_error is not None:
+            err = self.next_error
+            self.next_error = None
+            raise err
+        if subscription_id not in self.records:
+            raise KeyError(subscription_id)
+        # Record the call for assertion + flip state to mirror server-side.
+        self.terminate_calls.append((subscription_id, reason))
+        rec = self.records[subscription_id]
+        rec["state"] = "terminated"
+        rec["terminatedAt"] = "2026-04-27T00:00:00+00:00"
+        return dict(rec)
+
+    async def schedule_plan_change(
+        self, subscription_id: str, new_offering_id: str
+    ) -> dict[str, Any]:
+        if self.next_error is not None:
+            err = self.next_error
+            self.next_error = None
+            raise err
+        if subscription_id not in self.records:
+            raise KeyError(subscription_id)
+        self.schedule_plan_change_calls.append((subscription_id, new_offering_id))
+        rec = self.records[subscription_id]
+        rec["pendingOfferingId"] = new_offering_id
+        rec["pendingEffectiveAt"] = rec.get("nextRenewalAt") or (
+            "2026-05-27T00:00:00+00:00"
+        )
+        return dict(rec)
+
+    async def cancel_plan_change(self, subscription_id: str) -> dict[str, Any]:
+        if self.next_error is not None:
+            err = self.next_error
+            self.next_error = None
+            raise err
+        if subscription_id not in self.records:
+            raise KeyError(subscription_id)
+        self.cancel_plan_change_calls.append(subscription_id)
+        rec = self.records[subscription_id]
+        rec["pendingOfferingId"] = None
+        rec["pendingEffectiveAt"] = None
+        return dict(rec)
+
 
 @dataclass
 class FakeInventory:
     activations: dict[str, dict[str, Any]] = field(default_factory=dict)
     msisdns: list[dict[str, Any]] = field(default_factory=list)
+    next_error: Exception | None = None
 
     async def get_activation_code(self, iccid: str) -> dict[str, Any]:
+        if self.next_error is not None:
+            err = self.next_error
+            self.next_error = None
+            raise err
         if iccid not in self.activations:
             raise KeyError(iccid)
         return dict(self.activations[iccid])
@@ -81,11 +168,223 @@ class FakeCOM:
 
 
 @dataclass
+class FakeCRM:
+    """v0.10 PR 8 — CRM client fake for contact-medium routes.
+
+    Pre-seed by setting ``mediums_by_customer[customer_id] = [{...}, ...]``.
+    Each medium dict mirrors the camelCase TMF629 ContactMedium shape:
+    {id, mediumType, value, isPrimary, validFrom}. v0.10 patch — also
+    seeds ``individual_by_customer[customer_id]`` for the name-update
+    surface.
+    """
+
+    mediums_by_customer: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    individual_by_customer: dict[str, dict[str, str]] = field(default_factory=dict)
+    update_calls: list[tuple[str, str, str]] = field(default_factory=list)
+    individual_update_calls: list[tuple[str, str | None, str | None]] = field(
+        default_factory=list
+    )
+    next_error: Exception | None = None
+
+    async def get_customer(self, customer_id: str) -> dict[str, Any]:
+        ind = self.individual_by_customer.get(customer_id, {})
+        return {
+            "id": customer_id,
+            "individual": (
+                {
+                    "givenName": ind.get("given_name", ""),
+                    "familyName": ind.get("family_name", ""),
+                }
+                if ind
+                else None
+            ),
+            "contactMedium": [
+                dict(cm) for cm in self.mediums_by_customer.get(customer_id, [])
+            ],
+        }
+
+    async def update_individual(
+        self,
+        customer_id: str,
+        *,
+        given_name: str | None = None,
+        family_name: str | None = None,
+    ) -> dict[str, Any]:
+        if self.next_error is not None:
+            err = self.next_error
+            self.next_error = None
+            raise err
+        self.individual_update_calls.append(
+            (customer_id, given_name, family_name)
+        )
+        ind = self.individual_by_customer.setdefault(customer_id, {})
+        if given_name is not None:
+            ind["given_name"] = given_name
+        if family_name is not None:
+            ind["family_name"] = family_name
+        return await self.get_customer(customer_id)
+
+    async def list_contact_mediums(
+        self, customer_id: str
+    ) -> list[dict[str, Any]]:
+        return [dict(cm) for cm in self.mediums_by_customer.get(customer_id, [])]
+
+    async def update_contact_medium(
+        self, customer_id: str, medium_id: str, *, value: str
+    ) -> dict[str, Any]:
+        if self.next_error is not None:
+            err = self.next_error
+            self.next_error = None
+            raise err
+        self.update_calls.append((customer_id, medium_id, value))
+        for cm in self.mediums_by_customer.get(customer_id, []):
+            if cm["id"] == medium_id:
+                cm["value"] = value
+                return dict(cm)
+        raise KeyError(medium_id)
+
+
+@dataclass
+class FakePayment:
+    methods_by_customer: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    payments_by_customer: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    create_calls: list[dict[str, Any]] = field(default_factory=list)
+    remove_calls: list[str] = field(default_factory=list)
+    set_default_calls: list[str] = field(default_factory=list)
+    next_error: Exception | None = None
+
+    async def list_payments(
+        self,
+        *,
+        customer_id: str | None = None,
+        payment_method_id: str | None = None,
+        limit: int = 20,
+        offset: int | None = None,
+    ) -> list[dict[str, Any]]:
+        rows = list(self.payments_by_customer.get(customer_id or "", []))
+        if payment_method_id:
+            rows = [r for r in rows if r.get("paymentMethodId") == payment_method_id]
+        start = offset or 0
+        return [dict(r) for r in rows[start : start + (limit or len(rows))]]
+
+    async def count_payments(self, *, customer_id: str) -> int:
+        return len(self.payments_by_customer.get(customer_id, []))
+
+    async def list_methods(self, customer_id: str) -> list[dict[str, Any]]:
+        return [dict(m) for m in self.methods_by_customer.get(customer_id, [])]
+
+    async def create_payment_method(
+        self,
+        *,
+        customer_id: str,
+        card_token: str,
+        last4: str,
+        brand: str,
+        exp_month: int = 12,
+        exp_year: int = 2030,
+        tokenization_provider: str = "sandbox",
+        country: str | None = "SG",
+    ) -> dict[str, Any]:
+        if self.next_error is not None:
+            err = self.next_error
+            self.next_error = None
+            raise err
+        record = {
+            "customer_id": customer_id,
+            "card_token": card_token,
+            "last4": last4,
+            "brand": brand,
+            "exp_month": exp_month,
+            "exp_year": exp_year,
+        }
+        self.create_calls.append(record)
+        new_id = f"PM-{len(self.create_calls):04d}"
+        existing = self.methods_by_customer.setdefault(customer_id, [])
+        is_default = len(existing) == 0
+        method = {
+            "id": new_id,
+            "customerId": customer_id,
+            "brand": brand,
+            "last4": last4,
+            "expMonth": exp_month,
+            "expYear": exp_year,
+            "isDefault": is_default,
+        }
+        existing.append(method)
+        return dict(method)
+
+    async def remove_method(self, method_id: str) -> dict[str, Any]:
+        if self.next_error is not None:
+            err = self.next_error
+            self.next_error = None
+            raise err
+        self.remove_calls.append(method_id)
+        for cust_id, methods in self.methods_by_customer.items():
+            for m in methods:
+                if m["id"] == method_id:
+                    methods.remove(m)
+                    return {"id": method_id, "removed": True}
+        raise KeyError(method_id)
+
+    async def set_default_method(self, method_id: str) -> dict[str, Any]:
+        if self.next_error is not None:
+            err = self.next_error
+            self.next_error = None
+            raise err
+        self.set_default_calls.append(method_id)
+        for cust_id, methods in self.methods_by_customer.items():
+            target = next((m for m in methods if m["id"] == method_id), None)
+            if target is not None:
+                for m in methods:
+                    m["isDefault"] = (m["id"] == method_id)
+                return dict(target)
+        raise KeyError(method_id)
+
+
+@dataclass
 class FakeClientsBundle:
     catalog: FakeCatalog = field(default_factory=FakeCatalog)
     subscription: FakeSubscription = field(default_factory=FakeSubscription)
     inventory: FakeInventory = field(default_factory=FakeInventory)
     com: FakeCOM = field(default_factory=FakeCOM)
+    # v0.10 — added so post-login route tests can pre-seed responses.
+    payment: FakePayment = field(default_factory=FakePayment)
+    provisioning: Any = None
+    crm: FakeCRM = field(default_factory=FakeCRM)
+
+
+SAMPLE_VAS = [
+    {
+        "id": "VAS_DATA_1GB",
+        "name": "Data Top-Up 1GB",
+        "priceAmount": 3.00,
+        "currency": "SGD",
+        "allowanceType": "data",
+        "allowanceQuantity": 1024,
+        "allowanceUnit": "mb",
+        "expiryHours": None,
+    },
+    {
+        "id": "VAS_DATA_5GB",
+        "name": "Data Top-Up 5GB",
+        "priceAmount": 12.00,
+        "currency": "SGD",
+        "allowanceType": "data",
+        "allowanceQuantity": 5120,
+        "allowanceUnit": "mb",
+        "expiryHours": None,
+    },
+    {
+        "id": "VAS_UNLIMITED_DAY",
+        "name": "Unlimited Data Day Pass",
+        "priceAmount": 5.00,
+        "currency": "SGD",
+        "allowanceType": "data",
+        "allowanceQuantity": -1,
+        "allowanceUnit": "mb",
+        "expiryHours": 24,
+    },
+]
 
 
 SAMPLE_OFFERINGS = [
@@ -132,6 +431,7 @@ SAMPLE_OFFERINGS = [
 def fake_clients() -> FakeClientsBundle:
     bundle = FakeClientsBundle()
     bundle.catalog.offerings = list(SAMPLE_OFFERINGS)
+    bundle.catalog.vas_offerings = list(SAMPLE_VAS)
     bundle.inventory.msisdns = [
         {"msisdn": f"9000000{i}", "status": "available", "reserved_at": None}
         for i in range(2, 8)
@@ -153,7 +453,15 @@ def client(fake_clients: FakeClientsBundle):
          patch("bss_self_serve.routes.signup.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.activation.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.confirmation.get_clients", return_value=fake_clients), \
-         patch("bss_self_serve.routes.msisdn_picker.get_clients", return_value=fake_clients):
+         patch("bss_self_serve.routes.msisdn_picker.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.landing.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.top_up.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.payment_methods.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.esim.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.cancel.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.profile.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.billing.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.plan_change.get_clients", return_value=fake_clients):
         app = create_app(Settings())
         with TestClient(app) as c:
             yield c
@@ -235,7 +543,15 @@ def authed_client(fake_clients: FakeClientsBundle):
          patch("bss_self_serve.routes.signup.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.activation.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.confirmation.get_clients", return_value=fake_clients), \
-         patch("bss_self_serve.routes.msisdn_picker.get_clients", return_value=fake_clients):
+         patch("bss_self_serve.routes.msisdn_picker.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.landing.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.top_up.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.payment_methods.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.esim.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.cancel.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.profile.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.billing.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.plan_change.get_clients", return_value=fake_clients):
         app = create_app(Settings())
         with TestClient(app) as c:
             c.cookies.set(PORTAL_SESSION_COOKIE, session_id)

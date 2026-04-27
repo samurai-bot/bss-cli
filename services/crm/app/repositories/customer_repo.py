@@ -155,6 +155,42 @@ class CustomerRepository:
         await self._s.delete(cm)
         await self._s.flush()
 
+    async def update_contact_medium_value(
+        self, cm: ContactMedium, new_value: str
+    ) -> ContactMedium:
+        """Set ``cm.value = new_value`` and flush. v0.10 — used by phone/address.
+
+        Email changes do NOT go through this method; the cross-schema
+        atomic flow in ``bss_portal_auth.email_change`` writes
+        ``ContactMedium.value`` directly within a single transaction
+        spanning ``crm`` + ``portal_auth``.
+        """
+        cm.value = new_value
+        await self._s.flush()
+        return cm
+
+    async def get_individual_for_party(self, party_id: str) -> Individual | None:
+        result = await self._s.execute(
+            select(Individual).where(Individual.party_id == party_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def update_individual_name(
+        self,
+        ind: Individual,
+        *,
+        given_name: str | None = None,
+        family_name: str | None = None,
+    ) -> Individual:
+        """Partial-update the individual's name. v0.10 — used by the
+        portal's name-update flow on /profile/contact."""
+        if given_name is not None:
+            ind.given_name = given_name
+        if family_name is not None:
+            ind.family_name = family_name
+        await self._s.flush()
+        return ind
+
     # ── Agent ───────────────────────────────────────────────────────
 
     async def get_agent(self, agent_id: str) -> Agent | None:

@@ -76,3 +76,17 @@ async def remove_payment_method(
 ) -> PaymentMethodResponse:
     pm = await svc.remove_method(pm_id)
     return to_payment_method_response(pm)
+
+
+@router.post(
+    "/paymentMethod/{pm_id}/setDefault",
+    response_model=PaymentMethodResponse,
+    response_model_by_alias=True,
+)
+async def set_default_payment_method(
+    pm_id: str,
+    svc: PaymentMethodService = Depends(get_payment_method_service),
+) -> PaymentMethodResponse:
+    """v0.10 — flip the default payment method for the owning customer."""
+    pm = await svc.set_default_method(pm_id)
+    return to_payment_method_response(pm)

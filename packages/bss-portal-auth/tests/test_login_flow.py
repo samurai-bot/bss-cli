@@ -162,3 +162,94 @@ async def test_verify_no_active_token_when_all_consumed(db_session, email_adapte
     result = await verify_email_login(db_session, email="ada@x.sg", code="anything")
     assert isinstance(result, LoginFailed)
     assert result.reason == "no_active_token"
+
+
+@pytest.mark.asyncio
+async def test_verify_auto_links_identity_to_existing_crm_customer(
+    db_session, email_adapter
+):
+    """v0.10 fix — a returning customer whose CRM record predates the
+    portal identity should land on a linked identity at first login,
+    not on an empty-dashboard NULL-customer state.
+
+    Pre-seed a Party + Individual + Customer + email contact_medium in
+    crm, then run start_email_login + verify_email_login with that
+    email. After verify, identity.customer_id should be set to the
+    pre-existing CUST-* id.
+    """
+    from datetime import datetime, timezone
+
+    from bss_models import Customer, ContactMedium, Identity, Individual, Party
+
+    # Seed a CRM customer with the email already on file.
+    db_session.add(Party(id="PRT-T-LINK01", party_type="individual"))
+    await db_session.flush()
+    db_session.add(
+        Individual(
+            party_id="PRT-T-LINK01",
+            given_name="Existing",
+            family_name="Customer",
+        )
+    )
+    db_session.add(
+        Customer(
+            id="CUST-T-LINK01",
+            party_id="PRT-T-LINK01",
+            status="active",
+            kyc_status="verified",
+            customer_since=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+    )
+    db_session.add(
+        ContactMedium(
+            id="CM-T-LINK01",
+            party_id="PRT-T-LINK01",
+            medium_type="email",
+            value="returning@example.sg",
+            is_primary=True,
+            valid_from=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+    )
+    await db_session.commit()
+
+    try:
+        # Driver: full login flow.
+        await start_email_login(
+            db_session, email="returning@example.sg", email_adapter=email_adapter
+        )
+        await db_session.commit()
+        otp = email_adapter.records[("returning@example.sg", "login")]["otp"]
+
+        result = await verify_email_login(
+            db_session, email="returning@example.sg", code=otp
+        )
+        await db_session.commit()
+        assert isinstance(result, SessionView)
+
+        # Identity is now linked to the pre-existing customer.
+        identity = (
+            await db_session.execute(
+                select(Identity).where(Identity.email == "returning@example.sg")
+            )
+        ).scalar_one()
+        assert identity.customer_id == "CUST-T-LINK01"
+        # Status promoted to "registered" (linked) instead of "verified" (unlinked).
+        assert identity.status == "registered"
+    finally:
+        # Clean up CRM rows seeded for this test (the conftest only
+        # truncates portal_auth.*; CRM rows persist across tests).
+        from sqlalchemy import text
+
+        await db_session.execute(text(
+            "DELETE FROM crm.contact_medium WHERE id = 'CM-T-LINK01'"
+        ))
+        await db_session.execute(text(
+            "DELETE FROM crm.customer WHERE id = 'CUST-T-LINK01'"
+        ))
+        await db_session.execute(text(
+            "DELETE FROM crm.individual WHERE party_id = 'PRT-T-LINK01'"
+        ))
+        await db_session.execute(text(
+            "DELETE FROM crm.party WHERE id = 'PRT-T-LINK01'"
+        ))
+        await db_session.commit()

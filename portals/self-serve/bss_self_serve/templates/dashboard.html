@@ -9,16 +9,18 @@
     (customer <code class="dashboard-cust">{{ customer_id }}</code>).
   </p>
 
-  <div class="dashboard-placeholder">
-    <p>
-      v0.10 will render lines, balances, and self-serve actions here.
-      For now, this page just confirms session resolution works
-      end-to-end.
-    </p>
-  </div>
+  <ul class="dashboard-lines">
+    {% for line in lines %}
+      <li class="dashboard-lines-item">
+        {% include "partials/line_card.html" %}
+      </li>
+    {% endfor %}
+  </ul>
 
   <div class="dashboard-actions">
-    <a class="welcome-cta" href="/plans">Browse plans</a>
+    <a class="welcome-cta" href="/payment-methods">Payment methods</a>
+    <a class="welcome-cta" href="/billing/history">Charge history</a>
+    <a class="welcome-cta" href="/profile/contact">Contact details</a>
     <form method="post" action="/auth/logout" class="dashboard-logout-form">
       <button type="submit" class="welcome-cta">Sign out</button>
     </form>

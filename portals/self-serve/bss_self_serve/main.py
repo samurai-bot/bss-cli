@@ -141,11 +141,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         activation,
         agent_events,
         auth,
+        billing,
+        cancel,
         confirmation,
+        esim,
         landing,
         msisdn_picker,
+        payment_methods,
+        plan_change,
+        profile,
         session_api,
         signup,
+        top_up,
         welcome,
     )
 
@@ -158,6 +165,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(confirmation.router)
     app.include_router(agent_events.router)
     app.include_router(session_api.router)
+    # v0.10 — post-login self-serve writes go direct (no orchestrator).
+    app.include_router(top_up.router)
+    app.include_router(payment_methods.router)
+    app.include_router(esim.router)
+    app.include_router(cancel.router)
+    app.include_router(profile.router)
+    app.include_router(billing.router)
+    app.include_router(plan_change.router)
 
     return app
 

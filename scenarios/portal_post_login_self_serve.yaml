@@ -1,0 +1,322 @@
+name: portal_post_login_self_serve
+description: |
+  v0.10 hero — exercises the post-login direct-API carve-out
+  (CLAUDE.md "v0.10+ / authenticated post-login customer self-serve").
+
+  Setup (deterministic, no LLM): create customer, attest KYC, add COF,
+  place TWO orders so the dashboard later renders one cancellable
+  line + one keep line. Bind a verified portal identity to the
+  customer via the scenario-only ``portal.link_identity_to_customer``
+  action — that's the seam that lets us skip the ~85s agent-mediated
+  signup funnel for this hero.
+
+  Login + post-login flow (HTTP only, no LLM):
+    1. POST /auth/login emits an OTP via the dev mailbox.
+    2. POST /auth/check-email establishes a session.
+    3. GET / renders the dashboard with both lines.
+    4. Step-up + POST /top-up on line 1.
+    5. Step-up + POST /plan/change on line 1.
+    6. Step-up + POST /subscription/<id>/cancel on line 2.
+    7. Step-up + POST /profile/contact/phone/update.
+    8. GET / again — assert the dashboard reflects all four writes
+       (terminated badge on line 2, pending banner on line 1, line
+       1's offering still shows the original until renewal).
+
+  Green only if every direct-API write returns 303 + the expected
+  state lands on the BSS service. Wall-time budget: under 30 seconds
+  (no LLM round-trips).
+
+tags: [hero, portal, regression]
+
+setup:
+  reset_operational_data: true
+  freeze_clock_at: "2026-05-05T09:00:00+08:00"
+
+variables:
+  customer_email: "post-login-{{ run_id }}@bss-cli.local"
+  portal_base: "http://localhost:9001"
+  dev_mailbox: "./.dev-mailbox/portal-mailbox.log"
+
+# ─── Deterministic setup — drive directly, not through the portal ─────
+steps:
+  - name: create customer
+    action: customer.create
+    args:
+      name: "Post-Login Hero {{ run_id }}"
+      email: "{{ customer_email }}"
+      phone: "+6590004444"
+    capture:
+      customer_id: "$.id"
+
+  - name: attest KYC
+    action: customer.attest_kyc
+    args:
+      customer_id: "{{ customer_id }}"
+      provider: myinfo
+      attestation_token: "stub-signed-jwt-{{ run_id }}"
+
+  - name: add card on file
+    action: payment.add_card
+    args:
+      customer_id: "{{ customer_id }}"
+      card_number: "4242424242424242"
+
+  - name: place order for line 1 (PLAN_M — will be plan-changed)
+    action: order.create
+    args:
+      customer_id: "{{ customer_id }}"
+      offering_id: "PLAN_M"
+    capture:
+      order_1: "$.id"
+
+  - name: wait for line 1 activation
+    action: order.wait_until
+    args:
+      order_id: "{{ order_1 }}"
+      target_state: completed
+      timeout_s: 30
+
+  - name: place order for line 2 (PLAN_S — will be cancelled)
+    action: order.create
+    args:
+      customer_id: "{{ customer_id }}"
+      offering_id: "PLAN_S"
+    capture:
+      order_2: "$.id"
+
+  - name: wait for line 2 activation
+    action: order.wait_until
+    args:
+      order_id: "{{ order_2 }}"
+      target_state: completed
+      timeout_s: 30
+
+  - name: capture both subscription ids
+    action: subscription.list_for_customer
+    args:
+      customer_id: "{{ customer_id }}"
+    capture:
+      sub_1: "$[0].id"
+      sub_2: "$[1].id"
+
+  # ─── Seed the portal identity → customer link ─────────────────────────
+  - name: link identity to customer (skip agent funnel)
+    action: portal.link_identity_to_customer
+    args:
+      email: "{{ customer_email }}"
+      customer_id: "{{ customer_id }}"
+
+  # ─── Login flow → session cookie ──────────────────────────────────────
+  - name: POST /auth/login emits OTP
+    http: POST /auth/login
+    base_url: "{{ portal_base }}"
+    form:
+      email: "{{ customer_email }}"
+      next: "/"
+    expect:
+      status: 303
+
+  - name: read login OTP from dev mailbox
+    file: "{{ dev_mailbox }}"
+    capture_regex:
+      login_otp:
+        source: body_text
+        pattern: 'OTP: (\d{6})'
+    poll:
+      interval_ms: 200
+      timeout_seconds: 10
+
+  - name: POST /auth/check-email -> session cookie
+    http: POST /auth/check-email
+    base_url: "{{ portal_base }}"
+    form:
+      email: "{{ customer_email }}"
+      code: "{{ login_otp }}"
+      next: "/"
+    expect:
+      status: 303
+    capture_regex:
+      session_cookie:
+        source: headers.set-cookie
+        pattern: 'bss_portal_session=([^;]+)'
+
+  # ─── Dashboard renders with both lines ────────────────────────────────
+  - name: GET / renders dashboard with both lines
+    http: GET /
+    base_url: "{{ portal_base }}"
+    cookies: { bss_portal_session: "{{ session_cookie }}" }
+    expect:
+      status: 200
+      # Seeded offering names live in `bss_seed/catalog.py`. The unit-test
+      # fixtures use Sidekick/Mainline/Long Haul; the real seed uses
+      # Lite/Standard/Max. The hero runs against the real DB.
+      body_contains: ["Standard", "Lite"]
+
+  # ─── Top-up: step-up + POST ───────────────────────────────────────────
+  - name: step-up START for vas_purchase
+    http: POST /auth/step-up/start
+    base_url: "{{ portal_base }}"
+    cookies: { bss_portal_session: "{{ session_cookie }}" }
+    form:
+      action: "vas_purchase"
+      next: "/top-up?subscription={{ sub_1 }}"
+    expect:
+      status: 200
+
+  - name: read vas_purchase OTP from dev mailbox
+    file: "{{ dev_mailbox }}"
+    capture_regex:
+      vas_otp:
+        source: body_text
+        pattern: 'OTP: (\d{6})\nAction: vas_purchase'
+    poll:
+      interval_ms: 200
+      timeout_seconds: 10
+
+  - name: step-up VERIFY for vas_purchase
+    http: POST /auth/step-up
+    base_url: "{{ portal_base }}"
+    cookies: { bss_portal_session: "{{ session_cookie }}" }
+    form:
+      action: "vas_purchase"
+      code: "{{ vas_otp }}"
+      next: "/top-up?subscription={{ sub_1 }}"
+    expect:
+      status: 303
+    capture_regex:
+      vas_grant:
+        source: headers.set-cookie
+        pattern: 'bss_portal_step_up=([^;]+)'
+
+  - name: POST /top-up purchases VAS
+    http: POST /top-up?subscription={{ sub_1 }}
+    base_url: "{{ portal_base }}"
+    cookies:
+      bss_portal_session: "{{ session_cookie }}"
+      bss_portal_step_up: "{{ vas_grant }}"
+    form:
+      vas_offering_id: "VAS_DATA_1GB"
+    expect:
+      status: 303
+
+  # ─── Plan change: step-up + POST ──────────────────────────────────────
+  - name: step-up START for plan_change_schedule
+    http: POST /auth/step-up/start
+    base_url: "{{ portal_base }}"
+    cookies: { bss_portal_session: "{{ session_cookie }}" }
+    form:
+      action: "plan_change_schedule"
+      next: "/plan/change?subscription={{ sub_1 }}"
+    expect:
+      status: 200
+
+  - name: read plan_change_schedule OTP
+    file: "{{ dev_mailbox }}"
+    capture_regex:
+      plan_otp:
+        source: body_text
+        pattern: 'OTP: (\d{6})\nAction: plan_change_schedule'
+    poll:
+      interval_ms: 200
+      timeout_seconds: 10
+
+  - name: step-up VERIFY for plan_change_schedule
+    http: POST /auth/step-up
+    base_url: "{{ portal_base }}"
+    cookies: { bss_portal_session: "{{ session_cookie }}" }
+    form:
+      action: "plan_change_schedule"
+      code: "{{ plan_otp }}"
+      next: "/plan/change?subscription={{ sub_1 }}"
+    expect:
+      status: 303
+    capture_regex:
+      plan_grant:
+        source: headers.set-cookie
+        pattern: 'bss_portal_step_up=([^;]+)'
+
+  - name: POST /plan/change schedules PLAN_M -> PLAN_L
+    http: POST /plan/change?subscription={{ sub_1 }}
+    base_url: "{{ portal_base }}"
+    cookies:
+      bss_portal_session: "{{ session_cookie }}"
+      bss_portal_step_up: "{{ plan_grant }}"
+    form:
+      new_offering_id: "PLAN_L"
+    expect:
+      status: 303
+
+  # ─── Cancel line 2: step-up + POST ────────────────────────────────────
+  - name: step-up START for subscription_terminate
+    http: POST /auth/step-up/start
+    base_url: "{{ portal_base }}"
+    cookies: { bss_portal_session: "{{ session_cookie }}" }
+    form:
+      action: "subscription_terminate"
+      next: "/subscription/{{ sub_2 }}/cancel"
+    expect:
+      status: 200
+
+  - name: read subscription_terminate OTP
+    file: "{{ dev_mailbox }}"
+    capture_regex:
+      cancel_otp:
+        source: body_text
+        pattern: 'OTP: (\d{6})\nAction: subscription_terminate'
+    poll:
+      interval_ms: 200
+      timeout_seconds: 10
+
+  - name: step-up VERIFY for subscription_terminate
+    http: POST /auth/step-up
+    base_url: "{{ portal_base }}"
+    cookies: { bss_portal_session: "{{ session_cookie }}" }
+    form:
+      action: "subscription_terminate"
+      code: "{{ cancel_otp }}"
+      next: "/subscription/{{ sub_2 }}/cancel"
+    expect:
+      status: 303
+    capture_regex:
+      cancel_grant:
+        source: headers.set-cookie
+        pattern: 'bss_portal_step_up=([^;]+)'
+
+  - name: POST /subscription/{sub_2}/cancel terminates line 2
+    http: POST /subscription/{{ sub_2 }}/cancel
+    base_url: "{{ portal_base }}"
+    cookies:
+      bss_portal_session: "{{ session_cookie }}"
+      bss_portal_step_up: "{{ cancel_grant }}"
+    expect:
+      status: 303
+
+  # ─── Final dashboard reflects all writes ──────────────────────────────
+  - name: GET / shows pending banner + cancelled line
+    http: GET /
+    base_url: "{{ portal_base }}"
+    cookies: { bss_portal_session: "{{ session_cookie }}" }
+    expect:
+      status: 200
+      body_contains:
+        - "Switching to"
+        - "Max"          # PLAN_L's seeded name
+        - "Cancelled"
+
+  # ─── Deterministic verification — don't trust the page render ─────────
+  - name: line 1 has pending plan change to PLAN_L
+    assert:
+      tool: subscription.get
+      args: { subscription_id: "{{ sub_1 }}" }
+      expect:
+        pendingOfferingId: "PLAN_L"
+
+  - name: line 2 is terminated
+    assert:
+      tool: subscription.get
+      args: { subscription_id: "{{ sub_2 }}" }
+      expect:
+        state: terminated
+
+teardown:
+  unfreeze_clock: true

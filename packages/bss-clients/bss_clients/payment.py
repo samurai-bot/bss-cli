@@ -58,17 +58,40 @@ class PaymentClient(BSSClient):
         customer_id: str | None = None,
         payment_method_id: str | None = None,
         limit: int = 20,
+        offset: int | None = None,
     ) -> list[dict[str, Any]]:
-        """GET /tmf-api/paymentManagement/v4/payment."""
+        """GET /tmf-api/paymentManagement/v4/payment.
+
+        v0.10 — ``offset`` added for the portal charge-history page's
+        per-page stable pagination. ``limit + offset`` matches the
+        SQL semantics; clients passing only ``limit`` see no behaviour
+        change.
+        """
         params: dict[str, Any] = {"limit": limit}
         if customer_id:
             params["customerId"] = customer_id
         if payment_method_id:
             params["paymentMethodId"] = payment_method_id
+        if offset is not None:
+            params["offset"] = offset
         resp = await self._request(
             "GET", "/tmf-api/paymentManagement/v4/payment", params=params
         )
         return resp.json()
+
+    async def count_payments(self, *, customer_id: str) -> int:
+        """GET /tmf-api/paymentManagement/v4/payment/count.
+
+        v0.10 — total-count companion to ``list_payments`` so a paginated
+        UI can render "Page N of M" without scanning the full list.
+        """
+        resp = await self._request(
+            "GET",
+            "/tmf-api/paymentManagement/v4/payment/count",
+            params={"customerId": customer_id},
+        )
+        body = resp.json()
+        return int(body.get("count", 0))
 
     # ── Payment methods ─────────────────────────────────────────────────
 
@@ -136,6 +159,19 @@ class PaymentClient(BSSClient):
             f"/tmf-api/paymentMethodManagement/v4/paymentMethod/{method_id}",
         )
         return resp.json() if resp.content else {"id": method_id, "removed": True}
+
+    async def set_default_method(self, method_id: str) -> dict[str, Any]:
+        """POST /tmf-api/paymentMethodManagement/v4/paymentMethod/{id}/setDefault.
+
+        v0.10 — used by the self-serve portal's "Set default" CTA. The
+        server owns the "exactly one default per customer" invariant
+        and clears any prior default in the same transaction.
+        """
+        resp = await self._request(
+            "POST",
+            f"/tmf-api/paymentMethodManagement/v4/paymentMethod/{method_id}/setDefault",
+        )
+        return resp.json()
 
     # ── Dev tokenizer ────────────────────────────────────────────────────
 

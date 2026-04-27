@@ -1,4 +1,4 @@
-"""bss-clients factory for the self-serve portal (v0.9+).
+"""bss-clients factory for the self-serve portal (v0.9+, extended in v0.10).
 
 The portal is a customer-facing surface; v0.9 gives it its own
 identity at the BSS perimeter via ``BSS_PORTAL_SELF_SERVE_API_TOKEN``. Outbound
@@ -14,10 +14,21 @@ falls back to ``BSS_API_TOKEN``. Receiving services then resolve
 this with a one-time warning so operators notice and provision the
 named token.
 
-Doctrine note (V0_4_0.md / V0_8_0.md): portal route handlers may
-only **read** through this factory. Writes go through the LLM
-orchestrator via ``agent_bridge.*``. ``make doctrine-check`` enforces
-the no-direct-mutating-call rule on portal routes.
+Doctrine note (V0_10_0.md Track 1):
+
+* **(v0.4–v0.9 / signup + chat)** Route handlers on the signup funnel
+  and the ``/chat`` surface continue routing writes through the LLM
+  orchestrator via ``agent_bridge.*`` → ``astream_once``. Reads via
+  this factory.
+* **(v0.10+ / post-login self-serve)** Routes behind
+  ``requires_linked_customer`` may write directly through this
+  factory. The customer principal is bound from
+  ``request.state.customer_id``; per-resource ownership policies and
+  step-up auth gate sensitive writes; one route = one write call.
+
+``make doctrine-check`` enforces the boundary: ``astream_once`` may
+only appear in the chat + signup routes; ``customer_id`` must come
+from ``request.state``, never form/query input.
 """
 
 from __future__ import annotations
@@ -31,6 +42,8 @@ from bss_clients import (
     CatalogClient,
     InventoryClient,
     NamedTokenAuthProvider,
+    PaymentClient,
+    ProvisioningClient,
     SubscriptionClient,
 )
 
@@ -50,9 +63,13 @@ FALLBACK_TOKEN_ENV = "BSS_API_TOKEN"
 class PortalClients:
     """Container for downstream clients the self-serve portal calls.
 
-    Reads-only by doctrine. v0.10+ may add more clients here as the
-    self-serve surface grows; mutating calls always route through the
-    LLM orchestrator (agent_bridge).
+    v0.10 expands the bundle to cover every read/write the new
+    post-login pages need: customer + subscription (dashboard, cancel,
+    plan change), payment (COF + charge history), catalog (plan change
+    list + VAS list), inventory (signup MSISDN picker), provisioning
+    (eSIM service-id ownership lookup), com (signup orchestrator
+    fallback). Doctrine: post-login routes write directly through
+    these; signup + chat continue going through the orchestrator.
     """
 
     catalog: CatalogClient
@@ -60,6 +77,8 @@ class PortalClients:
     inventory: InventoryClient
     com: COMClient
     subscription: SubscriptionClient
+    payment: PaymentClient
+    provisioning: ProvisioningClient
 
 
 @lru_cache(maxsize=1)
@@ -85,6 +104,10 @@ def get_clients() -> PortalClients:
         subscription=SubscriptionClient(
             base_url=settings.subscription_url, auth_provider=auth
         ),
+        payment=PaymentClient(base_url=settings.payment_url, auth_provider=auth),
+        provisioning=ProvisioningClient(
+            base_url=settings.provisioning_url, auth_provider=auth
+        ),
     )
 
 
@@ -93,6 +116,14 @@ async def close_clients() -> None:
     if get_clients.cache_info().currsize == 0:
         return
     c = get_clients()
-    for client in (c.catalog, c.crm, c.inventory, c.com, c.subscription):
+    for client in (
+        c.catalog,
+        c.crm,
+        c.inventory,
+        c.com,
+        c.subscription,
+        c.payment,
+        c.provisioning,
+    ):
         await client.close()
     get_clients.cache_clear()

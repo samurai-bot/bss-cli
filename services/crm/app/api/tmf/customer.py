@@ -1,6 +1,8 @@
 """TMF629 Customer Management endpoints."""
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, ConfigDict
+from pydantic.alias_generators import to_camel
 
 from app.dependencies import get_customer_service
 from app.schemas.tmf.customer import (
@@ -116,3 +118,68 @@ async def remove_contact_medium(
     svc: CustomerService = Depends(get_customer_service),
 ) -> None:
     await svc.remove_contact_medium(customer_id, cm_id)
+
+
+class UpdateContactMediumRequest(BaseModel):
+    """v0.10 — value-only update on an existing medium. Email goes
+    through the cross-schema atomic flow, not this endpoint."""
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+    value: str
+
+
+class UpdateIndividualRequest(BaseModel):
+    """v0.10 — partial update on the customer's display name."""
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+    given_name: str | None = None
+    family_name: str | None = None
+
+
+@router.patch(
+    "/customer/{customer_id}/individual",
+    response_model=Tmf629Customer,
+    response_model_by_alias=True,
+)
+async def update_individual(
+    customer_id: str,
+    body: UpdateIndividualRequest,
+    svc: CustomerService = Depends(get_customer_service),
+) -> Tmf629Customer:
+    """v0.10 — update the customer's display name. Used by the portal's
+    /profile/contact name-update flow. At least one of given_name /
+    family_name must be provided."""
+    await svc.update_individual_name(
+        customer_id,
+        given_name=body.given_name,
+        family_name=body.family_name,
+    )
+    cust = await svc.get_customer(customer_id)
+    return to_tmf629_customer(cust)
+
+
+@router.patch(
+    "/customer/{customer_id}/contactMedium/{cm_id}",
+    response_model=ContactMediumSchema,
+    response_model_by_alias=True,
+)
+async def update_contact_medium(
+    customer_id: str,
+    cm_id: str,
+    body: UpdateContactMediumRequest,
+    svc: CustomerService = Depends(get_customer_service),
+) -> ContactMediumSchema:
+    """Update the value of an existing contact medium.
+
+    Phone + address only. Email is rejected with
+    ``policy.customer.contact_medium.email_must_use_change_flow`` —
+    portals must use the verified email-change flow for email.
+    """
+    cm = await svc.update_contact_medium(customer_id, cm_id, value=body.value)
+    return ContactMediumSchema(
+        id=cm.id,
+        medium_type=cm.medium_type,
+        value=cm.value,
+        is_primary=cm.is_primary,
+        valid_from=cm.valid_from,
+    )
