@@ -904,7 +904,18 @@ class SubscriptionService:
         )
         return {"count": len(affected_ids), "subscriptionIds": affected_ids}
 
-    async def terminate(self, sub_id: str) -> Subscription:
+    async def terminate(
+        self, sub_id: str, *, reason: str = "customer_requested"
+    ) -> Subscription:
+        """Terminate a subscription — release MSISDN + eSIM, transition state.
+
+        ``reason`` is forensic only (carried into the state-history row + the
+        ``subscription.terminated`` event payload). It does not affect
+        eligibility — callers that pass an arbitrary string don't bypass the
+        ``is_valid_transition`` check. v0.10 portal cancel route uses
+        ``"customer_requested"``; CSR-initiated cancels would use
+        ``"csr_initiated"``; admin pruning would use ``"admin_cleanup"``.
+        """
         sub = await self._repo.get(sub_id)
         if not sub:
             raise PolicyViolation(
@@ -933,7 +944,7 @@ class SubscriptionService:
         except Exception:
             log.warning("inventory.recycle_esim.failed", iccid=sub.iccid[-4:])
 
-        await self._transition(sub, "terminate", reason="customer_requested")
+        await self._transition(sub, "terminate", reason=reason)
         sub.terminated_at = now
 
         await publisher.publish(
@@ -947,11 +958,12 @@ class SubscriptionService:
                 "msisdn": sub.msisdn,
                 "iccid": sub.iccid,
                 "terminatedAt": now.isoformat(),
+                "reason": reason,
             },
         )
 
         await self._session.commit()
-        log.info("subscription.terminated", subscription_id=sub_id)
+        log.info("subscription.terminated", subscription_id=sub_id, reason=reason)
         return await self._repo.get(sub_id)
 
     async def _transition(

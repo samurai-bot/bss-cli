@@ -1,6 +1,8 @@
 """Subscription API routers — no business logic."""
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, ConfigDict
+from pydantic.alias_generators import to_camel
 
 from app.dependencies import get_subscription_service
 from app.schemas.subscription import (
@@ -97,20 +99,25 @@ async def renew_subscription(
     return to_subscription_response(sub)
 
 
+class TerminateRequest(BaseModel):
+    """Optional body for /terminate. Empty body still works (back-compat)."""
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+    reason: str | None = None
+
+
 @router.post("/subscription/{sub_id}/terminate", response_model=SubscriptionResponse)
 async def terminate_subscription(
     sub_id: str,
+    body: TerminateRequest | None = None,
     svc: SubscriptionService = Depends(get_subscription_service),
 ) -> SubscriptionResponse:
-    sub = await svc.terminate(sub_id)
+    reason = (body.reason if body is not None else None) or "customer_requested"
+    sub = await svc.terminate(sub_id, reason=reason)
     return to_subscription_response(sub)
 
 
 # ── v0.7 — plan change ───────────────────────────────────────────────
-
-
-from pydantic import BaseModel, ConfigDict
-from pydantic.alias_generators import to_camel
 
 
 class SchedulePlanChangeRequest(BaseModel):

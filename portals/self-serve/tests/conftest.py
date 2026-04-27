@@ -45,6 +45,7 @@ class FakeSubscription:
     by_customer: dict[str, list[str]] = field(default_factory=dict)
     balances: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     purchase_vas_calls: list[tuple[str, str]] = field(default_factory=list)
+    terminate_calls: list[tuple[str, str | None]] = field(default_factory=list)
     # v0.10 — tests pre-seed an exception here to simulate a server-side
     # PolicyViolation on the next call to ``purchase_vas`` etc.
     next_error: Exception | None = None
@@ -72,6 +73,22 @@ class FakeSubscription:
         if subscription_id in self.records:
             return dict(self.records[subscription_id])
         raise KeyError(subscription_id)
+
+    async def terminate(
+        self, subscription_id: str, *, reason: str | None = None
+    ) -> dict[str, Any]:
+        if self.next_error is not None:
+            err = self.next_error
+            self.next_error = None
+            raise err
+        if subscription_id not in self.records:
+            raise KeyError(subscription_id)
+        # Record the call for assertion + flip state to mirror server-side.
+        self.terminate_calls.append((subscription_id, reason))
+        rec = self.records[subscription_id]
+        rec["state"] = "terminated"
+        rec["terminatedAt"] = "2026-04-27T00:00:00+00:00"
+        return dict(rec)
 
 
 @dataclass
@@ -309,7 +326,8 @@ def client(fake_clients: FakeClientsBundle):
          patch("bss_self_serve.routes.landing.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.top_up.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.payment_methods.get_clients", return_value=fake_clients), \
-         patch("bss_self_serve.routes.esim.get_clients", return_value=fake_clients):
+         patch("bss_self_serve.routes.esim.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.cancel.get_clients", return_value=fake_clients):
         app = create_app(Settings())
         with TestClient(app) as c:
             yield c
@@ -395,7 +413,8 @@ def authed_client(fake_clients: FakeClientsBundle):
          patch("bss_self_serve.routes.landing.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.top_up.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.payment_methods.get_clients", return_value=fake_clients), \
-         patch("bss_self_serve.routes.esim.get_clients", return_value=fake_clients):
+         patch("bss_self_serve.routes.esim.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.cancel.get_clients", return_value=fake_clients):
         app = create_app(Settings())
         with TestClient(app) as c:
             c.cookies.set(PORTAL_SESSION_COOKIE, session_id)
