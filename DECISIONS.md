@@ -1679,3 +1679,202 @@ questions get a clean answer: routine flows go direct, judgment
 flows go through the chat surface. The v0.4 historical record
 (phase doc, DECISIONS entry, git tag) stays intact — phase docs
 are append-only frozen records and we don't backfill them.
+
+
+## v0.12.0 — `*.mine` wrappers as the prompt-injection containment layer
+
+**Date:** 2026-04-27
+**Phase:** v0.12.0 PR2 / PR3
+**Decision:** The chat surface invokes ``astream_once`` with
+``tool_filter="customer_self_serve"`` so the LLM only sees the
+profile's curated subset. Inside that profile, every tool that
+takes any owner-bound argument is a ``*.mine`` / ``*_for_me``
+wrapper that:
+
+1. Reads ``customer_id`` from
+   ``orchestrator.auth_context.current().actor`` — never from a
+   parameter. Signatures simply omit ``customer_id`` /
+   ``customer_email`` / ``msisdn``. A startup self-check
+   (``tools/_profiles.validate_profiles``) inspects every
+   registered ``*.mine`` tool's signature at orchestrator import
+   time and raises if any forbidden parameter slipped in.
+
+2. For wrappers that accept a resource id (``subscription_id``),
+   pre-checks ownership against the bound actor and refuses with
+   a structured ``policy.<tool>.not_owned_by_actor`` error. The
+   server-side policies remain the primary boundary; the
+   wrapper's pre-check produces a uniform observation across
+   every tool so the LLM's behaviour to a prompt-injection
+   attempt is identical irrespective of which tool was tried.
+
+3. Calls the canonical tool internally with the actor-bound id.
+
+**Alternatives rejected:** (a) Re-use the canonical tools
+unchanged + rely on server-side policies alone. Rejected — leaves
+the prompt-visible surface unrestricted, which means
+prompt-injection attempts at least *try* before being rejected;
+each rejection is an audit row + a CSR-visible interaction. The
+narrowness is a feature. (b) Generate the wrappers from the
+canonical registry. Rejected — auto-derivation is exactly how
+"add `customer.find_by_msisdn_mine` for the chat" creeps in. The
+list in ``_profiles.py`` is curated; widening it requires the
+runbook §6.4 security review checklist.
+
+**Consequences:** The chat surface's autonomous reach is
+explicitly bounded. The wrappers + server policies + output
+trip-wire form a defence-in-depth stack. Adding a chat capability
+in v1.x means adding (a) a wrapper if needed, (b) a profile
+entry, (c) an `OWNERSHIP_PATHS` entry, (d) a runbook update — the
+order is intentional and documented.
+
+## v0.12.0 — Output ownership check as P0 trip-wire
+
+**Date:** 2026-04-27
+**Phase:** v0.12.0 PR4
+**Decision:** ``orchestrator/bss_orchestrator/ownership.py`` ships
+``assert_owned_output(tool_name, result_json, actor)`` and an
+``OWNERSHIP_PATHS`` registry mapping each customer-profile tool
+to the JSON paths in its response that must equal ``actor``.
+``astream_once`` runs the check after every non-error
+``ToolMessage`` whose source tool is configured. On mismatch the
+stream terminates with an ``AgentEventError(message=
+"AgentOwnershipViolation: <tool>")``; the chat route catches
+that and renders a generic safety reply. A CRM
+``log_interaction`` row is written on the actor's record (which
+emits an ``audit.domain_event`` server-side via the v0.1
+auto-logging path) so ops can investigate.
+
+**Why a trip-wire and not a primary gate:** Server-side policies
+already enforce ownership on every write. The trip-wire exists
+for the day a policy misses a case — to fail loudly rather than
+ship cross-customer data to the customer. A real trip is a P0
+incident; the runbook section "Investigating an ownership-check
+trip" carries the on-call query patterns.
+
+**Alternatives rejected:** (a) Skip the check, trust policies.
+Rejected — the cost of being wrong (data exfiltration to the
+wrong customer through an LLM-rendered chat reply) dwarfs the
+cost of running one path-walk per tool result. (b) Make the
+check a primary gate (block writes pre-flight). Rejected —
+duplicates the policy logic at a different layer and creates
+two sources of truth for "is this customer authorised". The
+existing seam is fine.
+
+**Consequences:** The 14-day soak gate is "zero ownership-check
+trips." A trip during the soak is fix-and-rerun territory.
+The startup self-check (extension of ``validate_profiles``)
+asserts every ``customer_self_serve`` tool has an
+``OWNERSHIP_PATHS`` entry — coverage gaps fail at deploy.
+
+## v0.12.0 — $2/month default chat cost cap
+
+**Date:** 2026-04-27
+**Phase:** v0.12.0 PR5
+**Decision:** ``BSS_CHAT_COST_CAP_PER_CUSTOMER_PER_MONTH_CENTS=200``
++ ``BSS_CHAT_RATE_PER_CUSTOMER_PER_HOUR=20`` are the v0.12
+defaults. ``chat_caps.check_caps`` reads the current month's
+``audit.chat_usage`` row + a per-process in-memory hourly
+sliding window; a trip on either short-circuits the chat route
+to a templated cap-tripped SSE response. ``record_chat_turn``
+upserts cost + request count after each completed turn,
+deriving cents from OpenRouter token counts × per-model rate
+(``MODEL_RATES_USD_PER_M_TOK``).
+
+**Why these numbers:** $2/month covers ~150 turns at
+``google/gemma-4-26b-a4b-it`` pricing — generous for normal use,
+small enough to bound a runaway customer (or a malicious chat
+attempt that gets through the per-IP cap). 20/hour is loose
+enough that a focused customer doesn't hit it during a real
+support session, tight enough to slow obvious abuse.
+
+**Alternatives rejected:** (a) Hard-code in code. Rejected —
+the soak's needs differ from prod; per-customer overrides are
+likely to land in v1.x. (b) Per-tier caps based on the
+customer's plan price. Rejected for v0.12 — that's billing
+infrastructure we don't have. v1.x can layer it on top of the
+existing seam.
+
+**Consequences:** The route is **fail-closed**: any error in
+``check_caps`` (DB unreachable, etc.) returns
+``CapStatus(allowed=False, reason="cap_check_failed")`` so the
+LLM is never invoked on uncertainty. The runbook section
+"Investigating cap-tripped customer reports" covers operator
+overrides + sanity checks.
+
+## v0.12.0 — Five escalation categories as a hard list
+
+**Date:** 2026-04-27
+**Phase:** v0.12.0 PR6
+**Decision:** Fraud, billing dispute, regulator complaint,
+identity recovery, bereavement. Plus ``other`` as the
+CSR-triaged catch-all. The list lives in three places that must
+stay in sync: the ``EscalationCategory`` Literal in
+``orchestrator/bss_orchestrator/types.py``, the soak corpus
+keys in ``scenarios/soak/corpus.py``, and the customer-chat
+system prompt in ``customer_chat_prompt.py``. A test
+(``test_escalation_categories_match_orchestrator_enum``) compares
+the soak corpus keys to the enum.
+
+**Why these five and not four or six:** Each is a category
+where the AI has either regulatory exposure (regulator
+complaint), fraud risk (fraud, identity recovery), legal /
+emotional sensitivity (bereavement), or money disputes that
+must reach a human (billing dispute). Anything outside the five
+is either the AI's job (top up, plan change, balance) or
+``other`` for CSR triage. Adding a sixth is a doctrine decision
+because it widens the "I'll let a human handle this" shape and
+each addition costs a real CSR reading a real transcript.
+
+**Alternatives rejected:** (a) No fixed list — the AI decides
+when to escalate. Rejected — that's prompt-drift territory and
+the threshold for "I forgot my password" → escalate is a
+real-pager-call away from "I forgot my password" → use the
+self-serve recovery flow. (b) Wider list (account close,
+roaming questions, complaint about service quality, etc.).
+Rejected — those have well-defined direct routes; escalation
+should not be the AI's escape hatch for hard questions.
+
+**Consequences:** The customer-chat prompt encodes the five
+verbatim with concrete examples. The wrapper accepts the
+``EscalationCategory`` enum so unknown categories cannot reach
+the case-open path. Soak corpus has 5 trigger phrases per
+category, fired at 1%/customer/day so all five exercise over
+the 14-day window across 100 customers.
+
+## v0.12.0 — Transcript hashing + dedicated ``audit.chat_transcript`` table
+
+**Date:** 2026-04-27
+**Phase:** v0.12.0 PR1 / PR6
+**Decision:** Transcripts addressed by SHA-256 of the body.
+``crm.case.chat_transcript_hash`` is a nullable Text column
+linking a case to its triggering transcript;
+``audit.chat_transcript(hash, customer_id, body, recorded_at)``
+holds the bodies. Inserts are idempotent
+(``ON CONFLICT DO NOTHING``); the CRM service re-computes the
+hash and rejects mismatches so the column cannot be poisoned
+with a body that does not match its key.
+
+**Why a separate table and not a column on ``crm.case``:** Three
+reasons. (a) Transcript bodies are bigger than typical case
+fields and we don't want to pay row-width for every case. (b)
+Multiple cases could legitimately reference the same transcript
+(unlikely but possible). (c) The retention runbook needs to
+archive transcripts independently of cases — case-closed-90d
++ archive — and a separate table makes that operation a
+``DELETE FROM audit.chat_transcript WHERE ...`` rather than a
+case-row migration.
+
+**Alternatives rejected:** (a) Inline transcript on the case
+row. Rejected for the row-width + retention reasons. (b)
+Object storage (S3) addressed by hash. Rejected for v0.12 —
+adds an infrastructure dependency we don't otherwise need;
+v1.x can swap if transcripts grow large. The current Postgres
+column is fine for the 14-day soak's hundreds-of-rows
+expectation.
+
+**Consequences:** CSR retrieval via ``case.show_transcript_for``
+is a single GET. Archive is a single DELETE filtered by case
+state + closed-at. The hash is a content-fingerprint; if a
+transcript needs to be reconstructed for legal hold, the case
+row + the body row form a complete record without reaching
+into a separate object store.

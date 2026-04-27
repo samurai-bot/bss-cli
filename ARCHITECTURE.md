@@ -285,6 +285,106 @@ The **Inventory sub-domain** (MSISDN pool + eSIM profile pool) lives inside the 
 
 **Why 9 containers, not 10:** keeping inventory inside CRM for v0.1 reduces one network hop in the critical activation path and saves ~150MB of RAM. Domain boundary is still clean — inventory has its own schema, repositories, policies, and tool surface. See DECISIONS.md "Inventory domain hosted inside CRM service (v0.1)" for the rationale.
 
+### Chat scoping (self-serve, v0.12)
+
+The chat surface is the only orchestrator-mediated route in the
+self-serve portal. v0.12 narrows it from "the LLM has the full
+tool registry" to "the LLM sees a curated `customer_self_serve`
+profile, every tool ownership-bound to the logged-in customer,
+with rate + cost caps and an explicit escalation path for the
+five categories AI must not handle alone."
+
+```
+browser /chat
+   │
+   ▼
+PortalSessionMiddleware  →  request.state.customer_id
+   │
+   ▼
+routes/chat.py
+   │ POST /chat/message  → check_caps(customer_id) → blocked?
+   │   │                                      └── 303 cap-tripped banner
+   │   └── 303 /chat?session=<sid>           (no LLM invocation)
+   │
+   │ GET /chat/events/{sid}
+   │   ├── fetch customer + primary subscription
+   │   ├── build customer_chat system prompt
+   │   └── astream_once(
+   │           actor=customer_id,
+   │           channel="portal-chat",
+   │           service_identity="portal_self_serve",
+   │           tool_filter="customer_self_serve",
+   │           system_prompt=<rendered>,
+   │           transcript="User: ...\n",
+   │       )
+   │
+   ▼
+orchestrator
+   │
+   ├── auth_context.set_actor(customer_id)
+   │
+   ├── build_graph(tool_filter="customer_self_serve",
+   │               allow_destructive=True)        → 16 tools
+   │       │
+   │       ├── catalog.list_vas / list_active_offerings / get_offering   (public)
+   │       ├── subscription.{list,get,get_balance,get_lpa}_mine          (read .mine)
+   │       ├── usage.history_mine                                        (read .mine)
+   │       ├── customer.get_mine                                         (read .mine)
+   │       ├── payment.{method_list,charge_history}_mine                 (read .mine)
+   │       ├── vas.purchase_for_me                                       (write .mine)
+   │       ├── subscription.{schedule_plan_change,cancel_pending_plan_change,terminate}_mine
+   │       └── case.open_for_me                                          (escalation)
+   │
+   ├── after each ToolMessage:
+   │       assert_owned_output(tool_name, result, actor)
+   │           - mismatch → AgentEventError + record_violation + stream end
+   │
+   ├── at stream end:
+   │       AgentEventTurnUsage(prompt_tok, completion_tok, model)
+   │           - chat route reads → chat_caps.record_chat_turn
+   │           - upserts audit.chat_usage row + hourly window
+   │
+   └── case.open_for_me path:
+           hash_(transcript) → store in audit.chat_transcript
+           → crm.open_case(chat_transcript_hash=hash_)
+           CSR sees the transcript on /case/{id} via case.show_transcript_for
+```
+
+**Three layers of defence-in-depth, primary boundary first:**
+
+1. **Server-side policies.** Same as every other write — the
+   subscription service rejects a cross-customer terminate
+   regardless of whether the chat surface or the CLI initiated.
+2. **Wrapper pre-check.** `*.mine` wrappers fetch the resource
+   (subscription/case) and assert `customerId == actor` before
+   delegating. Produces a uniform `policy.<tool>.not_owned_by_actor`
+   observation across every tool so prompt-injection attempts get
+   the same response shape.
+3. **Output trip-wire.** `assert_owned_output` runs after every
+   non-error tool result against `OWNERSHIP_PATHS`. A trip is a
+   P0 — server-side policy missed a case. The check exists to
+   fail loudly the day that happens, not to substitute for
+   getting policies right.
+
+**Caps:** per-customer hourly rate (in-memory sliding window,
+default 20/h) + per-customer monthly cost ceiling (DB-backed via
+`audit.chat_usage`, default 200 cents). Both **fail closed** on
+any error — `chat_caps.check_caps` catches DB exceptions and
+returns `CapStatus(allowed=False, reason="cap_check_failed")` so
+the route refuses without invoking the LLM.
+
+### Deployability matrix
+
+| Concern | v0.11 | v0.12 | v1.0 |
+|---|---|---|---|
+| Customer signup (KYC) | ✅ direct + mocked attestation | ✅ unchanged | ⏳ real Singpass |
+| Card on file | ✅ mock tokenizer | ✅ unchanged | ⏳ real Stripe |
+| eSIM provisioning | ✅ provisioning-sim | ✅ unchanged | ⏳ real SM-DP+ |
+| Customer chat | _absent_ | ✅ scoped + capped + escalation | ✅ unchanged shape |
+| Chat ownership trip-wire | _absent_ | ✅ defence-in-depth | ✅ unchanged shape |
+| 14-day soak | _absent_ | ✅ frozen-clock 100×14 | ⏳ public soak with real cohort |
+| Per-principal RBAC | _absent_ | _absent_ | _Phase 12, post-v1.0_ |
+
 ### Note on billing in v0.1
 
 v0.1 ships **without a billing service**. Phase 0 planned one as service #9 (TMF678, port 8009), and the Phase 2 initial migration created the `billing` schema with two tables (`billing_account`, `customer_bill`) — but no phase actually built the service layer. v0.1.1 formally defers billing to v0.2, where it will be reintroduced as a **read-only view layer over `payment.payment_attempt`**: receipt aggregation, statement generation, TMF678 `/customerBill` endpoints. No dunning, no credit extension, no formal invoice generation — bundled-prepaid doesn't need them, since charges happen synchronously at activation / renewal / VAS purchase and are already recorded on `payment.payment_attempt`. The `billing` schema and its tables remain in the migration so v0.2 is purely additive. Port 8009 is reserved. See `DECISIONS.md` 2026-04-13 for the deferral rationale and the scope note separating the billing **service** from "billing" as CRM customer-support **vocabulary**.

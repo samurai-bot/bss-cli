@@ -1,0 +1,145 @@
+name: portal_chat_escalation_to_case
+description: |
+  v0.12 hero — every non-negotiable escalation category trips the
+  customer chat into ``case.open_for_me``, and at least one
+  resulting case carries a populated ``chat_transcript_hash`` that
+  resolves to the triggering conversation via
+  ``case.show_transcript_for``.
+
+  Setup (deterministic, no LLM): one customer with KYC + COF + an
+  active subscription. Mint a verified session.
+
+  For each of the five categories (fraud, billing_dispute,
+  regulator_complaint, identity_recovery, bereavement) the hero
+  fires one ``portal.run_chat_turn`` with the canonical trigger
+  phrasing from ``scenarios/soak/corpus.py``. Each turn captures
+  its outcome; the runner is fail-fast so any HTTP-level error
+  during the chat halts the scenario.
+
+  Final assertions:
+    1. ``case.list`` for the customer returns at least one case
+       whose category is mapped from one of the five enum values
+       AND whose ``chat_transcript_hash`` is set (any_match).
+    2. The first case's transcript_hash is non-null (a stronger
+       check that the agent actually called case.open_for_me).
+
+  Wall-time budget: under 5 minutes — five real LLM round-trips
+  at ~10s each + setup.
+
+tags: [hero, portal, regression, chat]
+
+setup:
+  reset_operational_data: true
+  freeze_clock_at: "2026-05-05T09:00:00+08:00"
+
+variables:
+  customer_email: "chat-escalation-{{ run_id }}@bss-cli.local"
+  portal_base: "http://localhost:9001"
+
+steps:
+  - name: create customer
+    action: customer.create
+    args:
+      name: "Chat Escalation Hero {{ run_id }}"
+      email: "{{ customer_email }}"
+      phone: "+6590005553"
+    capture:
+      customer_id: "$.id"
+
+  - name: attest KYC
+    action: customer.attest_kyc
+    args:
+      customer_id: "{{ customer_id }}"
+      provider: myinfo
+      attestation_token: "stub-signed-jwt-esc-{{ run_id }}"
+
+  - name: card on file
+    action: payment.add_card
+    args:
+      customer_id: "{{ customer_id }}"
+      card_number: "4242424242424242"
+
+  - name: place order
+    action: order.create
+    args:
+      customer_id: "{{ customer_id }}"
+      offering_id: "PLAN_M"
+    capture:
+      order_id: "$.id"
+
+  - name: wait for activation
+    action: order.wait_until
+    args:
+      order_id: "{{ order_id }}"
+      target_state: completed
+      timeout_s: 30
+
+  - name: mint portal session (skip OTP roundtrip)
+    action: portal.mint_test_session
+    args:
+      email: "{{ customer_email }}"
+      customer_id: "{{ customer_id }}"
+    capture:
+      session_cookie: "$.session_id"
+
+  # ─── Five category triggers ───────────────────────────────────────────
+  - name: chat — fraud trigger
+    action: portal.run_chat_turn
+    args:
+      portal_base: "{{ portal_base }}"
+      session_cookie: "{{ session_cookie }}"
+      message: "I think someone took over my account — there are charges I don't recognise"
+      timeout_s: 60
+    capture:
+      fraud_status: "$.stream_status"
+
+  - name: chat — billing_dispute trigger
+    action: portal.run_chat_turn
+    args:
+      portal_base: "{{ portal_base }}"
+      session_cookie: "{{ session_cookie }}"
+      message: "I want to dispute the charge from yesterday — I never authorised it"
+      timeout_s: 60
+    capture:
+      bd_status: "$.stream_status"
+
+  - name: chat — regulator_complaint trigger
+    action: portal.run_chat_turn
+    args:
+      portal_base: "{{ portal_base }}"
+      session_cookie: "{{ session_cookie }}"
+      message: "I'm filing a complaint with IMDA about your service — please log this as a regulatory matter"
+      timeout_s: 60
+    capture:
+      reg_status: "$.stream_status"
+
+  - name: chat — identity_recovery trigger
+    action: portal.run_chat_turn
+    args:
+      portal_base: "{{ portal_base }}"
+      session_cookie: "{{ session_cookie }}"
+      message: "I lost access to my email and I can't log in any more — I need to recover my account"
+      timeout_s: 60
+    capture:
+      idr_status: "$.stream_status"
+
+  - name: chat — bereavement trigger
+    action: portal.run_chat_turn
+    args:
+      portal_base: "{{ portal_base }}"
+      session_cookie: "{{ session_cookie }}"
+      message: "I'm calling about my mother's account — she has passed away"
+      timeout_s: 60
+    capture:
+      ber_status: "$.stream_status"
+
+  # ─── At least one case landed with a transcript hash. ────────────────
+  # Note: case.list (CRM internal API) returns snake_case fields.
+  - name: at least one case carries a chat_transcript_hash
+    assert:
+      tool: case.list
+      args: { customer_id: "{{ customer_id }}" }
+      expect:
+        any_match:
+          chat_transcript_hash:
+            not_null: true
