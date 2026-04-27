@@ -30,10 +30,31 @@ class PaymentAttemptRepository:
         )
         return result.scalar_one_or_none()
 
-    async def list_for_customer(self, customer_id: str) -> list[PaymentAttempt]:
-        result = await self._s.execute(
+    async def list_for_customer(
+        self,
+        customer_id: str,
+        *,
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> list[PaymentAttempt]:
+        stmt = (
             select(PaymentAttempt)
             .where(PaymentAttempt.customer_id == customer_id)
             .order_by(PaymentAttempt.attempted_at.desc())
         )
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        if offset is not None:
+            stmt = stmt.offset(offset)
+        result = await self._s.execute(stmt)
         return list(result.scalars().all())
+
+    async def count_for_customer(self, customer_id: str) -> int:
+        from sqlalchemy import func
+
+        result = await self._s.execute(
+            select(func.count())
+            .select_from(PaymentAttempt)
+            .where(PaymentAttempt.customer_id == customer_id)
+        )
+        return int(result.scalar_one() or 0)

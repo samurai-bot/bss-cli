@@ -175,10 +175,28 @@ class FakeCRM:
 @dataclass
 class FakePayment:
     methods_by_customer: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    payments_by_customer: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     create_calls: list[dict[str, Any]] = field(default_factory=list)
     remove_calls: list[str] = field(default_factory=list)
     set_default_calls: list[str] = field(default_factory=list)
     next_error: Exception | None = None
+
+    async def list_payments(
+        self,
+        *,
+        customer_id: str | None = None,
+        payment_method_id: str | None = None,
+        limit: int = 20,
+        offset: int | None = None,
+    ) -> list[dict[str, Any]]:
+        rows = list(self.payments_by_customer.get(customer_id or "", []))
+        if payment_method_id:
+            rows = [r for r in rows if r.get("paymentMethodId") == payment_method_id]
+        start = offset or 0
+        return [dict(r) for r in rows[start : start + (limit or len(rows))]]
+
+    async def count_payments(self, *, customer_id: str) -> int:
+        return len(self.payments_by_customer.get(customer_id, []))
 
     async def list_methods(self, customer_id: str) -> list[dict[str, Any]]:
         return [dict(m) for m in self.methods_by_customer.get(customer_id, [])]
@@ -369,7 +387,8 @@ def client(fake_clients: FakeClientsBundle):
          patch("bss_self_serve.routes.payment_methods.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.esim.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.cancel.get_clients", return_value=fake_clients), \
-         patch("bss_self_serve.routes.profile.get_clients", return_value=fake_clients):
+         patch("bss_self_serve.routes.profile.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.billing.get_clients", return_value=fake_clients):
         app = create_app(Settings())
         with TestClient(app) as c:
             yield c
@@ -457,7 +476,8 @@ def authed_client(fake_clients: FakeClientsBundle):
          patch("bss_self_serve.routes.payment_methods.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.esim.get_clients", return_value=fake_clients), \
          patch("bss_self_serve.routes.cancel.get_clients", return_value=fake_clients), \
-         patch("bss_self_serve.routes.profile.get_clients", return_value=fake_clients):
+         patch("bss_self_serve.routes.profile.get_clients", return_value=fake_clients), \
+         patch("bss_self_serve.routes.billing.get_clients", return_value=fake_clients):
         app = create_app(Settings())
         with TestClient(app) as c:
             c.cookies.set(PORTAL_SESSION_COOKIE, session_id)

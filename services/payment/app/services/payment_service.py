@@ -115,5 +115,16 @@ class PaymentService:
     async def get_attempt(self, attempt_id: str) -> PaymentAttempt | None:
         return await self._attempt_repo.get(attempt_id)
 
-    async def list_attempts(self, customer_id: str) -> list[PaymentAttempt]:
-        return await self._attempt_repo.list_for_customer(customer_id)
+    async def list_attempts(
+        self,
+        customer_id: str,
+        *,
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> list[PaymentAttempt]:
+        return await self._attempt_repo.list_for_customer(
+            customer_id, limit=limit, offset=offset
+        )
+
+    async def count_attempts(self, customer_id: str) -> int:
+        return await self._attempt_repo.count_for_customer(customer_id)

@@ -384,6 +384,68 @@
   font-size: 14px;
 }
 
+/* ─── Billing history (v0.10) ────────────────────────────────── */
+
+.billing-history {
+  max-width: 880px;
+  margin: 32px auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.billing-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg-inset);
+}
+.billing-table th,
+.billing-table td {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.billing-table th {
+  background: var(--bg);
+  color: var(--fg-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+}
+.billing-row:last-child td { border-bottom: none; }
+.billing-amount, .billing-method, .billing-ref {
+  font-family: var(--mono);
+}
+.billing-status {
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+.billing-status--succeeded { color: #1e6e3e; }
+.billing-status--declined,
+.billing-status--failed { color: #c0392b; }
+.billing-status--pending { color: #f39c12; }
+.billing-decline {
+  display: block;
+  color: #c0392b;
+  font-size: 12px;
+  margin-top: 2px;
+}
+.billing-method-removed {
+  color: var(--fg-muted);
+  font-style: italic;
+}
+.billing-pager {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
 /* ─── Profile / contact medium (v0.10) ───────────────────────── */
 
 .profile-contact,

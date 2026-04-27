@@ -141,6 +141,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         activation,
         agent_events,
         auth,
+        billing,
         cancel,
         confirmation,
         esim,
@@ -169,6 +170,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(esim.router)
     app.include_router(cancel.router)
     app.include_router(profile.router)
+    app.include_router(billing.router)
 
     return app
 
