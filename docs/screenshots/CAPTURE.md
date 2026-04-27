@@ -24,15 +24,15 @@ Run `python docs/screenshots/capture_portals.py` from the repo root. The script 
 
 Captures produced:
 
-- `portal_self_serve_signup_v0_4.png` — signup form mid-submit with agent log streaming. Drives a real signup with `4242 4242 4242 4242` test card so the agent log is non-empty.
-- `portal_self_serve_confirmation_v0_4.png` — confirmation page with eSIM QR PNG visible. Continues from the signup capture's redirect.
+- `portal_self_serve_signup_v0_12.png` *(replaces the deleted v0_4 capture)* — direct-write signup form (linked-identity flow): minimal fields (name + phone + card pre-fill + pre-baked KYC). The capture context carries a verified-but-unlinked session cookie so `requires_verified_email` passes; without that, /signup/* redirects to login.
+- `portal_self_serve_confirmation_v0_12.png` *(replaces the deleted v0_4 capture)* — confirmation page with eSIM QR PNG. Continues from the signup capture's redirect.
 - `portal_csr_360_v0_5.png` — customer 360 view with a blocked subscription highlighted. Pre-blocks SUB-0001 via `usage.simulate` so the state shows.
 - `portal_csr_agent_midstream_v0_5.png` — operator's ask form submitted, agent log mid-stream. Snapshots the agent log between `tool_started` and `tool_completed` for a visible streaming state.
-- `portal_self_serve_dashboard_v0_12.png` *(v0.12)* — dashboard with the floating "Chat with us" pill bottom-right.
-- `portal_self_serve_chat_widget_v0_12.png` *(v0.12)* — chat popup widget opened over the dashboard, one full conversation turn rendered.
-- `portal_csr_case_transcript_v0_12.png` *(v0.12)* — CSR case-detail page showing the "Chat transcript" panel for an AI-opened escalation case.
+- `portal_self_serve_dashboard_v0_12.png` — dashboard with the floating "Chat with us" pill bottom-right.
+- `portal_self_serve_chat_widget_v0_12.png` — chat popup widget opened over the dashboard, one full conversation turn rendered.
+- `portal_csr_case_transcript_v0_12.png` — CSR case-detail page showing the "Chat transcript" panel for an AI-opened escalation case.
 
-The v0.12 captures need a verified linked-customer session in `portal_auth.session` before they run; either drive the signup chain first (the `_self_serve_signup` capture leaves one) or seed via `bss_portal_auth.test_helpers.create_test_session`. The CSR transcript capture additionally needs at least one case with `chat_transcript_hash` set — run the `portal_chat_escalation_to_case` hero scenario before capturing. The `bss_trace_swimlane_v0_2.png` was re-cropped at v0.12 (1280×1200, top-half of the original ~2200px capture) to keep the README scroll length sensible.
+The v0.12 dashboard / chat-widget captures need a verified linked-customer session in `portal_auth.session` before they run; the v0.12 signup capture needs an unlinked-but-verified session (no customer_id yet). Both are easiest to seed via `bss_portal_auth.test_helpers.create_test_session`. The CSR transcript capture additionally needs at least one case with `chat_transcript_hash` set — run the `portal_chat_escalation_to_case` hero scenario before capturing. The `bss_trace_swimlane_v0_2.png` was re-cropped at v0.12 (1280×1200, top-half of the original ~2200px capture) to keep the README scroll length sensible.
 
 ## Terminal screenshots (manual — needs a display)
 
