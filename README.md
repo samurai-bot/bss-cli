@@ -14,10 +14,10 @@ For engineers learning telco BSS/OSS, for a small MVNO that wants a deployable M
 
 ### Self-serve portal (customer-facing)
 
-- **Signup chain** — direct-write since v0.11; full signup → activation in ~5s wall-clock:
-  ![portal self-serve signup](docs/screenshots/portal_self_serve_signup_v0_4.png)
-- **Confirmation** — eSIM QR PNG + LPA activation code:
-  ![portal self-serve confirmation](docs/screenshots/portal_self_serve_confirmation_v0_4.png)
+- **Signup form** *(v0.12)* — direct-write chain since v0.11; the linked verified-email identity already carries the customer's name + email, so the form is minimal (name, phone, card; KYC pre-baked). Full signup → activation in ~5s wall-clock:
+  ![portal self-serve signup](docs/screenshots/portal_self_serve_signup_v0_12.png)
+- **Confirmation** *(v0.12)* — eSIM QR PNG + LPA activation code, rendered after the chain completes:
+  ![portal self-serve confirmation](docs/screenshots/portal_self_serve_confirmation_v0_12.png)
 - **Dashboard with floating chat widget** *(v0.12)* — the "Chat with us" pill is on every post-login page (and on `/welcome` / `/plans` for pre-signup visitors). Opens a popup overlay; no navigation:
   ![self-serve dashboard with FAB](docs/screenshots/portal_self_serve_dashboard_v0_12.png)
 - **Chat widget mid-conversation** *(v0.12)* — multi-turn memory; markdown rendering; Enter to send; auto-scroll to the latest reply:

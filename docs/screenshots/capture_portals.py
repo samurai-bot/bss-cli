@@ -57,30 +57,28 @@ def _optimize(path: Path) -> None:
 
 
 def _self_serve_signup(page: Page) -> None:
-    """Submit a signup; pause on the progress page so the agent log is visible."""
-    page.goto("http://localhost:9001/")
-    page.click('a:has-text("Pick PLAN_M")')
-    page.click('a.msisdn-tile >> nth=0')
+    """v0.12 — capture the direct-write signup form + confirmation.
+
+    Pre-condition (see CAPTURE.md): the page's Context carries a
+    verified-but-unlinked ``bss_portal_session`` cookie so the
+    /signup/* routes pass ``requires_verified_email``. The linked
+    identity carries the customer's email; the form is minimal
+    (name + phone + card_pan; KYC pre-baked, msisdn pre-picked).
+    """
+    page.goto("http://localhost:9001/signup/PLAN_M?msisdn=90000000")
+    page.wait_for_selector("button.form-submit", timeout=10_000)
     page.fill('input[name="name"]', "Ck Demo")
-    page.fill(
-        'input[name="email"]',
-        f"portal-demo-{int(time.time())}@bss-cli.local",
-    )
     page.fill('input[name="phone"]', "+6590001234")
-    page.click('button.form-submit')
-    # Land on the progress page; wait briefly for SSE to start streaming so
-    # at least the prompt + first few tool calls render in the log.
-    page.wait_for_url("**/progress?session=*", timeout=10_000)
-    page.wait_for_timeout(2500)
-    out = OUT / "portal_self_serve_signup_v0_4.png"
+    page.wait_for_timeout(400)
+    out = OUT / "portal_self_serve_signup_v0_12.png"
     page.screenshot(path=str(out), full_page=False)
     print(f"captured: {out.name}")
     _optimize(out)
-    # Wait for the redirect to confirmation, capture that too.
+    page.click("button.form-submit")
     try:
         page.wait_for_url("**/confirmation/*", timeout=60_000)
         page.wait_for_timeout(800)
-        out2 = OUT / "portal_self_serve_confirmation_v0_4.png"
+        out2 = OUT / "portal_self_serve_confirmation_v0_12.png"
         page.screenshot(path=str(out2), full_page=False)
         print(f"captured: {out2.name}")
         _optimize(out2)
