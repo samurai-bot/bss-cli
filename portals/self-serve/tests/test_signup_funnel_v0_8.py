@@ -431,12 +431,24 @@ async def test_direct_write_chain_completes_without_orchestrator(
             # No HX-Redirect yet.
             assert "HX-Redirect" not in r5.headers and "hx-redirect" not in r5.headers
 
-            # Step 5b: poll again — order completed; HX-Redirect emitted.
+            # Step 5b: poll again — order completed. The route arms
+            # ``redirect_armed`` and renders the celebration fragment
+            # with a 1.5s delayed re-trigger; no HX-Redirect yet so
+            # the user sees the chain finish before navigation.
             r6 = c.get(
                 f"/signup/step/poll?session={session_id}", follow_redirects=False
             )
             assert r6.status_code == 200
-            redirect = r6.headers.get("HX-Redirect") or r6.headers.get("hx-redirect")
+            assert "HX-Redirect" not in r6.headers and "hx-redirect" not in r6.headers
+            assert "Activated" in r6.text  # celebration fragment
+
+            # Step 5c: poll one more time — redirect_armed is now true,
+            # the route emits HX-Redirect to /confirmation.
+            r7 = c.get(
+                f"/signup/step/poll?session={session_id}", follow_redirects=False
+            )
+            assert r7.status_code == 200
+            redirect = r7.headers.get("HX-Redirect") or r7.headers.get("hx-redirect")
             assert redirect is not None
             assert redirect.startswith("/confirmation/SUB-007")
     finally:

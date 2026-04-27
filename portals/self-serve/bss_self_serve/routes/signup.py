@@ -136,6 +136,42 @@ async def signup_submit(
         identity_id=identity.id,
     )
 
+    # v0.11 — second-line support. If the verified identity is already
+    # linked to a customer (typical case: visitor already signed up
+    # once and is now adding another line), reuse that customer_id
+    # instead of creating a fresh CRM customer. The chain then jumps
+    # past create-customer + KYC (already attested on the prior
+    # signup) and the COF step is gated on whether they want a new
+    # card or to reuse their existing default. v0.4 / v0.8 / v0.10's
+    # signup chain blindly called crm.create_customer every time and
+    # left an orphan CUST in CRM if link_to_customer rejected the
+    # second link — that's the bug a returning visitor reported.
+    existing_customer_id = identity.customer_id
+    if existing_customer_id:
+        session.customer_id = existing_customer_id
+        # Skip create-customer (already exists), KYC (already attested
+        # — CRM's ``document_hash_unique_per_tenant`` would reject a
+        # duplicate anyway), AND COF (the customer's existing default
+        # method on file pays for the new line; no need to make them
+        # re-enter card details for a second line). Jump straight to
+        # placing the order.
+        session.step = "pending_order"
+        await _record_step(
+            factory,
+            session,
+            customer_id=existing_customer_id,
+            action="signup_create_customer",
+            route="/signup",
+            success=True,
+            error_rule="signup.create_customer.reused_linked_identity",
+            request=request,
+        )
+        await store.update(session)
+        return RedirectResponse(
+            url=f"/signup/{plan}/progress?session={session.session_id}",
+            status_code=303,
+        )
+
     try:
         customer = await clients.crm.create_customer(
             name=name,
@@ -477,6 +513,20 @@ async def signup_step_poll(
     """
     store = request.app.state.session_store
     sig = await _resolve(store, session, identity)
+
+    # If the chain already reached completion on a prior poll visit
+    # AND the celebration dwell has elapsed (the delayed re-trigger
+    # fired this call), emit HX-Redirect now. The first detection
+    # below sets ``redirect_armed`` and returns the celebration
+    # fragment with a 1.5s delayed re-trigger; the second call lands
+    # here and navigates.
+    if sig.step == "completed" and sig.redirect_armed and sig.subscription_id:
+        resp = HTMLResponse(content="")
+        resp.headers["HX-Redirect"] = (
+            f"/confirmation/{sig.subscription_id}?session={sig.session_id}"
+        )
+        return resp
+
     if sig.step in ("completed", "failed"):
         return _render_step_fragment(request, sig)
 
@@ -507,13 +557,15 @@ async def signup_step_poll(
         sig.activation_code = _extract_activation_code(order)
         sig.step = "completed"
         sig.done = True
+        sig.redirect_armed = True
         await store.update(sig)
-        # HTMX consumes ``HX-Redirect`` and navigates the whole page.
-        resp = HTMLResponse(content="")
-        resp.headers["HX-Redirect"] = (
-            f"/confirmation/{sub_id}?session={sig.session_id}"
-        )
-        return resp
+        # First detection — render the "all 5 ticks ✓" celebration
+        # fragment. The partial's completed-branch carries a 1.5s
+        # delayed re-trigger to /signup/step/poll; that next visit
+        # falls through the early ``redirect_armed`` branch above and
+        # emits HX-Redirect to /confirmation. The dwell time is
+        # deliberate so the user sees the chain finish.
+        return _render_step_fragment(request, sig)
 
     if state in ("failed", "cancelled"):
         sig.step = "failed"

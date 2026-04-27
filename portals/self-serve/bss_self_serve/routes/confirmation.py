@@ -65,5 +65,18 @@ async def confirmation(
             "activation_code": activation_code,
             "qr_data_uri": qr_data_uri,
             "plan": plan,
+            # v0.11 — render the completed 5-step timeline above the QR
+            # so the user can see the full chain that just ran. Pass the
+            # signup session through so the partial reuses the same
+            # rendering as the progress page, just at step="completed"
+            # with no next-step trigger.
+            "signup": sig,
+            "session_id": sig.session_id,
+            "plan_id": sig.plan,
+            "step_error_message": None,
+            # Suppress the auto-re-trigger inside the partial so the
+            # completed-branch div doesn't fire HX-Redirect again on
+            # the confirmation page (would loop us back here).
+            "progress_with_trigger": False,
         },
     )

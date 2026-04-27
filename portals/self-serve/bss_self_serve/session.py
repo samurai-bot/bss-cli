@@ -76,6 +76,12 @@ class SignupSession:
     # v0.11 — explicit step state for the direct-write chain.
     step: SignupStep = "pending_customer"
     step_error: str | None = None  # PolicyViolation rule string, when step=="failed"
+    # v0.11 — when the poll route first detects completion it renders
+    # the "all 5 ticks ✓ Activated" fragment AND arms a 1.5s delayed
+    # re-trigger so the user sees the chain finish before HX-Redirect
+    # whisks them to /confirmation. The next poll visit, with this
+    # flag already true, is the one that emits the redirect.
+    redirect_armed: bool = False
 
     # Populated as each step completes:
     customer_id: str | None = None

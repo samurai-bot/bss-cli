@@ -33,6 +33,11 @@
 ] %}
 {% set step_order = ['pending_customer','pending_kyc','pending_cof','pending_order','pending_activation','completed'] %}
 {% set current_idx = step_order.index(signup.step) if signup.step in step_order else 0 %}
+{# Default the trigger flag to True so the progress page (which
+   doesn't pass it explicitly) keeps auto-advancing the chain. The
+   confirmation page passes ``progress_with_trigger=False`` to render
+   a static "completed" snapshot. #}
+{% set progress_with_trigger = progress_with_trigger if progress_with_trigger is defined else True %}
 
 <div id="signup-progress" class="progress-card{% if signup.step == 'failed' %} progress-card-failed{% endif %}">
   <div class="progress-lane">
@@ -101,9 +106,22 @@
          hx-target="#signup-progress"
          hx-swap="outerHTML"
          class="progress-trigger" hidden></div>
-  {% elif signup.step == 'pending_activation' %}
+  {% elif signup.step == 'pending_activation' and progress_with_trigger %}
     <div hx-get="/signup/step/poll?session={{ session_id }}"
          hx-trigger="load delay:500ms"
+         hx-target="#signup-progress"
+         hx-swap="outerHTML"
+         class="progress-trigger" hidden></div>
+  {% elif signup.step == 'completed' and progress_with_trigger %}
+    {# v0.11 — celebration dwell. The partial renders all 5 ticks done
+       on this branch; the delayed re-trigger fires /signup/step/poll
+       once more after 1.5s. That second visit emits HX-Redirect to
+       /confirmation (the route's ``redirect_armed`` early-return).
+       The confirmation page re-includes this partial but passes
+       ``progress_with_trigger=False`` so this div is suppressed —
+       no redirect loop on the destination page. #}
+    <div hx-get="/signup/step/poll?session={{ session_id }}"
+         hx-trigger="load delay:1500ms"
          hx-target="#signup-progress"
          hx-swap="outerHTML"
          class="progress-trigger" hidden></div>
