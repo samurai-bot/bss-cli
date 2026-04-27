@@ -42,6 +42,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from .chat_session import ChatTurnStore
 from .config import Settings
 from .middleware import PortalSessionMiddleware
 from .security import install_redirect_handlers
@@ -88,6 +89,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.session_store = SessionStore(
         ttl_seconds=settings.bss_portal_self_serve_session_ttl,
     )
+
+    # v0.12 PR7 — chat turn store (in-memory). 30 min TTL covers a
+    # leisurely customer who Tab-switched between submitting and
+    # opening the SSE stream; the chat route reads from here on the
+    # SSE GET.
+    app.state.chat_turn_store = ChatTurnStore(ttl_seconds=1800)
     log.info(
         "portal.starting",
         service=settings.service_name,
@@ -142,6 +149,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         auth,
         billing,
         cancel,
+        chat,
         confirmation,
         esim,
         landing,
@@ -171,6 +179,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(profile.router)
     app.include_router(billing.router)
     app.include_router(plan_change.router)
+    # v0.12 — chat surface, the only orchestrator-mediated route.
+    app.include_router(chat.router)
 
     return app
 

@@ -72,7 +72,9 @@ def test_no_route_imports_astream_once():
     failure during normal pytest runs without needing make.
     """
     chat_only_whitelist = {
-        # When the chat route lands in v0.12+, add "chat.py" here.
+        # v0.12 — the chat surface is the one orchestrator-mediated
+        # route. Every other route writes directly via bss-clients.
+        "chat.py",
     }
     offenders = []
     for py in _ROUTES_DIR.glob("*.py"):

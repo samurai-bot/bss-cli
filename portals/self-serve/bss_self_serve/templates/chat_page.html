@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Chat · bss-cli self-serve{% endblock %}
+
+{% block main %}
+<section class="chat-page">
+  <h1 class="page-title">Chat with us</h1>
+  <p class="page-subtitle">
+    Ask about your line — top up, schedule a plan change, redownload
+    your eSIM, or get a quick answer. Sensitive issues are escalated
+    to a human within 24 hours.
+  </p>
+
+  {% if cap_tripped %}
+    <div class="chat-cap-tripped" role="alert">
+      {% if cap_tripped == "monthly_cost_cap" %}
+        <h2>You've reached this month's chat budget.</h2>
+        <p>
+          The chat assistant is rate-limited per customer per month.
+          {% if retry_at %}You can chat again on
+            <code>{{ retry_at[:10] }}</code>.{% endif %}
+          In the meantime, the dashboard, billing history, and plan
+          options on the site cover everything chat can do.
+        </p>
+      {% elif cap_tripped == "hourly_rate_cap" %}
+        <h2>You're chatting fast — try again in a moment.</h2>
+        <p>
+          We cap requests per hour per customer to keep the assistant
+          fair to everyone.
+          {% if retry_at %}Retry after <code>{{ retry_at[:16] }}</code>.{% endif %}
+        </p>
+      {% else %}
+        <h2>Chat is briefly unavailable.</h2>
+        <p>
+          Please try again in a few minutes. If this keeps happening,
+          please contact support.
+        </p>
+      {% endif %}
+      <p class="chat-cap-tripped-actions">
+        <a class="welcome-cta" href="/">Back to my account</a>
+      </p>
+    </div>
+  {% else %}
+    {% if turn %}
+      <article class="chat-thread">
+        <div class="chat-message chat-message-user">
+          <header><strong>You</strong></header>
+          <p>{{ turn.question }}</p>
+        </div>
+        <div class="chat-message chat-message-assistant">
+          <header>
+            <strong>Assistant</strong>
+            <span class="chat-status" sse-swap="status">
+              <span class="dot idle"></span> connecting…
+            </span>
+          </header>
+          <div
+            class="chat-log"
+            id="chat-log"
+            sse-swap="message"
+            hx-swap="beforeend"
+          ></div>
+        </div>
+      </article>
+
+      <div
+        class="chat-sse-host"
+        hx-ext="sse"
+        sse-connect="/chat/events/{{ session_id }}"
+        hidden
+      ></div>
+    {% endif %}
+
+    <form class="chat-form" method="post" action="/chat/message">
+      <label for="chat-message" class="form-label">Your question</label>
+      <textarea
+        id="chat-message"
+        name="message"
+        rows="3"
+        required
+        placeholder="e.g. how much data do I have left this month?"
+      ></textarea>
+      <button type="submit" class="welcome-cta">Send</button>
+    </form>
+
+    <p class="chat-fineprint">
+      We only act on your own account. We escalate fraud, billing
+      disputes, regulator complaints, identity recovery, and
+      bereavement to a human — never the AI.
+    </p>
+  {% endif %}
+</section>
+{% endblock %}
