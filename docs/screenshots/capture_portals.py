@@ -105,6 +105,73 @@ def _csr_360_and_ask(page: Page) -> None:
     _optimize(out2)
 
 
+def _self_serve_dashboard_with_fab(page: Page) -> None:
+    """v0.12 — dashboard with the floating "Chat with us" pill visible
+    bottom-right. Requires the customer to be logged in via portal_auth.
+    Use a freshly-seeded test session (see CAPTURE.md) so the
+    dashboard renders one or more line cards.
+    """
+    page.goto("http://localhost:9001/")
+    page.wait_for_selector(".chat-fab", timeout=10_000)
+    page.wait_for_timeout(400)
+    out = OUT / "portal_self_serve_dashboard_v0_12.png"
+    page.screenshot(path=str(out), full_page=False)
+    print(f"captured: {out.name}")
+    _optimize(out)
+
+
+def _self_serve_chat_widget(page: Page) -> None:
+    """v0.12 — chat widget popup open over the dashboard, with a
+    short conversation: one user question + the assistant's reply.
+    Drives a real LLM round-trip so the bubble content is realistic;
+    waits for the SSE 'done' status before snapshotting."""
+    page.goto("http://localhost:9001/")
+    page.wait_for_selector(".chat-fab", timeout=10_000)
+    page.click(".chat-fab")
+    page.wait_for_selector(".chat-widget-popup", timeout=5_000)
+    page.fill(
+        '.chat-widget-form textarea[name="message"]',
+        "what plans do you have?",
+    )
+    page.click('.chat-widget-form button[type="submit"]')
+    # Wait for status: done — the SSE stream finishes when the
+    # streaming bubble's status pill swaps to ``dot done``.
+    page.wait_for_selector(".chat-status .dot.done", timeout=30_000)
+    page.wait_for_timeout(600)
+    out = OUT / "portal_self_serve_chat_widget_v0_12.png"
+    page.screenshot(path=str(out), full_page=False)
+    print(f"captured: {out.name}")
+    _optimize(out)
+
+
+def _csr_case_with_transcript(page: Page) -> None:
+    """v0.12 — CSR's case detail page rendering the chat-transcript
+    panel for an AI-opened escalation case. Pre-condition: at least
+    one case exists with chat_transcript_hash set (run the
+    portal_chat_escalation_to_case hero scenario before capturing)."""
+    page.goto("http://localhost:9002/login")
+    page.fill('input[name="username"]', "csr-demo-001")
+    page.fill('input[name="password"]', "anything")
+    page.click('button[type="submit"]')
+    page.wait_for_url("**/search", timeout=10_000)
+    # Find the customer who has the AI-escalated case.
+    page.fill('form.search-form input[name="q"]', "Escalation")
+    page.locator('form.search-form button').click()
+    page.wait_for_selector('table.search-results', timeout=10_000)
+    page.locator('table.search-results tbody tr a').first.click()
+    page.wait_for_url("**/customer/CUST-*", timeout=10_000)
+    # Click the first AI-escalated case in the cases panel.
+    case_link = page.locator('a[href^="/case/CASE-"]').first
+    case_link.click()
+    page.wait_for_url("**/case/CASE-*", timeout=10_000)
+    page.wait_for_selector(".chat-transcript-section", timeout=5_000)
+    page.wait_for_timeout(400)
+    out = OUT / "portal_csr_case_transcript_v0_12.png"
+    page.screenshot(path=str(out), full_page=False)
+    print(f"captured: {out.name}")
+    _optimize(out)
+
+
 def main() -> int:
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -114,12 +181,29 @@ def main() -> int:
         try:
             _self_serve_signup(page)
         except Exception as exc:
-            print(f"FAIL self-serve: {exc}", file=sys.stderr)
+            print(f"FAIL self-serve signup: {exc}", file=sys.stderr)
 
         try:
             _csr_360_and_ask(page)
         except Exception as exc:
-            print(f"FAIL csr: {exc}", file=sys.stderr)
+            print(f"FAIL csr ask: {exc}", file=sys.stderr)
+
+        # v0.12 — chat surface captures. These need a session cookie
+        # already present (see CAPTURE.md for the seed-helper pattern).
+        try:
+            _self_serve_dashboard_with_fab(page)
+        except Exception as exc:
+            print(f"FAIL self-serve dashboard fab: {exc}", file=sys.stderr)
+
+        try:
+            _self_serve_chat_widget(page)
+        except Exception as exc:
+            print(f"FAIL self-serve chat widget: {exc}", file=sys.stderr)
+
+        try:
+            _csr_case_with_transcript(page)
+        except Exception as exc:
+            print(f"FAIL csr case transcript: {exc}", file=sys.stderr)
 
         browser.close()
     return 0
