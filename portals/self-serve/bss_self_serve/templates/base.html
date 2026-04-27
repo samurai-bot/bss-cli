@@ -4,6 +4,12 @@
   <meta charset="utf-8" />
   <title>{% block title %}BSS-CLI Self-Serve{% endblock %}</title>
   <meta name="viewport" content="width=1200" />
+  {# Webkit / Safari auto-link anything phone-shaped (and a few address /
+     email patterns) by default — that turns balance values like
+     "153600 / 153600 mb" and contact-medium values like phone numbers
+     into blue-underlined tel: links. We render those values inside our
+     own forms and links, so disable the heuristic globally. #}
+  <meta name="format-detection" content="telephone=no, address=no, email=no" />
   <link rel="stylesheet" href="/portal-ui/static/css/portal_base.css" />
   <link rel="stylesheet" href="/static/css/portal.css" />
   <script src="/portal-ui/static/js/htmx.min.js" defer></script>
