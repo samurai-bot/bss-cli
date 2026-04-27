@@ -92,14 +92,20 @@
   </script>
   {% endif %}
 
-  {# v0.12 PR13 — floating chat launcher + popup host. The FAB
-     loads the widget partial into ``#chat-widget-host`` via HTMX
-     so the chat opens in place; no navigation. The host div is
-     always present (so HTMX has a target) but stays empty until
-     the customer clicks. The widget's own close button (×)
-     swaps the host back to empty. /chat itself uses the same
-     partial as a full-page render. #}
-  {% if request.state.customer_id and request.url.path != "/chat" %}
+  {# v0.12 PR13/PR14 — floating chat launcher + popup host. The
+     FAB loads the widget partial into ``#chat-widget-host`` via
+     HTMX so the chat opens in place; no navigation. The host
+     div is always present (so HTMX has a target) but stays
+     empty until the customer clicks. The widget's own close
+     button (×) swaps the host back to empty. /chat itself uses
+     the same partial as a full-page render.
+
+     Visible to ANY verified-email identity, not just linked-
+     customers — pre-signup visitors can browse the catalog via
+     chat. The route handlers + system prompt steer anonymous
+     identities to catalog questions only; the .mine wrappers
+     refuse cleanly when there's no actor bound. #}
+  {% if request.state.identity and request.url.path != "/chat" %}
   <div id="chat-widget-host" class="chat-widget-host"></div>
   <button
     type="button"

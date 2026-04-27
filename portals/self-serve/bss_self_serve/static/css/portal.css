@@ -1622,3 +1622,37 @@
     max-width: none;
   }
 }
+
+/* ─── v0.12 PR14 — streaming-area cleanup (no bubble shell) ─────── */
+
+/* The streaming container is just a vertical stack — status pill
+   + chat-log children. The assistant's final reply renders as a
+   normal .chat-bubble-assistant inside .chat-log, same shape as
+   prior turns. The earlier dashed-bordered "streaming bubble"
+   wrapper was visual noise. */
+.chat-streaming {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.chat-streaming-status {
+  align-self: flex-start;
+  font-size: 11px;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.chat-streaming .chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 0;
+  background: transparent;
+}
+.chat-streaming .chat-log > * {
+  /* Override the agent-log-style left-bar; chat children are
+     already .chat-bubble shapes or .chat-tool-pill. */
+  border-left: none;
+  background: transparent;
+  padding: 0;
+}

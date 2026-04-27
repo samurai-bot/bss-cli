@@ -52,13 +52,14 @@ from bss_orchestrator.session import (
     AgentEventTurnUsage,
     astream_once,
 )
+from bss_portal_auth import IdentityView
 from bss_portal_ui.sse import format_frame as _sse_frame
 from bss_portal_ui.sse import status_html as _status_html
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 
 from ..clients import get_clients
-from ..security import requires_linked_customer
+from ..security import requires_verified_email
 from ..templating import templates
 
 log = structlog.get_logger(__name__)
@@ -78,16 +79,53 @@ def _is_htmx(request: Request) -> bool:
     return request.headers.get("hx-request", "").lower() == "true"
 
 
-async def _load_customer_context(customer_id: str) -> dict:
+def _cap_key(identity: IdentityView) -> str:
+    """Stable per-identity key for chat_caps + ChatConversationStore.
+
+    Linked customers cap on the customer_id (existing v0.12 contract).
+    Verified-but-unlinked identities cap on the identity_id with an
+    ``anon-`` prefix so they never collide with a CUST-* id and the
+    audit row's customer_id field reflects the (anonymous) reality.
+    Pre-signup catalog enquiries get their own budget; signing up
+    after that doesn't merge histories — clean break, by design.
+    """
+    if identity.customer_id:
+        return identity.customer_id
+    return f"anon-{identity.id}"
+
+
+def _chat_actor(identity: IdentityView) -> str | None:
+    """auth_context.actor binding. Linked customers get their CUST-*
+    so .mine wrappers resolve. Anonymous (pre-signup) identities get
+    None — the .mine wrappers refuse cleanly via _NoActorBound, the
+    catalog-public reads still work, the system prompt steers the
+    LLM accordingly."""
+    return identity.customer_id
+
+
+async def _load_customer_context(customer_id: str | None) -> dict:
     """Read customer + primary subscription for the system prompt.
     Best-effort: failures fall through to ``(loading)`` placeholders
-    rather than blocking the chat turn."""
-    clients = get_clients()
+    rather than blocking the chat turn.
+
+    For unlinked (pre-signup) identities ``customer_id`` is None;
+    no BSS reads happen and the prompt renders in browse-only mode.
+    """
     customer_dict: dict = {}
     primary_sub: dict | None = None
     customer_email = ""
     customer_name = ""
     plan_id = "(loading)"
+    if not customer_id:
+        return {
+            "customer_dict": customer_dict,
+            "primary_sub": primary_sub,
+            "customer_email": customer_email,
+            "customer_name": customer_name,
+            "plan_id": plan_id,
+            "is_linked": False,
+        }
+    clients = get_clients()
     try:
         customer_dict = await clients.crm.get_customer(customer_id)
         customer_email = (
@@ -119,6 +157,7 @@ async def _load_customer_context(customer_id: str) -> dict:
         "customer_email": customer_email,
         "customer_name": customer_name,
         "plan_id": plan_id,
+        "is_linked": True,
     }
 
 
@@ -151,16 +190,17 @@ def _render_widget_context(
 
 
 async def _resolve_session(
-    request: Request, session: str | None, customer_id: str
+    request: Request, session: str | None, cap_key: str
 ) -> str | None:
     """Validate ``?session=<sid>`` against the turn store. Returns
     the id when valid + owned by the actor, otherwise ``None`` so
-    the template skips the SSE host. Cross-customer impersonation
-    via a crafted URL is blocked here (the SSE handler enforces too)."""
+    the template skips the SSE host. Cross-customer (or cross-
+    anonymous) impersonation via a crafted URL is blocked here
+    (the SSE handler enforces too)."""
     if not session:
         return None
     turn = await request.app.state.chat_turn_store.get(session)
-    if turn is None or turn.customer_id != customer_id:
+    if turn is None or turn.customer_id != cap_key:
         return None
     return session
 
@@ -171,18 +211,19 @@ async def chat_page(
     cap_tripped: str | None = None,
     retry_at: str | None = None,
     session: str | None = None,
-    customer_id: str = Depends(requires_linked_customer),
+    identity: IdentityView = Depends(requires_verified_email),
 ) -> HTMLResponse:
-    """Standalone chat page. Always shows the running conversation
-    plus the input form. ``?session=<sid>`` activates the SSE stream
-    for an in-flight turn so the assistant's reply lands as it arrives."""
-    conv = await request.app.state.chat_conversation_store.get(customer_id)
-    valid_session = await _resolve_session(request, session, customer_id)
+    """Standalone chat page. Available to any verified-email
+    identity; linked-customer status determines which tools the
+    LLM can reach (``.mine`` wrappers refuse without a customer)."""
+    cap_key = _cap_key(identity)
+    conv = await request.app.state.chat_conversation_store.get(cap_key)
+    valid_session = await _resolve_session(request, session, cap_key)
     return templates.TemplateResponse(
         request,
         "chat_page.html",
         _render_widget_context(
-            customer_id=customer_id,
+            customer_id=cap_key,
             conversation=conv,
             session_id=valid_session,
             cap_tripped=cap_tripped,
@@ -197,19 +238,21 @@ async def chat_widget(
     session: str | None = None,
     cap_tripped: str | None = None,
     retry_at: str | None = None,
-    customer_id: str = Depends(requires_linked_customer),
+    identity: IdentityView = Depends(requires_verified_email),
 ) -> HTMLResponse:
     """The popup widget partial. Loaded by the FAB's ``hx-get``
-    into the ``#chat-widget-host`` div on every post-login page.
-    Same context as the standalone page; the partial decides the
-    fixed-position bottom-right styling."""
-    conv = await request.app.state.chat_conversation_store.get(customer_id)
-    valid_session = await _resolve_session(request, session, customer_id)
+    into the ``#chat-widget-host`` div on every page where the
+    customer has a verified-email session. Linked or anonymous —
+    both can browse the catalog via chat; .mine writes are gated
+    by the wrapper's actor check."""
+    cap_key = _cap_key(identity)
+    conv = await request.app.state.chat_conversation_store.get(cap_key)
+    valid_session = await _resolve_session(request, session, cap_key)
     return templates.TemplateResponse(
         request,
         "chat_widget.html",
         _render_widget_context(
-            customer_id=customer_id,
+            customer_id=cap_key,
             conversation=conv,
             session_id=valid_session,
             cap_tripped=cap_tripped,
@@ -222,31 +265,32 @@ async def chat_widget(
 async def chat_message(
     request: Request,
     message: str = Form(...),
-    customer_id: str = Depends(requires_linked_customer),
+    identity: IdentityView = Depends(requires_verified_email),
 ):
     """Append the user's message to the conversation and either
     redirect (full-page) or return a widget refresh (HTMX) so the
     SSE stream picks up the new turn."""
+    cap_key = _cap_key(identity)
     text = message.strip()
     if not text:
         if _is_htmx(request):
-            return await chat_widget(request, customer_id=customer_id)
+            return await chat_widget(request, identity=identity)
         return RedirectResponse(url="/chat", status_code=303)
 
-    cap = await check_caps(customer_id)
+    cap = await check_caps(cap_key)
     if not cap.allowed:
         params: dict[str, str] = {"cap_tripped": cap.reason or "cap_check_failed"}
         if cap.retry_at is not None:
             params["retry_at"] = cap.retry_at.isoformat()
         log.info(
             "chat.cap_tripped",
-            customer_id=customer_id,
+            cap_key=cap_key,
             reason=cap.reason,
         )
         if _is_htmx(request):
             return await chat_widget(
                 request,
-                customer_id=customer_id,
+                identity=identity,
                 cap_tripped=cap.reason or "cap_check_failed",
                 retry_at=cap.retry_at.isoformat() if cap.retry_at else None,
             )
@@ -255,18 +299,15 @@ async def chat_message(
         )
 
     conv_store = request.app.state.chat_conversation_store
-    conv = await conv_store.get_or_create(customer_id)
+    conv = await conv_store.get_or_create(cap_key)
     conv.append("user", text)
 
     turn_store = request.app.state.chat_turn_store
-    turn = await turn_store.create(customer_id=customer_id, question=text)
+    turn = await turn_store.create(customer_id=cap_key, question=text)
 
     if _is_htmx(request):
-        # Widget refresh: render the partial with the new
-        # session_id so the SSE-bound elements are present in the
-        # swap response.
         return await chat_widget(
-            request, session=turn.session_id, customer_id=customer_id
+            request, session=turn.session_id, identity=identity
         )
     return RedirectResponse(
         url=f"/chat?session={turn.session_id}", status_code=303
@@ -276,13 +317,14 @@ async def chat_message(
 @router.post("/chat/reset")
 async def chat_reset(
     request: Request,
-    customer_id: str = Depends(requires_linked_customer),
+    identity: IdentityView = Depends(requires_verified_email),
 ):
     """Clear the running conversation. The next message starts a
     fresh history — no prior context."""
-    await request.app.state.chat_conversation_store.reset(customer_id)
+    cap_key = _cap_key(identity)
+    await request.app.state.chat_conversation_store.reset(cap_key)
     if _is_htmx(request):
-        return await chat_widget(request, customer_id=customer_id)
+        return await chat_widget(request, identity=identity)
     return RedirectResponse(url="/chat", status_code=303)
 
 
@@ -290,33 +332,35 @@ async def chat_reset(
 async def chat_events(
     request: Request,
     session_id: str,
-    customer_id: str = Depends(requires_linked_customer),
+    identity: IdentityView = Depends(requires_verified_email),
 ) -> StreamingResponse:
     """SSE stream for one in-flight chat turn.
 
-    The customer's running conversation is loaded so prior
-    user/assistant turns appear as inline context in the system
-    prompt — the LLM answers the *next* user message in continuity.
-    On FinalMessage, the assistant's full reply is appended to the
-    conversation so subsequent turns see it.
+    Loads prior turns of the running conversation so the system
+    prompt carries context — the LLM answers the next user message
+    in continuity. On FinalMessage, the assistant's reply lands
+    in the conversation so subsequent turns see it.
     """
+    cap_key = _cap_key(identity)
+    chat_actor = _chat_actor(identity)
+
     turn_store = request.app.state.chat_turn_store
     turn = await turn_store.get(session_id)
     if turn is None:
         raise HTTPException(status_code=404, detail="chat turn not found")
-    if turn.customer_id != customer_id:
+    if turn.customer_id != cap_key:
         log.warning(
             "chat.cross_customer_session_attempt",
-            actor=customer_id,
+            actor=cap_key,
             session_id=session_id,
             owner=turn.customer_id,
         )
         raise HTTPException(status_code=403, detail="not your chat session")
 
     conv_store = request.app.state.chat_conversation_store
-    conv = await conv_store.get_or_create(customer_id)
+    conv = await conv_store.get_or_create(cap_key)
 
-    ctx = await _load_customer_context(customer_id)
+    ctx = await _load_customer_context(chat_actor)
     primary_sub = ctx["primary_sub"]
 
     # Prior messages = everything in the conversation EXCEPT the
@@ -329,12 +373,14 @@ async def chat_events(
     ]
 
     system_prompt = build_customer_chat_prompt(
-        customer_name=ctx["customer_name"],
-        customer_email=ctx["customer_email"],
-        account_state=ctx["customer_dict"].get("status", "active"),
+        customer_name=ctx["customer_name"] or "there",
+        customer_email=ctx["customer_email"] or identity.email or "",
+        account_state=(ctx["customer_dict"].get("status", "active")
+                       if ctx["is_linked"] else "browsing"),
         current_plan=ctx["plan_id"],
         balance_summary=build_balance_summary(primary_sub),
         prior_messages=prior_pairs,
+        is_linked=ctx["is_linked"],
     )
 
     # Transcript for case.open_for_me — full running text, including
@@ -353,7 +399,10 @@ async def chat_events(
                 turn.question,
                 allow_destructive=True,
                 channel="portal-chat",
-                actor=customer_id,
+                # auth_context.actor = customer_id when linked, None
+                # for anonymous identities. The .mine wrappers refuse
+                # cleanly when None; catalog reads still work.
+                actor=chat_actor or "",
                 service_identity="portal_self_serve",
                 tool_filter="customer_self_serve",
                 system_prompt=system_prompt,
@@ -363,7 +412,7 @@ async def chat_events(
                 if isinstance(event, AgentEventTurnUsage):
                     try:
                         await record_chat_turn(
-                            customer_id=customer_id,
+                            customer_id=cap_key,
                             prompt_tok=event.prompt_tok,
                             completion_tok=event.completion_tok,
                             model=event.model or None,
@@ -371,7 +420,7 @@ async def chat_events(
                     except Exception as exc:  # noqa: BLE001
                         log.warning(
                             "chat.cost_record_failed",
-                            customer_id=customer_id,
+                            cap_key=cap_key,
                             error=str(exc),
                         )
                     continue

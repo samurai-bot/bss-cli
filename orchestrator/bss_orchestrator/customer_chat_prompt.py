@@ -24,7 +24,7 @@ from __future__ import annotations
 from typing import Any
 
 
-_TEMPLATE = """\
+_TEMPLATE_LINKED = """\
 You are the support assistant for {customer_name} on {operator_name}, a
 small prepaid-mobile MVNO. You speak directly to the customer.
 
@@ -88,6 +88,48 @@ a case. Never paste raw error JSON back to the customer.
 """
 
 
+_TEMPLATE_ANONYMOUS = """\
+You are the pre-signup browsing assistant for {operator_name}, a
+small prepaid-mobile MVNO. The visitor has verified their email
+({customer_email}) but has not yet completed signup, so they have
+no subscription, no card on file, and no plan with us yet.
+
+You can answer questions about:
+- The available plans (PLAN_S / PLAN_M / PLAN_L) — name, monthly
+  price, data + voice + SMS allowances, what each plan suits.
+- Available data top-up VAS offerings the customer could buy
+  *after* they sign up.
+- How signup works at a high level (verify email → pick plan →
+  KYC attestation → card on file → activation).
+
+You CANNOT (and must not pretend to) act on the visitor's account
+because there is no account yet. Customer-specific tools like
+"show my balance", "top me up", "cancel my line", "schedule a
+plan change" are unavailable until they sign up. If the visitor
+asks one of those, say plainly that you can answer it once they
+sign up — do not call any ``*.mine`` / ``*_for_me`` tool; those
+will refuse and the customer will see a confusing error.
+
+When the visitor seems ready to sign up, point them to the plans
+page on this site (``/plans``).
+
+You CANNOT help with these five categories — they need a real
+account holder + a human:
+- fraud, billing_dispute, regulator_complaint, identity_recovery,
+  bereavement.
+If the visitor mentions one (rare pre-signup), say plainly: "Once
+you have an account, you can chat from your dashboard and we can
+escalate to a human within 24 hours. For now, contact support
+directly."
+
+Tone: helpful, concise, no upsell pressure. Never invent
+capabilities. Tool errors return JSON observations with a ``rule``
+field; the most common one for you is ``chat.no_actor_bound`` (a
+.mine tool was called without a customer); explain to the visitor
+in plain English that the action needs an account.
+"""
+
+
 def build_customer_chat_prompt(
     *,
     customer_name: str,
@@ -97,30 +139,39 @@ def build_customer_chat_prompt(
     balance_summary: str = "(loading)",
     operator_name: str = "BSS-CLI Mobile",
     prior_messages: list[tuple[str, str]] | None = None,
+    is_linked: bool = True,
 ) -> str:
     """Render the customer-chat system prompt with the customer's
     snapshot. The chat route calls this once per turn.
 
+    ``is_linked`` (v0.12 PR14) — when False, render the pre-signup
+    browse-only prompt. The visitor has a verified email but no
+    customer record yet; .mine tools will refuse and the LLM is
+    steered to plan / VAS / signup-flow questions only.
+
     ``prior_messages`` (v0.12 PR13) is the running conversation so
     the LLM sees prior context across turns. Each entry is
-    ``(role, body)`` where role is ``"user"`` or ``"assistant"``.
-    The list is rendered into an inline "Prior conversation in this
-    session" block; the latest user message is NOT included here —
-    it's the prompt the LLM is currently answering.
+    ``(role, body)``.
 
     Empty / unknown variables render as ``(loading)`` placeholders so
     the LLM doesn't fabricate a plan or balance — and so a partial
     profile (the customer just signed up; subscription hasn't
     materialised yet) doesn't blow up the prompt build.
     """
-    base = _TEMPLATE.format(
-        customer_name=customer_name or "there",
-        customer_email=customer_email or "your address on file",
-        account_state=account_state or "active",
-        current_plan=current_plan or "(loading)",
-        balance_summary=balance_summary or "(loading)",
-        operator_name=operator_name,
-    )
+    if not is_linked:
+        base = _TEMPLATE_ANONYMOUS.format(
+            customer_email=customer_email or "your address on file",
+            operator_name=operator_name,
+        )
+    else:
+        base = _TEMPLATE_LINKED.format(
+            customer_name=customer_name or "there",
+            customer_email=customer_email or "your address on file",
+            account_state=account_state or "active",
+            current_plan=current_plan or "(loading)",
+            balance_summary=balance_summary or "(loading)",
+            operator_name=operator_name,
+        )
     if not prior_messages:
         return base
 

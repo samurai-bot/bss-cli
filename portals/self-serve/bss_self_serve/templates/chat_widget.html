@@ -70,16 +70,17 @@ element only — the ``chat-thread-host`` div MUST wrap the
         </p>
       {% endif %}
 
-      {# When a turn is in flight, render the streaming targets
-         INSIDE the SSE-connected host so the htmx-sse extension
-         can swap status + message frames into them. #}
+      {# When a turn is in flight, the streaming targets are
+         direct descendants of the SSE-connected host so htmx-sse
+         can swap status + message frames into them. No bubble
+         shell — the assistant's reply lands as a plain
+         .chat-bubble.chat-bubble-assistant inside .chat-log,
+         which is the same bubble shape as previous turns. #}
       {% if session_id %}
-        <div class="chat-bubble chat-bubble-assistant chat-bubble-streaming">
-          <div class="chat-status-row">
-            <span class="chat-status" sse-swap="status">
-              <span class="dot live"></span> live
-            </span>
-          </div>
+        <div class="chat-streaming">
+          <span class="chat-status chat-streaming-status" sse-swap="status">
+            <span class="dot live"></span> live
+          </span>
           <div
             class="chat-log"
             id="chat-log"
