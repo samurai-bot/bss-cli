@@ -2,7 +2,7 @@
 
 ## Topology
 
-Three callers — **CLI** (terminal-native), **self-serve portal** (public signup, port 9001), and **CSR console** (operator workbench, port 9002) — converge on the LangGraph orchestrator's tool registry. Inside, two planes connect the 9 services: **synchronous HTTP (TMF APIs)** for calls that need an immediate answer, and **asynchronous events (RabbitMQ topic exchange)** for reactions. Postgres is accessed directly by each service's own writes — the message broker is not a database pipe.
+Three callers — **CLI** (terminal-native), **self-serve portal** (public signup, port 9001), and **CSR console** (operator workbench, port 9002) — reach the 9 services through one of two paths: **direct via `bss-clients`** for deterministic routine flows (every CLI/REPL call, every read, every post-login self-serve write, every signup step from v0.11), or **orchestrator-mediated via `astream_once`** for flows that need LLM judgment (the CSR `ask` agent surface, the chat route on the self-serve portal). Inside, two planes connect the 9 services: **synchronous HTTP (TMF APIs)** for calls that need an immediate answer, and **asynchronous events (RabbitMQ topic exchange)** for reactions. Postgres is accessed directly by each service's own writes — the message broker is not a database pipe.
 
 ```
    ┌──────────────────┐  ┌──────────────────┐  ┌─────────────────────────┐
@@ -10,12 +10,22 @@ Three callers — **CLI** (terminal-native), **self-serve portal** (public signu
    │  port 9001 (v0.4)│  │  port 9002 (v0.5)│  │  + LangGraph Orchestrator│
    └────────┬─────────┘  └─────────┬────────┘  └────────────┬────────────┘
             │                      │                        │
-            │  agent_bridge.*      │  agent_bridge.*        │
-            ▼                      ▼                        ▼
-   ┌──────────────────────────────────────────────────────────────────┐
-   │   bss_orchestrator.session.astream_once(channel, actor=…)        │
-   │   ReAct agent over the tool registry · pin allow_destructive=False│
-   └──────────────────────────────────┬───────────────────────────────┘
+   ┌────────┴───────┐    ┌─────────┴────────┐               │
+   │ direct         │    │ ask agent surface│               │
+   │  bss-clients   │    │  agent_bridge.*  │               │
+   │ (signup, post- │    │  → astream_once  │               │
+   │  login, reads) │    └─────────┬────────┘               │
+   │ chat → astream │              │                        │
+   │  (when it lands)              │                        │
+   └────────┬───────┘              │                        │
+            │                      ▼                        ▼
+            │      ┌──────────────────────────────────────────────────┐
+            │      │  bss_orchestrator.session.astream_once(channel,  │
+            │      │    actor=…) · ReAct over tool registry · pin     │
+            │      │    allow_destructive=False                       │
+            │      └──────────────────────────┬───────────────────────┘
+            │                                 │
+            └────────────────────►────────────┴───────────────────────►
                                       │ HTTP (TMF APIs) + bss-clients
         ┌──────┬────────┬─────────────┼────────┬────────┐
         ▼      ▼        ▼             ▼        ▼
@@ -134,39 +144,50 @@ A portal is a **channel** onto the BSS — a thin HTTP surface that translates a
 
 | # | Portal | Port | Audience | Writes go through… | Inbound auth |
 |---|---|---|---|---|---|
-| 1 | self-serve | 9001 | Prospect browsing / signing up + post-login customer self-serve | **Signup funnel + chat** → `agent_bridge.*` → `astream_once(channel="portal-self-serve")`. **Post-login self-serve (v0.10+)** → direct `bss-clients` writes from route handlers, gated by step-up + ownership. | **email + magic link / OTP (v0.8)** — see "Portal authentication" below |
+| 1 | self-serve | 9001 | Prospect browsing / signing up + post-login customer self-serve | **(v0.11+)** All routine flows — signup funnel + post-login self-serve — write *directly* via `bss-clients`. The chat surface (when it lands) remains orchestrator-mediated via `astream_once(channel="portal-self-serve")`; v0.12 narrows that scope further. | **email + magic link / OTP (v0.8)** — see "Portal authentication" below |
 | 2 | csr | 9002 | CSR operators | `agent_bridge.ask_about_customer` → `astream_once(channel="portal-csr", actor=<op>)` | stub login (cookie); Phase 12 swaps for real OAuth |
 
-The portal-write story split in v0.10:
+The portal-write story split (consolidated through v0.11):
 
-* **Signup funnel + chat** continue to route through the LLM orchestrator. The route handler builds a natural-language instruction, passes it to `astream_once`, and streams events to the browser via SSE. This is what v0.4 shipped.
-* **(v0.10+) Post-login customer self-serve** routes write *directly* via `bss-clients` from the route handler. The customer principal is bound from `request.state.customer_id` (verified session); per-resource ownership policies and step-up auth gate sensitive writes; one route = one BSS write. Eight pages today: `/`, `/top-up`, `/payment-methods*`, `/esim/<id>`, `/subscription/<id>/cancel`, `/profile/contact*`, `/billing/history`, `/plan/change*`. See `CLAUDE.md` (v0.10+) anti-pattern + DECISIONS 2026-04-27 for the doctrine carve-out rationale.
+* **(v0.4–v0.10)** *Historical:* signup + chat routed through the LLM orchestrator; v0.4 shipped the agent-log SSE widget as the demo artifact for "the agent pattern works on a customer-facing flow."
+* **(v0.10+)** Post-login customer self-serve routes write *directly* via `bss-clients` from the route handler. The customer principal is bound from `request.state.customer_id` (verified session); per-resource ownership policies and step-up auth gate sensitive writes; one route = one BSS write.
+* **(v0.11+)** The signup funnel joins the direct-write side. Signup is a deterministic routine flow (pick plan → MSISDN → KYC attest → COF → place order → poll for activation); each step has one correct next step and benefits nothing from LLM reasoning. Wall time per signup drops from ~85s (orchestrator-mediated) to under 10s (direct). The chat surface is now the *only* orchestrator-mediated route in the self-serve portal.
 
 ```
-┌─ portal-self-serve (9001) ────────────────────────────────┐
-│                                                            │
-│  signup funnel (/signup/*)  ──────► agent_bridge ──────►   │ ← orchestrator (v0.4-v0.10)
-│  chat (/chat)               ──────► astream_once ──────►   │   v0.11 signup migrates direct
-│                                                            │   v0.12 narrows the chat scope
-│  POST-LOGIN DIRECT (v0.10+)                                │
-│    /                       ─────► subscription.list_for_  │
-│    /top-up                 ─────► subscription.purchase_  │
-│    /payment-methods/*      ─────► payment.{create,remove, │ ─► direct via bss-clients
-│                                    set_default}_method    │   (NamedTokenAuthProvider —
-│    /esim/<id>              ─────► subscription.get +      │    "portal_self_serve")
-│                                    inventory.get_activ.   │
-│    /subscription/<id>/cancel ───► subscription.terminate  │
-│    /profile/contact/*      ─────► customer.update_contact_│
-│                                    medium + cross-schema  │
-│                                    email-change           │
-│    /billing/history        ─────► payment.list_payments + │
-│                                    count_payments         │
-│    /plan/change*           ─────► subscription.schedule_  │
-│                                    plan_change + cancel   │
-└────────────────────────────────────────────────────────────┘
+┌─ portal-self-serve (9001) ──────────────────────────────────┐
+│                                                              │
+│  chat (/chat) ─ when it lands ──────► astream_once ─────────►│ ← orchestrator (chat ONLY)
+│                                                              │   (v0.12 narrows further)
+│                                                              │
+│  DIRECT (v0.10+ post-login, v0.11+ signup)                   │
+│    /signup/{plan}/msisdn   ─────► inventory.list_msisdns    │
+│    POST /signup            ─────► customer.create +         │
+│                                    customer.attest_kyc +    │
+│                                    payment.add_card +       │
+│                                    com.create_order         │
+│                                    (chained step routes —   │
+│                                    one BSS write per route) │
+│    /activation/{order_id}  ─────► com.get_order (poll)      │
+│    /confirmation/{sub_id}  ─────► subscription.get +        │
+│                                    inventory.get_activation │
+│    /                       ─────► subscription.list_for_   │ ─► direct via bss-clients
+│    /top-up                 ─────► subscription.purchase_   │   (NamedTokenAuthProvider —
+│    /payment-methods/*      ─────► payment.{create,remove,  │    "portal_self_serve")
+│                                    set_default}_method     │
+│    /esim/<id>              ─────► subscription.get +       │
+│                                    inventory.get_activ.    │
+│    /subscription/<id>/cancel ───► subscription.terminate   │
+│    /profile/contact/*      ─────► customer.update_contact_ │
+│                                    medium + cross-schema   │
+│                                    email-change            │
+│    /billing/history        ─────► payment.list_payments +  │
+│                                    count_payments          │
+│    /plan/change*           ─────► subscription.schedule_   │
+│                                    plan_change + cancel    │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-Reads have always gone direct (the doctrine never required mediating a pass-through GET). The v0.10 carve-out extends that posture to writes that are deterministic + customer-scoped + frequent — precisely the routine flows where an LLM round-trip is latency tax with no judgment-quality benefit.
+Reads have always gone direct (the doctrine never required mediating a pass-through GET). The v0.10 / v0.11 carve-outs extend that posture to *deterministic* writes — routine flows where an LLM round-trip is latency tax with no judgment-quality benefit. Routes that genuinely need LLM judgment (the chat surface) remain orchestrator-mediated; the V0_11 doctrine commitment is that the LLM is in the path **only** where it adds value.
 
 - **Reads go direct.** Listing offerings, fetching a customer 360, polling order state — all direct `bss-clients` calls. LLM-mediating a pass-through read is pointless latency.
 - **`X-BSS-Channel` attribution.** Every outbound call carries the portal's channel name (`portal-self-serve` or `portal-csr`) so CRM's interaction auto-log attributes the write to the right surface. The hero scenarios assert this.
@@ -251,13 +272,13 @@ v0.8 puts a login wall in front of the self-serve portal. CSR console retains it
 - **Public route allowlist:** `/welcome`, `/plans`, `/auth/*`, `/static/*`, `/portal-ui/static/*`. Adding a public route requires both an entry in `bss_self_serve.security.PUBLIC_*` and a test.
 - **Step-up auth:** `requires_step_up(action_label)` dep consumes a one-shot grant carried via `X-BSS-StepUp-Token` header / `step_up_token` form field / `bss_portal_step_up` cookie (60s TTL, set by `POST /auth/step-up`). Tokens are scoped to a single `action_label` — a grant minted for `subscription.terminate` cannot satisfy a `payment.remove_method` route.
 - **Email delivery:** pluggable. v0.8 ships `LoggingEmailAdapter` (writes plaintext OTPs + magic links to `BSS_PORTAL_DEV_MAILBOX_PATH` for dev / staging; the file is the only place the plaintext lives outside the customer's inbox) and `NoopEmailAdapter` (tests). `SmtpEmailAdapter` is reserved for v1.0 and raises at construction.
-- **Account-first signup funnel:** the entry points (`/signup/{plan}`, `/signup/{plan}/msisdn`, `POST /signup`, `/signup/{plan}/progress`) are gated on `Depends(requires_verified_email)`. The agent stream calls `link_to_customer` the moment `customer.create` returns a CUST-* id, atomically binding the verified identity to the customer record. A returning visitor under the same email reuses the same `(identity, customer)` pair.
-- **Login-gated `/`:** the v0.4 anonymous landing moved to `/plans`. `/` is now the dashboard — empty for verified-but-unlinked identities, placeholder for linked (v0.10 will fill in the actual lines / balances UI).
-- **Topology placement:** for the self-serve portal,
+- **Account-first signup funnel:** the entry points (`/signup/{plan}`, `/signup/{plan}/msisdn`, `POST /signup`, `/signup/{plan}/progress`) are gated on `Depends(requires_verified_email)`. **(v0.11+)** The signup chain writes directly via `bss-clients` from route handlers — `customer.create` runs in the POST handler, then `customer.attest_kyc` + `payment.add_card` + `com.create_order` in their own routes — and the route handler calls `link_to_customer` the moment `customer.create` returns a CUST-* id, atomically binding the verified identity to the customer record. A returning visitor under the same email reuses the same `(identity, customer)` pair.
+- **Login-gated `/`:** the v0.4 anonymous landing moved to `/plans`. `/` is now the dashboard — empty for verified-but-unlinked identities, lines + balances + state-aware CTAs for linked (v0.10).
+- **Topology placement:** for the self-serve portal (v0.11+ — direct-write signup + post-login self-serve),
   ```
-  request -> RequestIdMiddleware -> PortalSessionMiddleware -> route -> agent_bridge -> astream_once -> bss-clients (token auth) -> services
+  request -> RequestIdMiddleware -> PortalSessionMiddleware -> route -> bss-clients (NamedTokenAuthProvider) -> services
   ```
-  CSR portal: same shape minus `PortalSessionMiddleware` (its session story is the v0.5 stub-cookie path). When Phase 12 lands per-principal OAuth/JWT, both portals' inbound middleware is replaced; everything below the gate stays untouched.
+  Chat (when it lands) is the one self-serve route that goes `route -> agent_bridge -> astream_once -> bss-clients`. CSR portal: same shape as direct-write, minus `PortalSessionMiddleware` (its session story is the v0.5 stub-cookie path); the `ask` flow goes through `agent_bridge` like chat. When Phase 12 lands per-principal OAuth/JWT, both portals' inbound middleware is replaced; everything below the gate stays untouched.
 - **Runbook:** `docs/runbooks/portal-auth.md` (token pepper generation + rotation, dev mailbox tail, brute-force investigation, unverified-identity cleanup).
 
 The **Inventory sub-domain** (MSISDN pool + eSIM profile pool) lives inside the CRM service on port 8002, mounted under `/inventory-api/v1/...`. It has its own schema (`inventory`), repositories, policies, and HTTP endpoints — just no separate container. SOM and Subscription call it via `bss-clients` as if it were a distinct service. If it outgrows CRM, extraction to an 11th container is mechanical because the boundary is already enforced.
