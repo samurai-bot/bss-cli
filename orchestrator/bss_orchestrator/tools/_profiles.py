@@ -90,10 +90,14 @@ def validate_profiles() -> None:
     1. Every name listed in any profile is registered in TOOL_REGISTRY.
     2. Every ``*.mine`` / ``*_for_me`` tool's signature does not accept
        a forbidden owner-bound parameter.
+    3. Every tool in the ``customer_self_serve`` profile has an entry
+       in ``OWNERSHIP_PATHS`` (use ``[]`` for tools whose response
+       carries no customer-bound fields by contract).
 
     Raises:
-        RuntimeError: profile drift (missing tool) or signature
-            violation (forbidden parameter).
+        RuntimeError: profile drift (missing tool), signature
+            violation (forbidden parameter), or OWNERSHIP_PATHS
+            coverage gap.
     """
     for profile_name, tool_names in TOOL_PROFILES.items():
         for name in sorted(tool_names):
@@ -122,3 +126,10 @@ def validate_profiles() -> None:
                 f"from auth_context.current().actor — never from a "
                 f"caller-supplied parameter."
             )
+
+    # v0.12 PR4 — every customer_self_serve tool has an OWNERSHIP_PATHS
+    # entry. Imported lazily so this module stays decoupled from
+    # ownership.py (which imports nothing from here).
+    from ..ownership import validate_ownership_paths_cover_profile
+
+    validate_ownership_paths_cover_profile(TOOL_PROFILES["customer_self_serve"])

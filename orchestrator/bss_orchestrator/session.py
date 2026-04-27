@@ -30,8 +30,14 @@ from bss_telemetry import semconv, tracer
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
 from . import auth_context
+from .clients import get_clients
 from .context import use_channel_context, use_llm_context
 from .graph import build_graph
+from .ownership import (
+    AgentOwnershipViolation,
+    assert_owned_output,
+    record_violation,
+)
 
 
 def _resolve_token_for_service_identity(identity: str) -> str:
@@ -410,13 +416,52 @@ async def astream_once(
                                 full = (
                                     str(msg.content) if msg.content is not None else ""
                                 )
+                                is_error = (
+                                    getattr(msg, "status", None) == "error"
+                                )
                                 yield AgentEventToolCallCompleted(
                                     name=msg.name or "",
                                     call_id=msg.tool_call_id or "",
                                     result=_truncate(full),
                                     result_full=full,
-                                    is_error=getattr(msg, "status", None) == "error",
+                                    is_error=is_error,
                                 )
+                                # v0.12 PR4 — output ownership trip-wire.
+                                # Skips error-status results (they cannot
+                                # carry customer-bound rows by definition)
+                                # and runs only when an actor is bound
+                                # (the chat surface) so non-chat callers
+                                # (CLI / scenario / CSR) keep their
+                                # full-surface behaviour.
+                                if actor and not is_error and msg.name:
+                                    try:
+                                        assert_owned_output(
+                                            tool_name=msg.name,
+                                            result_json=full,
+                                            actor=actor,
+                                        )
+                                    except AgentOwnershipViolation as v:
+                                        # Best-effort audit trail
+                                        # (record_violation has its own
+                                        # try/except — never raises).
+                                        # Then surface to the route
+                                        # handler which renders the
+                                        # generic user-facing message.
+                                        await record_violation(
+                                            crm_client=get_clients().crm,
+                                            actor=actor,
+                                            tool_name=v.tool_name,
+                                            path=v.path,
+                                            found=v.found,
+                                            transcript_so_far=prompt,
+                                        )
+                                        yield AgentEventError(
+                                            message=(
+                                                f"AgentOwnershipViolation: "
+                                                f"{v.tool_name}"
+                                            )
+                                        )
+                                        return
             except Exception as exc:  # noqa: BLE001
                 yield AgentEventError(message=f"{type(exc).__name__}: {exc}")
                 return
