@@ -27,7 +27,7 @@ from langgraph.prebuilt import create_react_agent
 from .llm import build_chat_model
 from .prompts import SYSTEM_PROMPT
 from .safety import wrap_destructive
-from .tools import TOOL_REGISTRY
+from .tools import TOOL_PROFILES, TOOL_REGISTRY
 
 # Tools present in TOOL_REGISTRY (so scenarios can use them via ``action:``)
 # but intentionally NOT exposed to the LLM. The LLM gets a model-visible
@@ -100,17 +100,46 @@ def _as_structured_tool(name: str, fn: Any, *, allow_destructive: bool) -> Struc
     )
 
 
-def build_tools(*, allow_destructive: bool = False) -> list[StructuredTool]:
-    """Return every LLM-visible tool, safety-wrapped, as a StructuredTool list."""
+def build_tools(
+    *,
+    allow_destructive: bool = False,
+    tool_filter: str | None = None,
+) -> list[StructuredTool]:
+    """Return the LLM-visible tool list, safety-wrapped.
+
+    Args:
+        allow_destructive: see ``build_graph``.
+        tool_filter: profile name from ``TOOL_PROFILES`` (e.g.
+            ``"customer_self_serve"``). When set, the returned list is
+            the intersection of that profile and the registered tools;
+            ``_LLM_HIDDEN_TOOLS`` still applies. When ``None``, every
+            registered, non-hidden tool is returned (CLI / scenario /
+            CSR behaviour).
+
+    Raises:
+        KeyError: ``tool_filter`` names a profile that does not exist.
+    """
+    allowed: set[str] | None
+    if tool_filter is None:
+        allowed = None
+    else:
+        allowed = TOOL_PROFILES[tool_filter]
     return [
         _as_structured_tool(name, fn, allow_destructive=allow_destructive)
         for name, fn in sorted(TOOL_REGISTRY.items())
         if name not in _LLM_HIDDEN_TOOLS
+        and (allowed is None or name in allowed)
     ]
 
 
-def build_graph(*, allow_destructive: bool = False, temperature: float = 0.0) -> Any:
-    """Compile a ReAct agent over the full BSS tool surface.
+def build_graph(
+    *,
+    allow_destructive: bool = False,
+    temperature: float = 0.0,
+    tool_filter: str | None = None,
+    system_prompt: str | None = None,
+) -> Any:
+    """Compile a ReAct agent over the BSS tool surface.
 
     Args:
         allow_destructive: If ``False`` (default) every destructive tool call
@@ -119,11 +148,21 @@ def build_graph(*, allow_destructive: bool = False, temperature: float = 0.0) ->
             user. Set to ``True`` only when the human has passed
             ``--allow-destructive``.
         temperature: LLM sampling temperature. Default ``0.0``.
+        tool_filter: optional ``TOOL_PROFILES`` key — narrows the
+            LLM-visible tool list to one curated profile (v0.12 chat
+            scoping). ``None`` keeps the full surface.
+        system_prompt: optional override for the agent's system
+            message. Defaults to the canonical ``SYSTEM_PROMPT``;
+            v0.12 chat passes the customer-chat prompt instead.
 
     Returns:
         A compiled LangGraph runnable. Invoke with
         ``{"messages": [("user", text)]}`` → receive updated messages.
     """
     llm = build_chat_model(temperature=temperature)
-    tools = build_tools(allow_destructive=allow_destructive)
-    return create_react_agent(model=llm, tools=tools, prompt=SYSTEM_PROMPT)
+    tools = build_tools(allow_destructive=allow_destructive, tool_filter=tool_filter)
+    return create_react_agent(
+        model=llm,
+        tools=tools,
+        prompt=system_prompt or SYSTEM_PROMPT,
+    )

@@ -29,6 +29,7 @@ from bss_clients import reset_service_identity_token, set_service_identity_token
 from bss_telemetry import semconv, tracer
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
+from . import auth_context
 from .context import use_channel_context, use_llm_context
 from .graph import build_graph
 
@@ -276,6 +277,8 @@ async def astream_once(
     channel: str = "llm",
     actor: str | None = None,
     service_identity: str | None = None,
+    tool_filter: str | None = None,
+    system_prompt: str | None = None,
 ) -> AsyncIterator[AgentEvent]:
     """Streaming variant of ``ask_once``. Yields ``AgentEvent`` as the graph runs.
 
@@ -290,6 +293,18 @@ async def astream_once(
     rather than to ``llm-<model-slug>``. Per-model attribution still
     lives in ``audit.domain_event.actor``. Defaults to ``settings.llm_actor``
     when ``channel != "llm"`` and no actor is given (preserves v0.4 behaviour).
+
+    The ``tool_filter`` parameter (v0.12+) names a profile in
+    ``TOOL_PROFILES`` (e.g. ``"customer_self_serve"``). When set, the
+    LangGraph agent is constructed with the profile's tool subset
+    instead of the full registry — the chat surface narrows the
+    LLM-visible tools so an injected prompt cannot reach a tool the
+    customer's own UI doesn't expose. ``None`` (default) keeps full
+    access (CLI / scenario / CSR behaviour).
+
+    The ``system_prompt`` parameter (v0.12+) overrides the canonical
+    ``SYSTEM_PROMPT`` for this stream. v0.12 customer chat passes the
+    customer-chat prompt with five-category escalation guidance.
 
     The ``service_identity`` parameter (v0.9+) overrides the X-BSS-API-Token
     on outbound bss-clients calls so audit rows attribute writes to the
@@ -341,10 +356,23 @@ async def astream_once(
             override_token = _resolve_token_for_service_identity(service_identity)
             identity_reset_token = set_service_identity_token(override_token)
 
+        # v0.12 — bind the orchestrator-side auth_context for the
+        # duration of this stream so the customer profile's *.mine
+        # wrappers can read auth_context.current().actor. Reset in
+        # finally so a stream that raises still leaves a clean
+        # Context for whatever runs next.
+        auth_reset_token = None
+        if actor:
+            auth_reset_token = auth_context.set_actor(actor)
+
         try:
             yield AgentEventPromptReceived(prompt=prompt)
 
-            graph = build_graph(allow_destructive=allow_destructive)
+            graph = build_graph(
+                allow_destructive=allow_destructive,
+                tool_filter=tool_filter,
+                system_prompt=system_prompt,
+            )
             seen_call_ids: set[str] = set()
             last_ai_text = ""
 
@@ -397,6 +425,8 @@ async def astream_once(
         finally:
             if identity_reset_token is not None:
                 reset_service_identity_token(identity_reset_token)
+            if auth_reset_token is not None:
+                auth_context.reset_actor(auth_reset_token)
 
 
 def _ai_text(msg: AIMessage) -> str:

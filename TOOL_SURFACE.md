@@ -194,6 +194,32 @@ Reserved namespace for the RAG-over-runbooks surface. Not in `TOOL_REGISTRY`.
 | `knowledge.search` | read | `(planned, Phase 11)` RAG over `docs/runbooks/` indexed into pgvector |
 | `knowledge.get_document` | read | `(planned, Phase 11)` Full runbook by slug |
 
+## Customer-scoped wrappers — `(v0.12 chat profile)`
+
+Curated subset of the registry exposed to the chat surface only. Each
+wrapper binds ``customer_id`` from ``auth_context.current().actor`` —
+**none accept a customer-bound parameter**. Greppable + startup
+self-check (`_profiles.validate_profiles`). The chat route invokes
+``astream_once(tool_filter="customer_self_serve", ...)`` so the LLM
+sees only the entries below plus the public catalog reads
+``catalog.list_vas``, ``catalog.list_active_offerings``,
+``catalog.get_offering``.
+
+PR3 will add the four write wrappers (`vas.purchase_for_me`,
+`subscription.{schedule_plan_change,cancel_pending_plan_change,terminate}_mine`)
+and PR6 adds `case.open_for_me`.
+
+| Tool | Type | Description |
+|---|---|---|
+| `subscription.list_mine` | read | List the logged-in customer's subscriptions. |
+| `subscription.get_mine` | read | Read one of the actor's subscriptions. Cross-customer attempts → `policy.subscription.not_owned_by_actor`. |
+| `subscription.get_balance_mine` | read | Bundle balances for one of the actor's subscriptions. |
+| `subscription.get_lpa_mine` | read | LPA activation-code bundle for the actor's eSIM (redownload assistance). |
+| `usage.history_mine` | read | Usage history scoped to the actor's lines. Cross-customer subscription_id rejected. |
+| `customer.get_mine` | read | The actor's own customer record. |
+| `payment.method_list_mine` | read | The actor's cards on file. |
+| `payment.charge_history_mine` | read | The actor's payment-attempt history. |
+
 ## Admin tools — `(admin only, not in LLM registry)`
 
 Exposed via `bss admin <verb>` and the scenario runner setup; intentionally NOT registered in `TOOL_REGISTRY` so the LLM can't reach them.
