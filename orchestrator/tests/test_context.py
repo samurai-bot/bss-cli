@@ -49,5 +49,5 @@ def test_llm_actor_derived_from_model_slug() -> None:
     # Regardless of current env, the derivation must replace slashes with dashes.
     from bss_orchestrator.config import Settings
 
-    s = Settings(llm_model="xiaomi/mimo-v2-flash", llm_api_key="x")
-    assert s.llm_actor == "llm-xiaomi-mimo-v2-flash"
+    s = Settings(llm_model="google/gemma-4-26b-a4b-it", llm_api_key="x")
+    assert s.llm_actor == "llm-google-gemma-4-26b-a4b-it"
