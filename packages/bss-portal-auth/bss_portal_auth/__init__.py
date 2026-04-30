@@ -36,6 +36,11 @@ from .email_change import (
     start_email_change,
     verify_email_change,
 )
+from .pending_action import (
+    PendingActionView,
+    consume_pending_action,
+    stash_pending_action,
+)
 from .email import (
     EmailAdapter,
     LoggingEmailAdapter,
@@ -104,4 +109,8 @@ __all__ = [
     "EmailChangeStarted",
     "EmailChangeApplied",
     "EmailChangeFailed",
+    # v0.12 — POST-body stash for step-up replay
+    "stash_pending_action",
+    "consume_pending_action",
+    "PendingActionView",
 ]

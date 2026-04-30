@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     BSS_PORTAL_LOGIN_TOKEN_TTL_S: int = 15 * 60      # 15 min
     BSS_PORTAL_STEPUP_TOKEN_TTL_S: int = 5 * 60      # 5 min
     BSS_PORTAL_STEPUP_GRANT_TTL_S: int = 60          # 60 s — one-shot grant
+    BSS_PORTAL_STEPUP_PENDING_TTL_S: int = 10 * 60   # 10 min — POST-body stash for replay
     BSS_PORTAL_SESSION_TTL_S: int = 24 * 60 * 60     # 24 h sliding window
 
     # Rate limits. Format kept as scalar ints — phase doc presents them

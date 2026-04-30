@@ -11,8 +11,10 @@ completes its first KYC + ``customer.create`` (see
 """
 
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import BigInteger, Boolean, ForeignKey, Index, Text, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import Base, TZDateTime, TenantMixin
@@ -164,6 +166,47 @@ class EmailChangePending(Base, TenantMixin):
     )
     ip: Mapped[str | None] = mapped_column(Text)
     user_agent: Mapped[str | None] = mapped_column(Text)
+
+
+class StepUpPendingAction(Base, TenantMixin):
+    """v0.12 — pending POST body stashed on StepUpRequired.
+
+    When ``requires_step_up`` raises on a POST, the route handler hasn't
+    run yet — but the customer's typed input is in the form body. We
+    stash that body keyed by ``(session_id, action_label)`` so that
+    ``verify_step_up`` can render an auto-replay page (POST to the
+    original URL with the stashed fields) and the customer doesn't
+    re-type. One unconsumed row per (session, action_label); a fresh
+    StepUpRequired supersedes any prior unconsumed row.
+    """
+
+    __tablename__ = "step_up_pending_action"
+    __table_args__ = (
+        Index(
+            "uq_step_up_pending_action_active",
+            "session_id",
+            "action_label",
+            unique=True,
+            postgresql_where=text("consumed_at IS NULL"),
+        ),
+        Index(
+            "ix_step_up_pending_action_expires",
+            "expires_at",
+            postgresql_where=text("consumed_at IS NULL"),
+        ),
+        {"schema": SCHEMA},
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        Text, ForeignKey(f"{SCHEMA}.session.id"), nullable=False
+    )
+    action_label: Mapped[str] = mapped_column(Text, nullable=False)
+    target_url: Mapped[str] = mapped_column(Text, nullable=False)
+    payload_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(TZDateTime)
 
 
 class PortalAction(Base, TenantMixin):

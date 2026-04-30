@@ -30,6 +30,7 @@ from bss_portal_auth import (
     SessionView,
     StepUpFailed,
     StepUpToken,
+    consume_pending_action,
     revoke_session,
     start_email_login,
     start_step_up,
@@ -401,7 +402,30 @@ async def step_up_verify(
         )
 
     assert isinstance(result, StepUpToken)
-    response = RedirectResponse(url=next_path, status_code=303)
+
+    # If the original POST that triggered this step-up stashed its
+    # form body, replay it so the customer doesn't re-type. The
+    # browser carries the cookie we're about to set on the replay
+    # POST, so the second-pass requires_step_up consumes the grant.
+    pending = None
+    async with factory() as db:
+        pending = await consume_pending_action(
+            db, session_id=sess.id, action_label=action
+        )
+        await db.commit()
+
+    if pending is not None:
+        response = templates.TemplateResponse(
+            request,
+            "auth_step_up_replay.html",
+            {
+                "target_url": pending.target_url,
+                "payload": pending.payload,
+                "action_label": action,
+            },
+        )
+    else:
+        response = RedirectResponse(url=next_path, status_code=303)
     response.set_cookie(
         key="bss_portal_step_up",
         value=result.token,

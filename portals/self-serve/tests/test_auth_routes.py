@@ -355,6 +355,127 @@ async def test_step_up_verify_with_wrong_otp_re_renders_with_error(seed_db, db_u
         assert "Incorrect or expired" in resp.text
 
 
+# ── /auth/step-up replay — POST-body stash ──────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_step_up_verify_renders_replay_when_stash_present(
+    seed_db, db_url: str
+):
+    """If a POST stashed its body before the step-up bounce, /auth/step-up
+    verify renders the auto-replay template (with target_url +
+    hidden inputs) instead of a 303. The fresh grant cookie still
+    rides on the same response.
+    """
+    from bss_portal_auth import stash_pending_action
+
+    async with seed_db() as db:
+        sess, _ = await create_test_session(db, email="ada@x.sg")
+        await db.commit()
+        sess_id = sess.id
+
+    async with seed_db() as db:
+        await stash_pending_action(
+            db,
+            session_id=sess_id,
+            action_label="name_update",
+            target_url="/profile/contact/name/update",
+            payload={"given_name": "Augusta", "family_name": "Byron"},
+        )
+        await db.commit()
+
+    app = create_app(Settings())
+    with TestClient(app) as c:
+        c.cookies.set(PORTAL_SESSION_COOKIE, sess_id)
+        c.post(
+            "/auth/step-up/start",
+            data={"action": "name_update", "next": "/profile/contact"},
+        )
+        otp = last_step_up_code(c.app.state.email_adapter, "ada@x.sg", "name_update")
+
+        resp = c.post(
+            "/auth/step-up",
+            data={"code": otp, "action": "name_update", "next": "/profile/contact"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 200
+        body = resp.text
+        # Replay form posts to the original POST URL with the stashed
+        # values as hidden inputs.
+        assert 'action="/profile/contact/name/update"' in body
+        assert 'name="given_name"' in body and 'value="Augusta"' in body
+        assert 'name="family_name"' in body and 'value="Byron"' in body
+        # And the grant cookie is set on this same response so the
+        # replay submit carries it.
+        assert "bss_portal_step_up=" in resp.headers.get("set-cookie", "")
+
+
+@pytest.mark.asyncio
+async def test_step_up_verify_with_no_stash_redirects_303(seed_db, db_url: str):
+    """No stash row → existing behaviour (303 to ``next``)."""
+    async with seed_db() as db:
+        sess, _ = await create_test_session(db, email="ada@x.sg")
+        await db.commit()
+        sess_id = sess.id
+
+    app = create_app(Settings())
+    with TestClient(app) as c:
+        c.cookies.set(PORTAL_SESSION_COOKIE, sess_id)
+        c.post(
+            "/auth/step-up/start",
+            data={"action": "name_update", "next": "/profile/contact"},
+        )
+        otp = last_step_up_code(c.app.state.email_adapter, "ada@x.sg", "name_update")
+
+        resp = c.post(
+            "/auth/step-up",
+            data={"code": otp, "action": "name_update", "next": "/profile/contact"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/profile/contact"
+
+
+@pytest.mark.asyncio
+async def test_step_up_pending_action_is_one_shot(seed_db, db_url: str):
+    """Consuming a stashed pending action twice returns None on the
+    second call — the row is single-use, same as the grant token.
+    """
+    from bss_portal_auth import (
+        consume_pending_action,
+        stash_pending_action,
+    )
+
+    async with seed_db() as db:
+        sess, _ = await create_test_session(db, email="ada@x.sg")
+        await db.commit()
+        sess_id = sess.id
+
+    async with seed_db() as db:
+        await stash_pending_action(
+            db,
+            session_id=sess_id,
+            action_label="name_update",
+            target_url="/profile/contact/name/update",
+            payload={"given_name": "X", "family_name": "Y"},
+        )
+        await db.commit()
+
+    async with seed_db() as db:
+        first = await consume_pending_action(
+            db, session_id=sess_id, action_label="name_update"
+        )
+        await db.commit()
+    async with seed_db() as db:
+        second = await consume_pending_action(
+            db, session_id=sess_id, action_label="name_update"
+        )
+        await db.commit()
+    assert first is not None
+    assert first.payload == {"given_name": "X", "family_name": "Y"}
+    assert second is None
+
+
 # ── Cross-route audit + rate-limit observability ─────────────────────────
 
 
