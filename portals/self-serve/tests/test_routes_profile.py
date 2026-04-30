@@ -714,6 +714,113 @@ async def test_name_update_requires_step_up(seed_db, fake_clients):
 
 
 @pytest.mark.asyncio
+async def test_name_update_step_up_bounces_back_to_form_page(seed_db, fake_clients):
+    """Regression: a POST that needs step-up must bounce the customer back
+    to the form page (Referer), not to the POST URL itself. Step-up
+    completes with a 303, which forces GET — and the contact-medium
+    update routes are POST-only, so a GET bounce-back yielded 405.
+    """
+    sid, _, _ = await _setup(seed_db)
+    fake_clients.crm.individual_by_customer["CUST-T-A1B2C3"] = {
+        "given_name": "Ada", "family_name": "Lovelace",
+    }
+
+    with patch(
+        "bss_self_serve.routes.profile.get_clients", return_value=fake_clients
+    ):
+        app = create_app(Settings())
+        with TestClient(app) as c:
+            c.cookies.set(PORTAL_SESSION_COOKIE, sid)
+            resp = c.post(
+                "/profile/contact/name/update",
+                data={"given_name": "Augusta", "family_name": "Byron"},
+                headers={"referer": "http://testserver/profile/contact"},
+                follow_redirects=False,
+            )
+            assert resp.status_code == 303
+            loc = resp.headers["location"]
+            assert loc.startswith("/auth/step-up")
+            # The next= param must be the form page (GET-able), not the
+            # POST URL — otherwise the step-up bounce-back 405s.
+            assert "next=%2Fprofile%2Fcontact" in loc
+            assert "next=%2Fprofile%2Fcontact%2Fname%2Fupdate" not in loc
+
+
+@pytest.mark.asyncio
+async def test_name_update_bounce_stashes_form_body_for_replay(seed_db, fake_clients):
+    """The customer's typed values must be stashed at StepUpRequired time
+    so /auth/step-up can replay them. Without this, the bounce lands
+    on the form page with the values lost and the customer types twice.
+    """
+    from bss_models import StepUpPendingAction
+
+    sid, _, _ = await _setup(seed_db)
+    fake_clients.crm.individual_by_customer["CUST-T-A1B2C3"] = {
+        "given_name": "Ada", "family_name": "Lovelace",
+    }
+
+    with patch(
+        "bss_self_serve.routes.profile.get_clients", return_value=fake_clients
+    ):
+        app = create_app(Settings())
+        with TestClient(app) as c:
+            c.cookies.set(PORTAL_SESSION_COOKIE, sid)
+            resp = c.post(
+                "/profile/contact/name/update",
+                data={"given_name": "Augusta", "family_name": "Byron"},
+                follow_redirects=False,
+            )
+            assert resp.status_code == 303
+
+    async with seed_db() as s:
+        rows = (
+            await s.execute(
+                select(StepUpPendingAction).where(
+                    StepUpPendingAction.session_id == sid,
+                    StepUpPendingAction.action_label == "name_update",
+                )
+            )
+        ).scalars().all()
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.target_url == "/profile/contact/name/update"
+        assert row.payload_json == {
+            "given_name": "Augusta",
+            "family_name": "Byron",
+        }
+        assert row.consumed_at is None
+
+
+@pytest.mark.asyncio
+async def test_name_update_step_up_ignores_external_referer(seed_db, fake_clients):
+    """A Referer pointing at a different origin must not influence the
+    bounce-back target. We fall back to the current URL (the original
+    behaviour), which keeps Referer from being a redirect-target oracle.
+    """
+    sid, _, _ = await _setup(seed_db)
+    fake_clients.crm.individual_by_customer["CUST-T-A1B2C3"] = {
+        "given_name": "Ada", "family_name": "Lovelace",
+    }
+
+    with patch(
+        "bss_self_serve.routes.profile.get_clients", return_value=fake_clients
+    ):
+        app = create_app(Settings())
+        with TestClient(app) as c:
+            c.cookies.set(PORTAL_SESSION_COOKIE, sid)
+            resp = c.post(
+                "/profile/contact/name/update",
+                data={"given_name": "Augusta", "family_name": "Byron"},
+                headers={"referer": "https://evil.example/phish"},
+                follow_redirects=False,
+            )
+            assert resp.status_code == 303
+            loc = resp.headers["location"]
+            assert "evil.example" not in loc
+            assert "next=%2Fprofile%2Fcontact%2Fname%2Fupdate" in loc
+
+
+@pytest.mark.asyncio
 async def test_name_update_succeeds_and_audits(seed_db, fake_clients):
     sid, _, grant = await _setup(seed_db, with_grant_for="name_update")
     fake_clients.crm.individual_by_customer["CUST-T-A1B2C3"] = {

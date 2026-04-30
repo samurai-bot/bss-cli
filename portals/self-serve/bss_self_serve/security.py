@@ -22,7 +22,7 @@ Doctrine (V0_8_0.md §5):
 from __future__ import annotations
 
 from typing import Awaitable, Callable, Final
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlparse
 
 from fastapi import HTTPException, Request, status
 from fastapi.responses import RedirectResponse
@@ -31,6 +31,7 @@ from bss_portal_auth import (
     IdentityView,
     SessionView,
     consume_step_up_token,
+    stash_pending_action,
 )
 
 
@@ -178,10 +179,48 @@ def _next_for(request: Request) -> str:
     Internal-paths only — never echo the absolute URL or query strings
     that contain user input. The /auth/login route validates this
     against the same is_public / known-prefix list before honouring it.
+
+    For POST requests we prefer the Referer's path: a step-up bounce
+    arrives back via 303 (forced GET), so landing on the POST URL
+    yields 405 unless the route also has a GET handler. The form
+    page in the Referer is GET-able and re-renders the form so the
+    customer can re-submit with the step-up cookie carrying the grant.
+    Falls back to the current URL when Referer is missing or external.
     """
+    if request.method == "POST":
+        referer_path = _safe_referer_path(request)
+        if referer_path is not None:
+            return quote(referer_path, safe="/?=&")
     path = request.url.path
     qs = request.url.query
     return quote(f"{path}?{qs}", safe="/?=&") if qs else quote(path, safe="/")
+
+
+def _safe_referer_path(request: Request) -> str | None:
+    """Extract a safe internal path+query from the Referer header.
+
+    Returns None if the header is missing, not parseable, points at
+    another origin, or doesn't survive ``safe_next_path`` validation.
+    """
+    raw = request.headers.get("referer")
+    if not raw:
+        return None
+    try:
+        parsed = urlparse(raw)
+    except ValueError:
+        return None
+    # Reject if Referer carries a different host. Same-origin = either
+    # no netloc (relative) or netloc matching the request's Host header.
+    if parsed.netloc:
+        host = request.headers.get("host", "")
+        if parsed.netloc != host:
+            return None
+    if not parsed.path:
+        return None
+    candidate = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+    if safe_next_path(candidate, default="") != candidate:
+        return None
+    return candidate
 
 
 def requires_session(request: Request) -> SessionView:
@@ -258,28 +297,45 @@ def requires_step_up(action_label: str) -> Callable[[Request], Awaitable[None]]:
         token = request.headers.get("x-bss-stepup-token") or request.headers.get(
             "x-bss-step-up-token"
         )
-        if token is None and request.method == "POST":
+        form_payload: dict[str, str] | None = None
+        if request.method == "POST":
             try:
                 form = await request.form()
-                token = form.get("step_up_token")  # type: ignore[assignment]
+                if token is None:
+                    token = form.get("step_up_token")  # type: ignore[assignment]
+                # Capture the rest for stash-on-bounce. We only stash if
+                # we ultimately raise StepUpRequired, but the form is
+                # cached by Starlette so reading here is free.
+                form_payload = {
+                    k: v for k, v in form.multi_items()
+                    if isinstance(v, str)
+                }
             except Exception:
-                token = None
+                form_payload = None
         if token is None:
             # Read the grant cookie via the Starlette wrapper (no raw
             # cookie-header parsing in route code). This is part of the
             # auth flow proper, not a route-side cookie rummage.
             token = request.cookies.get("bss_portal_step_up")
 
-        if not token:
-            raise StepUpRequired(
-                action_label=action_label, next_path=_next_for(request)
-            )
-
         factory = getattr(request.app.state, "db_session_factory", None)
         if factory is None:
             raise RuntimeError(
                 "app.state.db_session_factory not set — wire it in lifespan"
             )
+
+        if not token:
+            await _stash_for_replay(
+                factory,
+                session_id=sess.id,
+                action_label=action_label,
+                request=request,
+                payload=form_payload,
+            )
+            raise StepUpRequired(
+                action_label=action_label, next_path=_next_for(request)
+            )
+
         async with factory() as db:
             ok = await consume_step_up_token(
                 db,
@@ -290,8 +346,48 @@ def requires_step_up(action_label: str) -> Callable[[Request], Awaitable[None]]:
             await db.commit()
 
         if not ok:
+            await _stash_for_replay(
+                factory,
+                session_id=sess.id,
+                action_label=action_label,
+                request=request,
+                payload=form_payload,
+            )
             raise StepUpRequired(
                 action_label=action_label, next_path=_next_for(request)
             )
 
     return _dep
+
+
+async def _stash_for_replay(
+    factory: Callable[[], object],
+    *,
+    session_id: str,
+    action_label: str,
+    request: Request,
+    payload: dict[str, str] | None,
+) -> None:
+    """Stash the original POST body so /auth/step-up can replay it.
+
+    No-op for non-POST requests or empty payloads — there's nothing to
+    replay. Failures are swallowed: the stash is a UX optimisation,
+    not a correctness gate, and the StepUpRequired bounce must still
+    happen even if the stash insert fails.
+    """
+    if request.method != "POST" or not payload:
+        return
+    target_url = request.url.path
+    try:
+        async with factory() as db:  # type: ignore[misc]
+            await stash_pending_action(
+                db,
+                session_id=session_id,
+                action_label=action_label,
+                target_url=target_url,
+                payload=payload,
+            )
+            await db.commit()  # type: ignore[attr-defined]
+    except Exception:
+        # Stash is best-effort. Swallow so StepUpRequired still fires.
+        return

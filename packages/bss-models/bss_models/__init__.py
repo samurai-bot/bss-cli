@@ -78,6 +78,7 @@ from .portal_auth import (
     LoginToken,
     PortalAction,
     Session,
+    StepUpPendingAction,
 )
 
 __all__ = [
@@ -144,4 +145,5 @@ __all__ = [
     "LoginAttempt",
     "PortalAction",
     "EmailChangePending",
+    "StepUpPendingAction",
 ]
