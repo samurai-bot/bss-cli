@@ -69,6 +69,130 @@ TOOL_PROFILES: dict[str, set[str]] = {
         # non-negotiable categories.
         "case.open_for_me",
     },
+
+    # v0.13 — the operator cockpit profile. Full registry coverage
+    # MINUS the customer-side ``*.mine`` / ``*_for_me`` wrappers (the
+    # operator binds via ``actor=settings.actor``, not via customer_id
+    # scoping). Doctrine: this is a coverage assertion, not a
+    # restriction set. If a new tool ships and isn't listed here, the
+    # cockpit can't see it — forces conscious inclusion. Startup
+    # ``validate_profiles()`` resolves every entry against
+    # TOOL_REGISTRY; deploy fails fast on drift.
+    #
+    # Three things expressly excluded:
+    # 1. ``*.mine`` / ``*_for_me`` wrappers (customer-side scoping
+    #    seam, irrelevant to the operator).
+    # 2. There are none of the v0.12 enforcement helpers (this is
+    #    not a restriction profile).
+    # 3. Nothing partial — adding a tool to TOOL_REGISTRY without
+    #    adding it here is a drift the doctrine guard catches at
+    #    next test run.
+    "operator_cockpit": {
+        # ── reads ────────────────────────────────────────────────
+        # CRM
+        "customer.get",
+        "customer.list",
+        "customer.find_by_msisdn",
+        "customer.get_kyc_status",
+        "case.get",
+        "case.list",
+        "case.show_transcript_for",
+        "ticket.get",
+        "ticket.list",
+        "interaction.list",
+        # Catalog
+        "catalog.list_active_offerings",
+        "catalog.list_offerings",
+        "catalog.get_offering",
+        "catalog.get_active_price",
+        "catalog.list_vas",
+        "catalog.get_vas",
+        # Subscription / service
+        "subscription.list_for_customer",
+        "subscription.get",
+        "subscription.get_balance",
+        "subscription.get_esim_activation",
+        "service.get",
+        "service.list_for_subscription",
+        # Orders / SOM
+        "order.get",
+        "order.list",
+        "order.wait_until",
+        "service_order.get",
+        "service_order.list_for_order",
+        # Payment
+        "payment.list_methods",
+        "payment.list_attempts",
+        "payment.get_attempt",
+        # Inventory
+        "inventory.msisdn.list_available",
+        "inventory.msisdn.get",
+        "inventory.esim.list_available",
+        "inventory.esim.get_activation",
+        # Provisioning sim
+        "provisioning.get_task",
+        "provisioning.list_tasks",
+        # Usage / mediation
+        "usage.history",
+        # Trace + ops
+        "trace.get",
+        "trace.for_order",
+        "trace.for_subscription",
+        "events.list",
+        "agents.list",
+        "clock.now",
+
+        # ── writes ───────────────────────────────────────────────
+        # CRM
+        "customer.create",
+        "customer.update_contact",
+        "customer.add_contact_medium",
+        "customer.remove_contact_medium",
+        "customer.attest_kyc",
+        "customer.close",
+        "interaction.log",
+        # Cases + tickets
+        "case.open",
+        "case.close",
+        "case.add_note",
+        "case.transition",
+        "case.update_priority",
+        "ticket.open",
+        "ticket.assign",
+        "ticket.transition",
+        "ticket.resolve",
+        "ticket.close",
+        "ticket.cancel",
+        # Catalog admin
+        "catalog.add_offering",
+        "catalog.add_price",
+        "catalog.window_offering",
+        # Subscription writes
+        "subscription.terminate",
+        "subscription.schedule_plan_change",
+        "subscription.cancel_pending_plan_change",
+        "subscription.migrate_to_new_price",
+        "subscription.purchase_vas",
+        "subscription.renew_now",
+        # Orders
+        "order.create",
+        "order.cancel",
+        # Payment
+        "payment.add_card",
+        "payment.remove_method",
+        "payment.charge",
+        # Provisioning ops
+        "provisioning.resolve_stuck",
+        "provisioning.retry_failed",
+        "provisioning.set_fault_injection",
+        # Test/scenario plumbing — operator may freeze/advance for
+        # local repro and demo timelines. Not OCS-grade; doctrine
+        # accepts.
+        "clock.advance",
+        "clock.freeze",
+        "clock.unfreeze",
+        "usage.simulate",
+    },
 }
 
 
@@ -127,6 +251,21 @@ def validate_profiles() -> None:
                 f"from auth_context.current().actor — never from a "
                 f"caller-supplied parameter."
             )
+
+    # v0.13 — operator_cockpit profile must NOT contain any mine
+    # wrapper. The wrappers exist for prompt-injection containment on
+    # the customer chat surface; the operator binds via
+    # ``actor=settings.actor`` and has no ownership scoping. Mixing
+    # the two would muddle the audit trail.
+    cockpit = TOOL_PROFILES.get("operator_cockpit", set())
+    bad_mine = sorted(t for t in cockpit if is_mine_tool(t))
+    if bad_mine:
+        raise RuntimeError(
+            f"Profile 'operator_cockpit' lists *.mine / *_for_me "
+            f"wrappers {bad_mine!r}. Those exist for the customer "
+            f"chat surface; the operator cockpit binds via "
+            f"actor=settings.actor and must never use them."
+        )
 
     # v0.12 PR4 — every customer_self_serve tool has an OWNERSHIP_PATHS
     # entry. Imported lazily so this module stays decoupled from
