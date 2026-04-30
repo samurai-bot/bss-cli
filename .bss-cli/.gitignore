@@ -1,0 +1,10 @@
+# v0.13 — operator config files. The actuals are operator-local
+# (audit identity, tunable preferences, optional dev-URL overrides);
+# the .template files are committed scaffolding the autobootstrapper
+# copies on first run.
+OPERATOR.md
+settings.toml
+
+# But keep the templates checked in.
+!OPERATOR.md.template
+!settings.toml.template

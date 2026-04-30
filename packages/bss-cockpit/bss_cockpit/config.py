@@ -1,0 +1,256 @@
+"""OPERATOR.md + settings.toml loader with mtime-based hot-reload.
+
+Two operator-editable files, both at ``.bss-cli/`` relative to the repo
+root:
+
+* ``OPERATOR.md`` — human-written persona + house rules. Plain
+  markdown. Prepended verbatim to every cockpit system prompt by
+  :mod:`bss_cockpit.prompts.build_cockpit_prompt`.
+* ``settings.toml`` — machine-tunable, non-secret operator preference.
+  Validated by Pydantic on load. Hot-reloaded on mtime change.
+
+Both files are operator-local (gitignored). The first ``current()`` call
+auto-bootstraps from the committed ``.template`` siblings if the
+actuals are missing — so a fresh checkout works without manual setup.
+
+Doctrine notes (per phases/V0_13_0.md):
+
+* The mtime check runs per ``current()`` invocation. Cheap (one
+  ``stat``); no watchdog thread. Editing the file in ``$EDITOR`` and
+  closing it makes the next REPL turn pick it up.
+* If ``settings.toml`` has invalid TOML or fails Pydantic validation,
+  the loader keeps serving the last good view and logs a warning.
+  This avoids a typo in the operator's editor bricking the cockpit.
+* Secrets MUST NOT live in ``settings.toml``. The split is doctrine:
+  operator preference here, infrastructure secrets in ``.env``.
+* No write API. ``current()`` is read-only; the WebUI ``/settings``
+  POST handlers in PR8 own the write side and call into a small
+  helper there (not exposed publicly so accidental writes from
+  business logic can't bypass the validation gate).
+"""
+
+from __future__ import annotations
+
+import shutil
+import threading
+import tomllib
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+
+import structlog
+from bss_clock import now as clock_now
+from pydantic import BaseModel, Field, ValidationError
+
+log = structlog.get_logger(__name__)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Pydantic schema for settings.toml
+# ─────────────────────────────────────────────────────────────────────
+
+
+class _OperatorSection(BaseModel):
+    actor: str = Field(min_length=1, max_length=64)
+
+
+class _LlmSection(BaseModel):
+    model: str | None = None
+    temperature: float = 0.2
+
+
+class _CockpitSection(BaseModel):
+    allow_destructive_default: bool = False
+
+
+class _PortsSection(BaseModel):
+    csr_portal: int = 9002
+
+
+class CockpitSettings(BaseModel):
+    """Validated view of ``.bss-cli/settings.toml``.
+
+    Sections are discrete to keep validation errors locatable in the
+    operator's editor (a typo under ``[operator]`` says so by section
+    name, not just by key).
+    """
+
+    operator: _OperatorSection
+    llm: _LlmSection = _LlmSection()
+    cockpit: _CockpitSection = _CockpitSection()
+    ports: _PortsSection = _PortsSection()
+    # Free-form per-service URL overrides. Empty by default.
+    dev_service_urls: dict[str, str] = Field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class CockpitConfig:
+    """Snapshot of the two operator files. Returned by ``current()``."""
+
+    operator_md: str
+    settings: CockpitSettings
+    last_loaded_at: datetime
+    operator_md_path: Path
+    settings_path: Path
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Loader + cache
+# ─────────────────────────────────────────────────────────────────────
+
+
+def _repo_root() -> Path:
+    """Locate the .bss-cli/ directory relative to the package install.
+
+    The package lives under ``packages/bss-cockpit/`` so ``parents[3]``
+    of this file is the repo root.
+    """
+    return Path(__file__).resolve().parents[3]
+
+
+def _bss_cli_dir() -> Path:
+    return _repo_root() / ".bss-cli"
+
+
+@dataclass
+class _Cache:
+    config: CockpitConfig | None = None
+    operator_mtime: float = 0.0
+    settings_mtime: float = 0.0
+
+
+_cache = _Cache()
+_lock = threading.Lock()
+
+
+def _autobootstrap_if_missing(path: Path, template_suffix: str = ".template") -> None:
+    """Copy ``path.with_suffix(... + .template)`` → ``path`` on first run.
+
+    Idempotent: returns silently if ``path`` already exists or no
+    template exists. Logs the bootstrap so operators see what happened
+    on first start.
+    """
+    if path.exists():
+        return
+    template = path.with_name(path.name + template_suffix)
+    if not template.exists():
+        return
+    shutil.copy2(template, path)
+    log.info(
+        "cockpit.config.autobootstrap",
+        target=str(path),
+        source=str(template),
+    )
+
+
+def _load_from_disk(
+    operator_md_path: Path, settings_path: Path
+) -> CockpitConfig:
+    """Read both files, validate, return a fresh ``CockpitConfig``.
+
+    Raises any IO / validation error to the caller. ``current()`` is
+    the public entry point — it catches and falls back on prior good.
+    """
+    operator_md = operator_md_path.read_text(encoding="utf-8")
+    raw = tomllib.loads(settings_path.read_text(encoding="utf-8"))
+    settings_obj = CockpitSettings.model_validate(raw)
+    return CockpitConfig(
+        operator_md=operator_md,
+        settings=settings_obj,
+        last_loaded_at=clock_now(),
+        operator_md_path=operator_md_path,
+        settings_path=settings_path,
+    )
+
+
+def current(*, root: Path | None = None) -> CockpitConfig:
+    """Return the current ``CockpitConfig``, reloading on mtime change.
+
+    First-call autobootstraps both files from ``.template`` siblings.
+    Subsequent calls stat both files; if either's mtime has advanced,
+    re-read + re-validate. On a parse/validation failure, log a warning
+    and keep serving the last good view (the operator's editor typo
+    must not brick the REPL).
+
+    ``root`` overrides the auto-located ``.bss-cli/`` (used in tests).
+    """
+    bss_cli = (root if root is not None else _bss_cli_dir())
+    operator_md_path = bss_cli / "OPERATOR.md"
+    settings_path = bss_cli / "settings.toml"
+
+    _autobootstrap_if_missing(operator_md_path)
+    _autobootstrap_if_missing(settings_path)
+
+    op_stat = operator_md_path.stat()
+    cf_stat = settings_path.stat()
+
+    with _lock:
+        cached = _cache.config
+        if (
+            cached is not None
+            and op_stat.st_mtime <= _cache.operator_mtime
+            and cf_stat.st_mtime <= _cache.settings_mtime
+        ):
+            return cached
+
+        try:
+            fresh = _load_from_disk(operator_md_path, settings_path)
+        except (
+            tomllib.TOMLDecodeError,
+            ValidationError,
+            OSError,
+        ) as exc:
+            if cached is None:
+                # No prior good — surface the failure. The operator
+                # has to fix the file before the cockpit boots.
+                raise
+            log.warning(
+                "cockpit.config.reload_failed",
+                error=f"{type(exc).__name__}: {exc}",
+                serving_last_good=str(cached.last_loaded_at),
+            )
+            return cached
+
+        _cache.config = fresh
+        _cache.operator_mtime = op_stat.st_mtime
+        _cache.settings_mtime = cf_stat.st_mtime
+        return fresh
+
+
+def reset_cache() -> None:
+    """Clear the cache. Tests use this between cases."""
+    with _lock:
+        _cache.config = None
+        _cache.operator_mtime = 0.0
+        _cache.settings_mtime = 0.0
+
+
+def write_operator_md(content: str, *, root: Path | None = None) -> None:
+    """Persist new OPERATOR.md content. WebUI helper (PR8 caller).
+
+    Validation: non-empty after strip. Anything fancier (markdown
+    lint) is out of scope.
+    """
+    if not content.strip():
+        raise ValueError("OPERATOR.md cannot be empty")
+    bss_cli = (root if root is not None else _bss_cli_dir())
+    bss_cli.mkdir(parents=True, exist_ok=True)
+    (bss_cli / "OPERATOR.md").write_text(content, encoding="utf-8")
+    # Force a reload on the next current() call.
+    reset_cache()
+
+
+def write_settings_toml(content: str, *, root: Path | None = None) -> CockpitSettings:
+    """Persist new settings.toml content; validate first; reset cache.
+
+    Returns the validated ``CockpitSettings`` so the WebUI can echo it
+    back. Raises ``tomllib.TOMLDecodeError`` or ``ValidationError`` on
+    bad input — the WebUI surfaces the message in its 400 page.
+    """
+    raw = tomllib.loads(content)
+    validated = CockpitSettings.model_validate(raw)
+    bss_cli = (root if root is not None else _bss_cli_dir())
+    bss_cli.mkdir(parents=True, exist_ok=True)
+    (bss_cli / "settings.toml").write_text(content, encoding="utf-8")
+    reset_cache()
+    return validated

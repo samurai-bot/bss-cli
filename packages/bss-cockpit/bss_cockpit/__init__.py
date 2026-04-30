@@ -27,6 +27,14 @@ Future PRs (per phases/V0_13_0.md):
 
 from __future__ import annotations
 
+from .config import (
+    CockpitConfig,
+    CockpitSettings,
+    current,
+    reset_cache,
+    write_operator_md,
+    write_settings_toml,
+)
 from .conversation import (
     Conversation,
     ConversationStore,
@@ -34,11 +42,19 @@ from .conversation import (
     PendingDestructive,
     configure_store,
 )
+from .prompts import build_cockpit_prompt
 
 __all__ = [
+    "CockpitConfig",
+    "CockpitSettings",
     "Conversation",
     "ConversationStore",
     "ConversationSummary",
     "PendingDestructive",
+    "build_cockpit_prompt",
     "configure_store",
+    "current",
+    "reset_cache",
+    "write_operator_md",
+    "write_settings_toml",
 ]
