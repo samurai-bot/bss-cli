@@ -52,7 +52,7 @@ async def payment_add_card(
     this tool is the sandbox convenience: tokenize + attach in one call.
 
     Args:
-        customer_id: Customer ID in CUST-NNN format.
+        customer_id: Customer ID with the CUST- prefix (opaque suffix).
         card_number: 16-digit PAN. Any number works in v0.1 UNLESS it
             contains ``FAIL`` or ``DECLINE`` (will be rejected by the mock).
 
@@ -79,7 +79,7 @@ async def payment_list_methods(customer_id: CustomerId) -> list[dict[str, Any]]:
     """List payment methods on file for a customer.
 
     Args:
-        customer_id: Customer ID in CUST-NNN format.
+        customer_id: Customer ID with the CUST- prefix (opaque suffix).
 
     Returns:
         List of payment method dicts.
@@ -97,7 +97,7 @@ async def payment_remove_method(method_id: PaymentMethodId) -> dict[str, Any]:
     subscription (COF is mandatory policy).
 
     Args:
-        method_id: Payment Method ID in PM-NNNN format.
+        method_id: Payment Method ID with the PM- prefix (opaque suffix).
 
     Returns:
         ``{"id": "PM-NNNN", "removed": true}``.
@@ -123,8 +123,8 @@ async def payment_charge(
     exceptional manual charges.
 
     Args:
-        customer_id: Customer ID in CUST-NNN format.
-        payment_method_id: Payment Method ID in PM-NNNN format.
+        customer_id: Customer ID with the CUST- prefix (opaque suffix).
+        payment_method_id: Payment Method ID with the PM- prefix (opaque suffix).
         amount: Decimal amount as a string, e.g. ``"25.00"``. Avoid floats.
         purpose: Short reason, e.g. ``"manual_adjustment"``.
         currency: ISO-4217 currency code. v0.1 uses ``"SGD"`` only.
@@ -150,7 +150,7 @@ async def payment_get_attempt(attempt_id: PaymentAttemptId) -> dict[str, Any]:
     """Read a single payment attempt by ID.
 
     Args:
-        attempt_id: Payment Attempt ID in PAY-NNNNNN format.
+        attempt_id: Payment Attempt ID with the PAY- prefix (opaque suffix).
 
     Returns:
         Payment attempt dict.

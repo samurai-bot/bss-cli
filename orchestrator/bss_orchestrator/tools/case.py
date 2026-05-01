@@ -29,7 +29,7 @@ async def case_open(
     ``ticket.open`` directly.
 
     Args:
-        customer_id: Customer ID in CUST-NNN format.
+        customer_id: Customer ID with the CUST- prefix (opaque suffix).
         subject: Short description, e.g. ``"Data stopped working this morning"``.
         category: One of ``technical``, ``billing``, ``account``, ``information``.
         priority: One of ``low``, ``medium``, ``high``, ``critical``.
@@ -53,7 +53,7 @@ async def case_get(case_id: CaseId) -> dict[str, Any]:
     """Get a case with its notes + child-ticket IDs.
 
     Args:
-        case_id: Case ID in CASE-NNN format.
+        case_id: Case ID with the CASE- prefix (opaque suffix).
 
     Returns:
         Case dict. Use ``ticket.list(case_id=...)`` to fetch full ticket
@@ -95,7 +95,7 @@ async def case_add_note(case_id: CaseId, body: str) -> dict[str, Any]:
     """Append an internal note to a case.
 
     Args:
-        case_id: Case ID in CASE-NNN format.
+        case_id: Case ID with the CASE- prefix (opaque suffix).
         body: Note text (free text).
 
     Returns:
@@ -114,7 +114,7 @@ async def case_update_priority(
     """Update the priority of a case.
 
     Args:
-        case_id: Case ID in CASE-NNN format.
+        case_id: Case ID with the CASE- prefix (opaque suffix).
         priority: New priority.
 
     Returns:
@@ -132,7 +132,7 @@ async def case_transition(case_id: CaseId, to_state: CaseState) -> dict[str, Any
     for the closing transition — it enforces extra policy.
 
     Args:
-        case_id: Case ID in CASE-NNN format.
+        case_id: Case ID with the CASE- prefix (opaque suffix).
         to_state: Target state.
 
     Returns:
@@ -154,7 +154,7 @@ async def case_show_transcript_for(case_id: CaseId) -> dict[str, Any]:
     customer chat profile (CSRs are the audience).
 
     Args:
-        case_id: Case ID in CASE-NNN format.
+        case_id: Case ID with the CASE- prefix (opaque suffix).
 
     Returns:
         ``{"transcript": <body>, "customerId": ..., "recordedAt": ...}``
@@ -183,7 +183,7 @@ async def case_close(case_id: CaseId, resolution_code: str) -> dict[str, Any]:
     resolved or closed first.
 
     Args:
-        case_id: Case ID in CASE-NNN format.
+        case_id: Case ID with the CASE- prefix (opaque suffix).
         resolution_code: Short resolution slug, e.g. ``"fixed"``, ``"duplicate"``.
 
     Returns:

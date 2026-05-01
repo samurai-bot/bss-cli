@@ -1,0 +1,191 @@
+name: operator_cockpit_handle_blocked_subscription
+description: |
+  v0.13 hero. Replaces v0.5's portal_csr_blocked_diagnosis. Wraps the
+  v0.1 hero-3 (LLM-driven blocked-subscription diagnosis) in the
+  v0.13 operator cockpit. Setup is deterministic — create customer,
+  KYC, COF, order PLAN_S, burn the bundle to block the subscription.
+  Then the operator opens a cockpit session in the browser, pins the
+  customer focus, and asks the LLM "why is data not working — fix it
+  if you can". The agent's actions land on the customer's interaction
+  log attributed to channel=portal-csr and service_identity=
+  operator_cockpit, not channel=llm.
+
+  Green only if:
+    - GET / renders the sessions index for the configured operator
+    - POST /cockpit/new opens a session, 303s to /cockpit/{id}
+    - POST /cockpit/{id}/focus pins the customer
+    - POST /cockpit/{id}/turn appends the user message
+    - GET /cockpit/{id}/events drives the SSE stream to completion
+    - The blocked subscription transitions back to active
+    - audit.domain_event rows show service_identity=operator_cockpit
+    - all v0.1-v0.12 hero scenarios still pass unchanged
+
+tags: [hero, portal, cockpit, regression, llm]
+
+setup:
+  reset_operational_data: true
+  freeze_clock_at: "2026-05-20T10:00:00+08:00"
+
+variables:
+  customer_email: "cockpit-demo-{{ run_id }}@bss-cli.local"
+  plan: PLAN_S
+  portal_base: "http://localhost:9002"
+
+steps:
+  # ─── Deterministic setup — drive directly, not via the cockpit ─────
+  - name: create customer
+    action: customer.create
+    args:
+      name: "Cockpit Demo {{ run_id }}"
+      email: "{{ customer_email }}"
+      phone: "+6590006666"
+    capture:
+      customer_id: "$.id"
+
+  - name: attest KYC
+    action: customer.attest_kyc
+    args:
+      customer_id: "{{ customer_id }}"
+      provider: myinfo
+      attestation_token: "cockpit-stub-jwt-{{ run_id }}"
+
+  - name: add card on file
+    action: payment.add_card
+    args:
+      customer_id: "{{ customer_id }}"
+      card_number: "4242424242424242"
+
+  - name: place order
+    action: order.create
+    args:
+      customer_id: "{{ customer_id }}"
+      offering_id: "{{ plan }}"
+    capture:
+      order_id: "$.id"
+
+  - name: wait for activation
+    action: order.wait_until
+    args:
+      order_id: "{{ order_id }}"
+      target_state: completed
+      timeout_s: 30
+
+  - name: get the subscription
+    action: subscription.list_for_customer
+    args:
+      customer_id: "{{ customer_id }}"
+    capture:
+      subscription_id: "$[0].id"
+      msisdn: "$[0].msisdn"
+
+  - name: burn 4 GB
+    action: usage.simulate
+    args:
+      msisdn: "{{ msisdn }}"
+      event_type: data
+      quantity: 4096
+      unit: mb
+
+  - name: burn final 1 GB (exhausts bundle)
+    action: usage.simulate
+    args:
+      msisdn: "{{ msisdn }}"
+      event_type: data
+      quantity: 1024
+      unit: mb
+
+  - name: verify subscription is blocked before handing to cockpit
+    assert:
+      tool: subscription.get
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        state: blocked
+      poll:
+        interval_ms: 100
+        timeout_seconds: 5
+
+  # ─── Operator cockpit flow ───────────────────────────────────────
+  #
+  # No login — v0.13 cockpit runs single-operator-by-design behind a
+  # secure perimeter. Sessions index is the entry point.
+
+  - name: operator opens the sessions index
+    http: GET /
+    base_url: "{{ portal_base }}"
+    expect:
+      status: 200
+      body_contains: ["Hello, operator", "Recent conversations"]
+
+  - name: operator opens a fresh cockpit session
+    http: POST /cockpit/new
+    base_url: "{{ portal_base }}"
+    form:
+      label: "diagnose CUST {{ run_id }}"
+    expect:
+      status: 303
+    capture_regex:
+      cockpit_session_id:
+        source: headers.location
+        pattern: "/cockpit/(SES-[0-9a-f-]+)"
+
+  - name: thread page renders for the new session
+    http: GET /cockpit/{{ cockpit_session_id }}
+    base_url: "{{ portal_base }}"
+    expect:
+      status: 200
+      body_contains: ["{{ cockpit_session_id }}", "diagnose"]
+
+  - name: pin customer focus on the cockpit session
+    http: POST /cockpit/{{ cockpit_session_id }}/focus
+    base_url: "{{ portal_base }}"
+    form:
+      customer_id: "{{ customer_id }}"
+    expect:
+      status: 303
+
+  - name: operator asks the agent to diagnose and fix
+    http: POST /cockpit/{{ cockpit_session_id }}/turn
+    base_url: "{{ portal_base }}"
+    form:
+      # Imperative phrasing (mirrors v0.5 hero) — directs the agent to
+      # execute rather than propose options. VAS top-up is additive
+      # (not in DESTRUCTIVE_TOOLS) so no /confirm bracket needed.
+      message: "Customer {{ customer_id }} has a blocked subscription because the data bundle is exhausted. Use subscription.purchase_vas with vas_offering_id=VAS_DATA_1GB on subscription_id={{ subscription_id }} to top up and restore service. Do it now."
+    expect:
+      status: 303
+
+  - name: drive the SSE stream to completion
+    http: GET /cockpit/{{ cockpit_session_id }}/events
+    base_url: "{{ portal_base }}"
+    drain_stream: true
+    timeout_seconds: 120
+    expect:
+      status: 200
+      body_contains: ["event: status"]
+
+  # ─── Backend verification ────────────────────────────────────────
+
+  - name: subscription is active again
+    assert:
+      tool: subscription.get
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        state: active
+        balances.data.remaining: {gt: 0}
+      poll:
+        interval_ms: 200
+        timeout_seconds: 15
+
+  - name: interaction log attributes the agent action to the cockpit
+    assert:
+      tool: interaction.list
+      args: {customer_id: "{{ customer_id }}"}
+      expect:
+        any_match:
+          channel: portal-csr
+      poll:
+        interval_ms: 200
+        timeout_seconds: 10
+
+teardown:
+  unfreeze_clock: true

@@ -108,7 +108,9 @@ Hard rule:
 
 ## Authentication & RBAC readiness
 
-v0.3 introduces the smallest possible auth story: a single shared API token that gates every BSS service's HTTP surface. v0.1 and v0.2 had no authentication at all. Phase 12 will add per-principal OAuth2/JWT through the same `auth_context.py` seam that's been in every service since Phase 3.
+> **(v0.13) No staff-side auth.** The cockpit runs single-operator-by-design behind a secure perimeter. `actor` for cockpit turns comes from `.bss-cli/settings.toml` — descriptive, not verified. The Phase-12 OAuth/RBAC ambition for staff is **retired**, not deferred. Customer-side auth (v0.8–v0.10 portal session + step-up + named tokens at the perimeter) is unchanged. See DECISIONS 2026-05-01 for the rationale.
+
+v0.3 introduces the smallest possible auth story: a single shared API token that gates every BSS service's HTTP surface. v0.1 and v0.2 had no authentication at all. v0.9 splits that into named tokens per external-facing surface. Customer-side auth (v0.8 portal session, v0.10 step-up) sits in front of the self-serve portal. Staff side runs behind a secure perimeter without a login wall — see the v0.13 cockpit doctrine below.
 
 ### What v0.3 ships
 
@@ -126,11 +128,11 @@ v0.3 introduces the smallest possible auth story: a single shared API token that
 - **`auth_context.py`** module in every service. v0.3 leaves it alone — RequestIdMiddleware still populates it from `X-BSS-Actor`. The principal is still the hardcoded admin.
 - **Policies and tool dispatches read from `auth_context.current()`**, never hardcoded
 
-When Phase 12 ships, the BSSApiTokenMiddleware swap (token → JWT validator) is the change per service. `auth_context.py` then reads claims from the JWT instead of headers. Business logic stays untouched.
+If a future operator-side identity story does ship, the BSSApiTokenMiddleware swap (token → JWT validator) is the change per service. `auth_context.py` then reads claims from the JWT instead of headers. Business logic stays untouched. As of v0.13 there is no concrete ship plan — staff trust is perimeter-based.
 
 ### What v0.9 ships (named tokens at the BSS perimeter)
 
-v0.9 splits the v0.3 single-token model. Each external-facing surface carries its own named identity at the perimeter; the receiving services derive `service_identity` from validated token map lookup. `BSS_PORTAL_SELF_SERVE_API_TOKEN` is the self-serve portal's token (identity `"portal_self_serve"`); `BSS_API_TOKEN` remains the default identity used by orchestrator and CSR. Phase 12 swaps each named token for an OAuth2 client-credentials JWT through the same middleware seam.
+v0.9 splits the v0.3 single-token model. Each external-facing surface carries its own named identity at the perimeter; the receiving services derive `service_identity` from validated token map lookup. `BSS_PORTAL_SELF_SERVE_API_TOKEN` is the self-serve portal's token (identity `"portal_self_serve"`); `BSS_OPERATOR_COCKPIT_API_TOKEN` (v0.13) is the cockpit's token (identity `"operator_cockpit"`); `BSS_API_TOKEN` remains the default identity used by the orchestrator. The named-token mechanism stands; rotating any one surface's credential is independent of the others.
 
 - **`bss_middleware.TokenMap`** loads at startup from any `BSS_*_API_TOKEN` env var. Identity is derived from the env-var name (`BSS_PORTAL_SELF_SERVE_API_TOKEN` → `"portal_self_serve"`, `BSS_PARTNER_ACME_API_TOKEN` → `"partner_acme"`, etc.). Tokens stored hashed (HMAC-SHA-256, fixed salt) so the in-memory map is safe to log at debug level.
 - **`BSSApiTokenMiddleware` upgraded** to validate against the map and attach `service_identity` to ASGI scope on hit. v0.3 single-token deployments work unchanged (resolve to identity `"default"`).
@@ -140,7 +142,7 @@ v0.9 splits the v0.3 single-token model. Each external-facing surface carries it
 
 ### What v0.8 ships (self-serve portal only)
 
-v0.8 puts a login wall in front of the self-serve portal. CSR console retains its v0.5 pre-baked-admin pattern.
+v0.8 puts a login wall in front of the self-serve portal. The CSR (operator) surface is **not** auth-gated — v0.13 retired the v0.5 stub-login pattern entirely; the cockpit runs single-operator-by-design behind a secure perimeter (see "v0.13 cockpit doctrine" below).
 
 - **`packages/bss-portal-auth/`** — email-based identity. Public API: `start_email_login`, `verify_email_login`, `current_session`, `rotate_if_due`, `revoke_session`, `link_to_customer`, `start_step_up`, `verify_step_up`, `consume_step_up_token`. Sessions are server-side; cookies carry the session id only. Step-up auth is required for sensitive actions (defined in v0.10+ as scope expands). Per-principal OAuth2/JWT remains a Phase 12 concern.
 - **`portal_auth` schema** (migration 0008): `identity`, `login_token`, `session`, `login_attempt`. Tokens stored as HMAC-SHA-256 with the server pepper from `BSS_PORTAL_TOKEN_PEPPER` env. Comparison is timing-safe (`hmac.compare_digest`). Pepper validated at portal startup (`validate_pepper_present`).
@@ -149,13 +151,14 @@ v0.8 puts a login wall in front of the self-serve portal. CSR console retains it
 - **Public-route allowlist** (`bss_self_serve.security`): `/welcome`, `/plans`, `/auth/*`, `/static/*`, `/portal-ui/static/*`. Adding a new public route requires an entry in the allowlist plus a test.
 - **Account-first signup funnel** (`/signup/{plan}` and friends are gated on `requires_verified_email`). The agent stream calls `link_to_customer` the moment `customer.create` returns a CUST-* id, atomically binding the verified identity to the customer record.
 
-### Phase 12 model (not in v0.1, documented for architectural intent)
+### v0.13 cockpit doctrine (operator-side, supersedes the prior staff-auth ambition)
 
-- **Service-to-service:** OAuth2 client credentials, short-lived JWTs via bss-clients
-- **Human-to-system:** OAuth2 Authorization Code + PKCE through an auth service (`services/auth`) backed by Keycloak/Cognito/Entra
-- **8 coarse roles**: csr, senior_agent, billing_analyst, provisioning_engineer, supervisor, admin, auditor, system
-- **Fine permissions** derived 1:1 from tool names
-- **Resource scoping** via tenant and customer_segment claims
+- **No login.** No `OperatorSessionStore`. No middleware-level staff-auth gate. The CLI REPL (`bss`) is the canonical operator cockpit; the browser veneer at `localhost:9002/cockpit/<id>` is a thin mirror over the same Postgres-backed `cockpit.session` / `cockpit.message` / `cockpit.pending_destructive` tables.
+- **`actor` from `.bss-cli/settings.toml`.** Descriptive, not verified. Cockpit-driven downstream calls stamp `audit.domain_event.actor=<settings.actor>` + `service_identity="operator_cockpit"` + `channel="cli"|"portal-csr"`. Forensic per-model attribution still lives in `audit.domain_event.actor` for the LLM-driven side (`llm-<model-slug>`).
+- **`OPERATOR.md` as operator-editable persona.** Prepended verbatim to every cockpit system prompt by `bss_cockpit.build_cockpit_prompt`. House rules + tone + escalation guidance. Hot-reloaded on mtime; no process restart required.
+- **`/confirm` for destructive ops.** Propose → operator types `/confirm` (REPL) or clicks the button (browser) → next turn runs `allow_destructive=True`. `cockpit.pending_destructive` row tracks the in-flight propose. The destructive-tool list is small and code-defined (`bss_orchestrator.safety.DESTRUCTIVE_TOOLS`).
+- **`operator_cockpit` tool profile = full registry minus `*.mine` wrappers.** Coverage assertion, not restriction. Adding a new tool requires explicit profile inclusion; startup `validate_profiles()` enforces. No prompt-injection containment seam needed (the operator IS the trust principal).
+- **Phase-12 staff auth is retired**, not deferred. Customer-side OAuth/Singpass remains a v1.0 concern via the channel layer, not BSS-CLI.
 
 ## Design rules
 
@@ -173,6 +176,8 @@ v0.8 puts a login wall in front of the self-serve portal. CSR console retains it
 - **(v0.7+) Subscription price is snapshotted at order time.** Renewal charges the snapshot, not the catalog. Catalog price changes affect new orders only; existing subscriptions migrate via an explicit operator-initiated flow (`subscription.migrate_to_new_price`) with regulatory notice.
 - **(v0.12+) Chat is one modality of access, not a privileged path.** The same tool surface, under the same server-side policies, viewed through a tighter prompt-visible window. Customer chat sees the `customer_self_serve` profile (ownership-bound `*.mine` wrappers + public catalog reads); CSR/CLI/scenario callers keep full surface access. If the chat ever has a tool the customer's direct UI doesn't, that's a doctrine bug.
 - **(v0.12+) The five escalation categories are not negotiable.** Fraud, billing dispute, regulator complaint, identity recovery, bereavement — all are `case.open_for_me` calls with no AI-side resolution attempt. The `EscalationCategory` Literal, the soak corpus, and the customer-chat system prompt encode the same list. Adding a sixth is a doctrine decision, not a scope decision.
+- **(v0.13+) The REPL is the canonical operator cockpit.** The browser at `localhost:9002/cockpit/<id>` is a thin veneer over the same `Conversation` store. Slash-command parity is a doctrine target — if the REPL has `/focus` and the browser has no equivalent button, that's a doctrine bug to fix in the next sprint.
+- **(v0.13+) Operator persona lives in `OPERATOR.md`.** Prepended verbatim to every cockpit system prompt. House rules are operator-editable; the cockpit's safety contract (propose-then-confirm, escalation list, ASCII rules) is code-defined in `bss_cockpit.prompts._COCKPIT_INVARIANTS`. An operator who wants to weaken the contract has to edit code, not a markdown file.
 
 ## Call patterns (HTTP vs events)
 
@@ -211,14 +216,14 @@ Two distinct planes:
 - **Tracing (v0.2):** OpenTelemetry SDK + auto-instrumentors (FastAPI, HTTPX, AsyncPG, AioPika); OTLP/HTTP export to Jaeger
 - **Auth (v0.3):** Shared `BSS_API_TOKEN` middleware (`packages/bss-middleware`) on every BSS service; `TokenAuthProvider` on every outbound client. Per-principal OAuth2 / JWT is Phase 12.
 - **Portals (v0.4-v0.5):** FastAPI + Jinja + HTMX, server-rendered HTML, vendored `htmx.min.js` + `htmx-sse.js`. No React/Vue/Svelte, no bundler, no npm. Shared widgets in `packages/bss-portal-ui`.
-- **Internal packages:** `bss-clients`, `bss-clock`, `bss-events`, `bss-middleware`, `bss-telemetry`, `bss-portal-ui`, `bss-admin`, `bss-models`, `bss-seed` — all under `packages/` as `uv` workspace members.
+- **Internal packages:** `bss-clients`, `bss-clock`, `bss-cockpit` (v0.13), `bss-events`, `bss-middleware`, `bss-telemetry`, `bss-portal-ui`, `bss-portal-auth`, `bss-admin`, `bss-models`, `bss-seed` — all under `packages/` as `uv` workspace members.
 - **Testing:** pytest + pytest-asyncio + httpx AsyncClient
 - **Linting:** ruff + black + mypy
 - **Container:** multi-stage Dockerfiles, non-root users, distroless final stage where practical
 
 ## Deployment model
 
-BSS-CLI ships as **9 service containers + 2 portal containers** plus four optional infrastructure containers (Postgres, RabbitMQ, Metabase, Jaeger). Billing was deferred to v0.2 — port 8009 reserved (`DECISIONS.md` 2026-04-13). Self-serve portal on 9001 (v0.4); CSR console on 9002 (v0.5). Deployers with existing Postgres/RabbitMQ/Jaeger bring their own infra; the all-in-one profile brings up everything for development and demo.
+BSS-CLI ships as **9 service containers + 2 portal containers** plus four optional infrastructure containers (Postgres, RabbitMQ, Metabase, Jaeger). Billing was deferred to v0.2 — port 8009 reserved (`DECISIONS.md` 2026-04-13). Self-serve portal on 9001 (v0.4); operator cockpit (browser veneer over the v0.13 cockpit Conversation store) on 9002. The CLI REPL (`bss`) is the canonical cockpit surface; the browser is the same conversation viewed in HTML. Deployers with existing Postgres/RabbitMQ/Jaeger bring their own infra; the all-in-one profile brings up everything for development and demo.
 
 See `ARCHITECTURE.md` for the full container topology, compose profiles, and the AWS deployment path (ECS Fargate → small MVNO production → scaled MVNO).
 
@@ -267,6 +272,12 @@ See `ARCHITECTURE.md` for the full container topology, compose profiles, and the
 - **(v0.10+) Don't bypass step-up auth on a sensitive write.** The list (VAS purchase, COF add/remove/set-default, subscription terminate, email change, phone update, address update, plan-change schedule, plan-change cancel) lives as `SENSITIVE_ACTION_LABELS` in `portals/self-serve/bss_self_serve/security.py` and is enforced via the `requires_step_up(label)` dependency, not by convention. A test asserts every `requires_step_up(...)` call site uses a label from this set, and that every label appears in at least one call site. Adding a new sensitive route requires adding its label to the catalogue.
 - **(v0.12+) Don't accept `customer_id` (or any owner-bound id like `customer_email`, `msisdn`) as a parameter on a `*.mine` / `*_for_me` tool.** Bind from `auth_context.current().actor`. The signature simply omits these. Greppable + startup self-check (`tools/_profiles.py:validate_profiles`) enforces. The wrappers are the prompt-injection containment layer; a parameter would let a prompt-injected LLM target another customer even though server-side policies still block the cross-customer attempt.
 - **(v0.12+) Don't extend the `customer_self_serve` tool profile without a security review.** Each new tool widens the chat's autonomous reach. The list in `orchestrator/bss_orchestrator/tools/_profiles.py` is the source of truth; every entry must have a matching `OWNERSHIP_PATHS` entry (use `[]` when the tool's response carries no customer-bound fields). The runbook section "Adding a tool to the customer_self_serve profile" carries the checklist.
+- **(v0.13+) Don't reach for OAuth/RBAC for staff.** The cockpit is single-operator-by-design behind a secure perimeter. Audit attribution comes from `settings.toml`; trust is perimeter-based. The Phase-12 staff-auth ambition is retired (DECISIONS 2026-05-01). If a future ops setup actually needs multi-operator separation, the path is multi-tenant carve-out (one cockpit container per operator namespace), not a login wall.
+- **(v0.13+) Don't read `OPERATOR.md` or `settings.toml` outside `bss_cockpit.config`.** Hot-reload (mtime caching + `last_loaded_at` snapshot) is the contract. Direct file reads bypass the cache and risk drift between the REPL and the browser surface.
+- **(v0.13+) Don't bypass `/confirm` for destructive actions in the cockpit chat.** The `cockpit.pending_destructive` row is the contract; the system prompt instructs propose-then-confirm; only consuming the row flips `allow_destructive=True` for the next turn. Bypassing is a doctrine bug — even an LLM the operator trusts proposes wrong things, and the operator's eye on the propose payload is the only review surface left after staff auth retired.
+- **(v0.13+) Don't add a Conversation store to a service.** Cockpit conversations live in the `cockpit` schema owned by `bss-cockpit`; portals + REPL consume, neither reimplements. Customer chat keeps its own per-customer conversation store (different scoping concern, different lifecycle); future convergence is a post-v0.13 question.
+- **(v0.13+) Don't accept user-controllable `session_id` outside the cockpit routes.** The REPL's `--session SES-...` reads from CLI argv (operator-typed); the browser's `/cockpit/<id>` reads from URL path. Both resolve through `Conversation.resume()`, which raises `LookupError` on a missing id. There's no need for ownership scoping (the cockpit is single-operator-by-design), but every other route must not take a session id off external input.
+- **(v0.13+) Don't store secrets in `settings.toml`.** `BSS_*_API_TOKEN`, DB URL, OpenRouter key — those stay in `.env`. `settings.toml` is non-secret operator preference (audit name, model, ports, etc.). The greppable rule: anything that would burn the perimeter if leaked stays in env.
 - **(v0.12+) Don't let the chat surface escape its scope.** The chat route is the only orchestrator-mediated route in self-serve (greppable: `rg 'astream_once' portals/self-serve/bss_self_serve/routes/` must match `chat.py` only). Cap-trip → templated SSE response, never a raw error. `AgentOwnershipViolation` from the trip-wire → generic safety reply, no leaked tool name. The OpenRouter API key never leaves the orchestrator process.
 
 ## Project meta

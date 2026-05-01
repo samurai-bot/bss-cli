@@ -1656,16 +1656,56 @@
   border-radius: 3px;
   color: var(--fg);
 }
-.chat-bubble ul {
+.chat-bubble ul, .chat-bubble ol {
   margin: 4px 0 8px 0;
   padding-left: 22px;
-  list-style: disc;
 }
-.chat-bubble ul:last-child { margin-bottom: 0; }
+.chat-bubble ul { list-style: disc; }
+.chat-bubble ol { list-style: decimal; }
+.chat-bubble ul:last-child, .chat-bubble ol:last-child { margin-bottom: 0; }
 .chat-bubble li {
   margin: 2px 0;
   padding-left: 2px;
 }
+
+/* v0.13.1 — extended block markdown (tables, headings, code fences). */
+.chat-bubble h3, .chat-bubble h4, .chat-bubble h5, .chat-bubble h6 {
+  margin: 10px 0 6px;
+  font-weight: 600; color: var(--fg);
+}
+.chat-bubble h3 { font-size: 1.05em; }
+.chat-bubble h4, .chat-bubble h5, .chat-bubble h6 { font-size: 1em; }
+.chat-bubble pre {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px; margin: 6px 0;
+  overflow-x: auto;
+}
+.chat-bubble pre code {
+  background: transparent; padding: 0; border: none;
+  font-family: var(--mono); font-size: 0.9em;
+  white-space: pre;
+}
+.chat-table {
+  border-collapse: collapse;
+  margin: 6px 0;
+  font-size: 0.95em;
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.chat-table th, .chat-table td {
+  text-align: left;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.chat-table th {
+  font-weight: 600;
+  background: var(--bg-elev);
+}
+.chat-table tr:last-child td { border-bottom: none; }
 
 /* ─── v0.12 PR20 — legal pages + footer links ───────────────────── */
 

@@ -1,0 +1,24 @@
+# v0.13 cockpit settings — operator-tunable, non-secret. Secrets stay
+# in .env (BSS_*_API_TOKEN, DB URL, OpenRouter key). This file is
+# operator-local; the autobootstrapper copies .template → settings.toml
+# on first run.
+#
+# v0.13.1 — `actor` is hardcoded (always "operator"). The cockpit runs
+# single-operator-by-design behind a secure perimeter; this file
+# carries non-identity preferences only.
+
+[llm]
+# Overrides BSS_LLM_MODEL when set. Comment out to fall back to env.
+model = "google/gemma-4-26b-a4b-it"
+temperature = 0.2
+
+[cockpit]
+# Per-turn /confirm overrides this. Keep false unless you know why.
+allow_destructive_default = false
+
+[ports]
+csr_portal = 9002
+
+[dev_service_urls]
+# Optional per-service URL overrides. Empty table = use env defaults.
+# crm = "http://localhost:8002"

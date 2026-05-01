@@ -40,7 +40,7 @@ async def customer_create(
         phone: E.164 phone number with country code, e.g. ``"+6590000005"``.
 
     Returns:
-        The created customer dict with ``id`` (CUST-NNN), ``name``, ``status``,
+        The created customer dict with ``id`` (CUST-... opaque suffix), ``name``, ``status``,
         and a ``contactMedium`` list. Pass ``id`` to subsequent tools.
 
     Raises:
@@ -82,7 +82,7 @@ async def customer_get(customer_id: CustomerId) -> dict[str, Any]:
     """Read a single customer with contact mediums and KYC status.
 
     Args:
-        customer_id: Customer ID in CUST-NNN format. Obtain from
+        customer_id: Customer ID with the CUST- prefix (opaque suffix). Obtain from
             ``customer.list`` or ``customer.create``.
 
     Returns:
@@ -127,7 +127,7 @@ async def customer_add_contact_medium(
     """Add an additional contact medium (email/mobile/address) to a customer.
 
     Args:
-        customer_id: Customer ID in CUST-NNN format.
+        customer_id: Customer ID with the CUST- prefix (opaque suffix).
         medium_type: One of ``email``, ``mobile``, ``address``.
         value: The contact value itself — email string, E.164 phone, or
             address text, matching ``medium_type``.
@@ -153,7 +153,7 @@ async def customer_update_contact(
     patched — None fields are left untouched.
 
     Args:
-        customer_id: Customer ID in CUST-NNN format.
+        customer_id: Customer ID with the CUST- prefix (opaque suffix).
         email: New primary email (optional).
         phone: New primary phone (optional).
 
@@ -180,8 +180,8 @@ async def customer_remove_contact_medium(
     ``safety.py`` wrapper will block this without ``--allow-destructive``.
 
     Args:
-        customer_id: Customer ID in CUST-NNN format.
-        medium_id: Contact Medium ID in CM-NNN format. Obtain via ``customer.get``.
+        customer_id: Customer ID with the CUST- prefix (opaque suffix).
+        medium_id: Contact Medium ID with the CM- prefix (opaque suffix). Obtain via ``customer.get``.
 
     Returns:
         ``{"id": "CM-NNN", "removed": true}`` on success.
@@ -199,7 +199,7 @@ async def customer_close(customer_id: CustomerId) -> dict[str, Any]:
     """Close a customer account. DESTRUCTIVE — gated by ``safety.py``.
 
     Args:
-        customer_id: Customer ID in CUST-NNN format.
+        customer_id: Customer ID with the CUST- prefix (opaque suffix).
 
     Returns:
         The updated customer dict with ``status="closed"``.
@@ -226,7 +226,7 @@ async def customer_attest_kyc(
     attestation unlocks ``order.create``.
 
     Args:
-        customer_id: Customer ID in CUST-NNN format.
+        customer_id: Customer ID with the CUST- prefix (opaque suffix).
         provider: Attestation provider slug, e.g. ``"myinfo"``, ``"jumio"``.
         attestation_token: Signed JWT from the vendor. Never fabricate.
 
@@ -247,7 +247,7 @@ async def customer_get_kyc_status(customer_id: CustomerId) -> dict[str, Any]:
     """Return the current KYC state + expiry for a customer.
 
     Args:
-        customer_id: Customer ID in CUST-NNN format.
+        customer_id: Customer ID with the CUST- prefix (opaque suffix).
 
     Returns:
         ``{"state": "verified"|"unverified"|"expired", "verifiedAt", "expiresAt"}``.
@@ -277,7 +277,7 @@ async def interaction_log(
     what the outcome was — no more, no less.
 
     Args:
-        customer_id: Customer ID in CUST-NNN format.
+        customer_id: Customer ID with the CUST- prefix (opaque suffix).
         summary: One-line summary of the interaction (required). Example:
             ``"Purchased VAS_DATA_1GB — subscription SUB-007 unblocked."``
         body: Optional longer free text (diagnosis steps, cited IDs, etc.).
@@ -302,7 +302,7 @@ async def interaction_list(
     """Read the interaction log for a customer, newest first.
 
     Args:
-        customer_id: Customer ID in CUST-NNN format.
+        customer_id: Customer ID with the CUST- prefix (opaque suffix).
         limit: Max rows to return (default 50).
 
     Returns:

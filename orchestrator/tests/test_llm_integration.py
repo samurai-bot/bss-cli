@@ -17,6 +17,10 @@ question that exercises one tool call (``clock.now``), and assert:
 
 We intentionally do NOT assert the final text wording — small models
 phrase things differently on every run.
+
+v0.13 — uses ``astream_once`` directly (the in-memory ``Session``
+class was retired; multi-turn now goes through the cockpit's
+``Conversation`` store + ``astream_once(transcript=...)``).
 """
 
 from __future__ import annotations
@@ -24,10 +28,13 @@ from __future__ import annotations
 import os
 
 import pytest
-from langchain_core.messages import AIMessage, ToolMessage
 
 from bss_orchestrator.config import settings
-from bss_orchestrator.session import Session
+from bss_orchestrator.session import (
+    AgentEventFinalMessage,
+    AgentEventToolCallCompleted,
+    astream_once,
+)
 
 
 pytestmark = pytest.mark.integration
@@ -41,18 +48,19 @@ def _require_api_key() -> None:
 
 async def test_single_turn_invokes_clock_tool(_require_api_key: None) -> None:
     """One turn that should prompt the LLM to call ``clock.now``."""
-    session = Session(allow_destructive=False)
-    reply = await session.ask(
+    final_text = ""
+    tool_calls_completed: list[AgentEventToolCallCompleted] = []
+
+    async for event in astream_once(
         "What is the current system time? Use the clock tool to find out."
+    ):
+        if isinstance(event, AgentEventToolCallCompleted):
+            tool_calls_completed.append(event)
+        elif isinstance(event, AgentEventFinalMessage):
+            final_text = event.text
+
+    assert isinstance(final_text, str)
+    assert final_text.strip(), "LLM returned empty reply"
+    assert tool_calls_completed, (
+        "No tool invocations observed — the LLM answered purely from priors"
     )
-
-    # Plain sanity.
-    assert isinstance(reply, str)
-    assert reply.strip(), "LLM returned empty reply"
-
-    # At least one tool call happened during the turn.
-    tool_calls = [m for m in session.history if isinstance(m, ToolMessage)]
-    assert tool_calls, "No tool invocations observed — the LLM answered purely from priors"
-    # The conversation must end on an AI message (the natural-language answer).
-    ai_msgs = [m for m in session.history if isinstance(m, AIMessage)]
-    assert ai_msgs, "No AIMessage in history"

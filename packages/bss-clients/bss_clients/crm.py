@@ -11,6 +11,17 @@ from typing import Any
 from .auth import AuthProvider
 from .base import BSSClient
 
+# v0.13.1 — friendly target-state → state-machine-trigger map. The
+# CRM PATCH endpoint takes the trigger name, not the destination
+# state; this lets callers (LLM tools especially) stay on the
+# "to_state" mental model.
+_STATE_TO_TRIGGER: dict[str, str] = {
+    "in_progress": "take",
+    "pending_customer": "await_customer",
+    "resolved": "resolve",
+    "closed": "close",
+}
+
 
 class CRMClient(BSSClient):
     """Client for the CRM service (port 8002)."""
@@ -391,8 +402,26 @@ class CRMClient(BSSClient):
     async def transition_case(
         self, case_id: str, *, to_state: str
     ) -> dict[str, Any]:
-        """PATCH case with state transition."""
-        return await self.update_case(case_id, {"state": to_state})
+        """PATCH /crm-api/v1/case/{id} with a state transition.
+
+        v0.13.1 — the API takes ``{"trigger": ...}`` (state-machine
+        trigger name), NOT ``{"state": ...}`` (target state). We
+        convert here so callers can stay on the friendlier "to_state"
+        shape; unknown target states raise ValueError early so the
+        LLM gets a structured error rather than a server 422.
+        """
+        trigger = _STATE_TO_TRIGGER.get(to_state)
+        if trigger is None:
+            raise ValueError(
+                f"Unknown target state {to_state!r}; valid targets: "
+                f"{sorted(_STATE_TO_TRIGGER)}"
+            )
+        resp = await self._request(
+            "PATCH",
+            f"/crm-api/v1/case/{case_id}",
+            json={"trigger": trigger},
+        )
+        return resp.json()
 
     async def update_case_priority(
         self, case_id: str, *, priority: str
@@ -403,11 +432,17 @@ class CRMClient(BSSClient):
     async def close_case(
         self, case_id: str, *, resolution_code: str
     ) -> dict[str, Any]:
-        """POST /crm-api/v1/case/{id}/close — policy-gated."""
+        """POST /crm-api/v1/case/{id}/close — policy-gated.
+
+        v0.13.1 — body uses snake_case ``resolution_code`` to match the
+        ``CloseCaseRequest`` Pydantic schema in
+        ``services/crm/app/schemas/internal/case.py``. The prior
+        ``resolutionCode`` (camelCase) caused 422s on every close.
+        """
         resp = await self._request(
             "POST",
             f"/crm-api/v1/case/{case_id}/close",
-            json={"resolutionCode": resolution_code},
+            json={"resolution_code": resolution_code},
         )
         return resp.json()
 

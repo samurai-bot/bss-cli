@@ -38,7 +38,7 @@ def use_cli_context(*, actor: str = "cli-user", request_id: str | None = None) -
 def use_llm_context(*, request_id: str | None = None) -> str:
     """Mark subsequent bss-clients calls as originating from the LLM.
 
-    Actor is derived from ``settings.llm_actor`` (e.g. ``llm-xiaomi-mimo-v2-flash``)
+    Actor is derived from ``settings.llm_actor`` (e.g. ``llm-google-gemma-4-26b-a4b-it``)
     so audit rows reflect which model performed the action.
     """
     rid = request_id or str(uuid.uuid4())

@@ -1,34 +1,57 @@
-{% extends "base.html" %}
-{% block title %}Search · bss-cli csr{% endblock %}
+{% extends "cockpit_layout.html" %}
+{% block title_suffix %} · Find customer{% endblock %}
 
 {% block main %}
-<h1 class="page-title">Find a customer</h1>
-<p class="page-subtitle">By name fragment or full MSISDN.</p>
+<section class="cockpit-page search-page">
+  <header class="cockpit-page-header">
+    <h1 class="cockpit-page-title">Find a customer</h1>
+    <form method="get" action="/search" class="cockpit-search-form">
+      <input
+        type="text"
+        name="q"
+        value="{{ q }}"
+        placeholder="Search a customer by name or MSISDN…"
+        autocomplete="off"
+        autofocus
+      />
+      <button type="submit">Search</button>
+    </form>
+  </header>
 
-<form class="search-form" method="get" action="/search">
-  <input type="text" name="q" value="{{ q }}" autofocus placeholder="Ada, or 90000042" />
-  <button type="submit">Search</button>
-</form>
-
-{% if results %}
-<table class="search-results">
-  <thead>
-    <tr>
-      <th>Customer</th><th>Email</th><th>Phone</th><th>Subscriptions</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for r in results %}
-    <tr>
-      <td><a href="/customer/{{ r.id }}"><code>{{ r.id }}</code> {{ r.name }}</a></td>
-      <td>{{ r.email }}</td>
-      <td>{{ r.phone }}</td>
-      <td>{{ r.subscription_summary }}</td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
-{% elif q %}
-<p class="empty-state">No matches for "{{ q }}".</p>
-{% endif %}
+  {% if q and not results %}
+    <p class="cockpit-empty">
+      No customer matches <strong>{{ q }}</strong>. Try a different
+      fragment, or open a free-form
+      <a href="/" class="cockpit-text-link">conversation</a>.
+    </p>
+  {% elif results %}
+    <ul class="search-card-list">
+      {% for r in results %}
+      <li class="search-card">
+        <div class="search-card-main">
+          <div class="search-card-title">
+            <span class="search-card-name">{{ r.name }}</span>
+            <code class="search-card-id">{{ r.id }}</code>
+          </div>
+          <div class="search-card-meta">
+            <span>{{ r.status }}</span>
+            {% if r.kyc_status %}<span>KYC {{ r.kyc_status }}</span>{% endif %}
+            {% if r.msisdn %}<span>{{ r.msisdn }}</span>{% endif %}
+            {% if r.email %}<span>{{ r.email }}</span>{% endif %}
+          </div>
+        </div>
+        <form method="post" action="/search/start_session" class="search-card-cta">
+          <input type="hidden" name="customer_id" value="{{ r.id }}" />
+          <button type="submit" class="cockpit-cta-btn">Start session</button>
+        </form>
+      </li>
+      {% endfor %}
+    </ul>
+  {% elif not q %}
+    <p class="cockpit-empty">
+      Type a name or MSISDN above to find a customer. The cockpit will
+      open a fresh conversation pinned to whoever you pick.
+    </p>
+  {% endif %}
+</section>
 {% endblock %}

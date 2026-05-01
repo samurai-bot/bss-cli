@@ -6,11 +6,13 @@ description = "BSS-CLI command-line interface — direct verbs + LLM REPL"
 dependencies = [
     "bss-clients",
     "bss-clock",
+    "bss-cockpit",
     "bss-orchestrator",
     "bss-telemetry",
     "bss-middleware",
     "typer>=0.12",
     "rich>=13.7",
+    "prompt-toolkit>=3.0",
     "qrcode>=7.4",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
@@ -34,6 +36,7 @@ dev = [
 [tool.uv.sources]
 bss-clients = { workspace = true }
 bss-clock = { workspace = true }
+bss-cockpit = { workspace = true }
 bss-orchestrator = { workspace = true }
 bss-telemetry = { workspace = true }
 bss-middleware = { workspace = true }

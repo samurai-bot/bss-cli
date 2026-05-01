@@ -21,7 +21,7 @@ async def order_create(
     this call will succeed.
 
     Args:
-        customer_id: Customer ID in CUST-NNN format.
+        customer_id: Customer ID with the CUST- prefix (opaque suffix).
         offering_id: One of ``PLAN_S`` / ``PLAN_M`` / ``PLAN_L``.
         msisdn_preference: Optional preferred MSISDN. If unset or unavailable,
             SOM auto-picks one from the pool.
@@ -55,7 +55,7 @@ async def order_get(order_id: OrderId) -> dict[str, Any]:
     """Read an order with its items and current state.
 
     Args:
-        order_id: Order ID in ORD-NNN format.
+        order_id: Order ID with the ORD- prefix (opaque suffix).
 
     Returns:
         Order dict.
@@ -71,7 +71,7 @@ async def order_list(customer_id: CustomerId) -> list[dict[str, Any]]:
     """List orders for a customer, newest first.
 
     Args:
-        customer_id: Customer ID in CUST-NNN format.
+        customer_id: Customer ID with the CUST- prefix (opaque suffix).
 
     Returns:
         List of order dicts.
@@ -87,7 +87,7 @@ async def order_cancel(order_id: OrderId) -> dict[str, Any]:
     """Cancel an order before SOM starts it. DESTRUCTIVE — gated by ``safety.py``.
 
     Args:
-        order_id: Order ID in ORD-NNN format.
+        order_id: Order ID with the ORD- prefix (opaque suffix).
 
     Returns:
         Updated order dict with ``state="cancelled"``.
@@ -110,7 +110,7 @@ async def order_wait_until(
     early if it reaches a different terminal state (``failed``, ``cancelled``).
 
     Args:
-        order_id: Order ID in ORD-NNN format.
+        order_id: Order ID with the ORD- prefix (opaque suffix).
         target_state: The state to wait for (default ``completed``).
         timeout_s: Seconds to wait (default 30).
 

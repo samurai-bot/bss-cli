@@ -1,0 +1,14 @@
+# v0.13 — operator config files. The actuals are operator-local
+# (audit identity, tunable preferences, optional dev-URL overrides);
+# the .template files are committed scaffolding the autobootstrapper
+# copies on first run.
+OPERATOR.md
+settings.toml
+
+# v0.13.1 — persistent REPL history (Up/Down recall across `bss`
+# invocations).
+repl_history
+
+# But keep the templates checked in.
+!OPERATOR.md.template
+!settings.toml.template

@@ -37,11 +37,11 @@ async def ticket_open(
             ``information``, ``complaint``, ``configuration_change``,
             ``fraud_report``, ``cancellation_request``.
         subject: Short description of the issue.
-        case_id: Parent case (CASE-NNN) if this ticket belongs to one.
-        customer_id: Linked customer (CUST-NNN).
-        order_id: Linked order (ORD-NNN).
-        subscription_id: Linked subscription (SUB-NNN).
-        service_id: Linked service (SVC-NNN).
+        case_id: Parent case (CASE-... opaque suffix) if this ticket belongs to one.
+        customer_id: Linked customer (CUST-... opaque suffix).
+        order_id: Linked order (ORD-... opaque suffix).
+        subscription_id: Linked subscription (SUB-... opaque suffix).
+        service_id: Linked service (SVC-... opaque suffix).
 
     Returns:
         The created ticket ``{id, ticketType, state, priority, relatedEntity}``.
@@ -67,7 +67,7 @@ async def ticket_get(ticket_id: TicketId) -> dict[str, Any]:
     """Read a trouble ticket with full state history.
 
     Args:
-        ticket_id: Ticket ID in TKT-NNN format.
+        ticket_id: Ticket ID with the TKT- prefix (opaque suffix).
 
     Returns:
         Ticket dict including ``stateHistory`` and ``assignedAgent``.
@@ -109,8 +109,8 @@ async def ticket_assign(ticket_id: TicketId, agent_id: AgentId) -> dict[str, Any
     """Assign a ticket to an agent. Agent must be in ``active`` state.
 
     Args:
-        ticket_id: Ticket ID in TKT-NNN format.
-        agent_id: Agent ID in AGT-NNN format. Get from ``agents.list``.
+        ticket_id: Ticket ID with the TKT- prefix (opaque suffix).
+        agent_id: Agent ID with the AGT- prefix (opaque suffix). Get from ``agents.list``.
 
     Returns:
         Updated ticket dict with ``assignedAgent`` set.
@@ -130,7 +130,7 @@ async def ticket_transition(
     ``ticket.resolve`` and ``ticket.close`` for those specific transitions.
 
     Args:
-        ticket_id: Ticket ID in TKT-NNN format.
+        ticket_id: Ticket ID with the TKT- prefix (opaque suffix).
         to_state: Target state.
 
     Returns:
@@ -150,7 +150,7 @@ async def ticket_resolve(
     """Resolve a ticket with mandatory resolution notes.
 
     Args:
-        ticket_id: Ticket ID in TKT-NNN format.
+        ticket_id: Ticket ID with the TKT- prefix (opaque suffix).
         resolution_notes: Free text — what fixed the issue.
 
     Returns:
@@ -171,7 +171,7 @@ async def ticket_close(ticket_id: TicketId) -> dict[str, Any]:
     """Close a resolved ticket.
 
     Args:
-        ticket_id: Ticket ID in TKT-NNN format.
+        ticket_id: Ticket ID with the TKT- prefix (opaque suffix).
 
     Returns:
         Updated ticket dict with ``state="closed"``.
@@ -189,7 +189,7 @@ async def ticket_cancel(ticket_id: TicketId) -> dict[str, Any]:
     this without ``--allow-destructive``.
 
     Args:
-        ticket_id: Ticket ID in TKT-NNN format.
+        ticket_id: Ticket ID with the TKT- prefix (opaque suffix).
 
     Returns:
         Updated ticket dict with ``state="cancelled"``.

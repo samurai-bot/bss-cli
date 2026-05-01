@@ -1,21 +1,21 @@
-"""LLM REPL session — conversation state + single-shot + streaming entry points.
+"""LLM session — single-shot + streaming entry points.
 
-Three entry points:
+Two entry points (the v0.6 in-memory ``Session`` class was retired in
+v0.13 — the cockpit's ``Conversation`` store is the only multi-turn
+shape now, and ``astream_once(transcript=...)`` feeds prior turns into
+the LangGraph messages list):
 
 - ``ask_once(text, *, allow_destructive=False)`` — one-turn blocking call.
   Used by ``bss ask '…'``. No history.
 
-- ``Session(allow_destructive=...)`` — stateful multi-turn REPL object.
-  Tracks the running ``messages`` list so the model sees prior turns. Used
-  by the ``bss`` REPL entrypoint.
+- ``astream_once(text, *, allow_destructive=False, channel="llm",
+  transcript="", ...)`` (v0.4+, transcript wired into graph messages
+  in v0.13) — streaming variant of ask_once. Yields typed
+  ``AgentEvent`` dataclasses as the graph produces them. Used by
+  portals to render tool-call logs live via SSE. Same tool-chain as
+  ask_once, same policy gating; just observable as it happens.
 
-- ``astream_once(text, *, allow_destructive=False, channel="llm")`` (v0.4+)
-  — streaming variant of ask_once. Yields typed ``AgentEvent`` dataclasses
-  as the graph produces them. Used by portals to render tool-call logs
-  live via SSE. Same tool-chain as ask_once, same policy gating; just
-  observable as it happens.
-
-All three set the bss-clients context (channel header) before invoking the
+Both set the bss-clients context (channel header) before invoking the
 graph so downstream service-to-service calls carry the right attribution.
 """
 
@@ -27,7 +27,13 @@ from typing import Any, AsyncIterator, Union
 
 from bss_clients import reset_service_identity_token, set_service_identity_token
 from bss_telemetry import semconv, tracer
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 
 from . import auth_context
 from .clients import get_clients
@@ -178,103 +184,13 @@ def _truncate(text: str, limit: int = _RESULT_TRUNCATE) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Session + ask_once
+# ask_once — single-shot non-streaming entry point
 # ─────────────────────────────────────────────────────────────────────────────
-
-
-@dataclass
-class Session:
-    """Multi-turn REPL session.
-
-    The compiled graph is cached on the instance so we don't rebuild the
-    tool list for every turn. Destructive gating is fixed at construction —
-    toggling mid-session would be confusing, re-open the session instead.
-    """
-
-    allow_destructive: bool = False
-    temperature: float = 0.0
-    history: list[BaseMessage] = None  # type: ignore[assignment]
-    _graph: Any = None
-
-    def __post_init__(self) -> None:
-        if self.history is None:
-            self.history = []
-        self._graph = build_graph(
-            allow_destructive=self.allow_destructive,
-            temperature=self.temperature,
-        )
-
-    async def ask(self, text: str) -> str:
-        """Send one user turn. Returns the assistant's reply text."""
-        with tracer("bss-orchestrator").start_as_current_span("bss.ask") as span:
-            span.set_attribute(semconv.BSS_CHANNEL, "llm")
-            span.set_attribute("bss.ask.turn", len(self.history) // 2 + 1)
-            use_llm_context()
-            self.history.append(HumanMessage(content=text))
-            state = await self._graph.ainvoke({"messages": self.history})
-            self.history = list(state["messages"])
-            return _last_ai_text(self.history)
-
-    async def astream(self, text: str) -> AsyncIterator[AgentEvent]:
-        """Streaming variant of :meth:`ask` — yields AgentEvents as the
-        graph runs. Conversation history is updated as messages stream in.
-        Used by the v0.6 REPL so tool-call observations can render live
-        via the matching :mod:`bss_cli.renderers` alongside the model's
-        text reply (rather than the prose-only view ``ask`` produced).
-        """
-        with tracer("bss-orchestrator").start_as_current_span("bss.ask") as span:
-            span.set_attribute(semconv.BSS_CHANNEL, "llm")
-            span.set_attribute("bss.ask.turn", len(self.history) // 2 + 1)
-            span.set_attribute("bss.ask.streaming", True)
-            use_llm_context()
-            self.history.append(HumanMessage(content=text))
-            yield AgentEventPromptReceived(prompt=text)
-
-            seen_call_ids: set[str] = set()
-            last_ai_text = ""
-
-            try:
-                async for update in self._graph.astream(
-                    {"messages": self.history},
-                    stream_mode="updates",
-                ):
-                    for node_output in update.values():
-                        messages = node_output.get("messages", []) if isinstance(node_output, dict) else []
-                        for msg in messages:
-                            self.history.append(msg)
-                            if isinstance(msg, AIMessage):
-                                tool_calls = getattr(msg, "tool_calls", []) or []
-                                for tc in tool_calls:
-                                    call_id = tc.get("id", "") or ""
-                                    if call_id in seen_call_ids:
-                                        continue
-                                    seen_call_ids.add(call_id)
-                                    yield AgentEventToolCallStarted(
-                                        name=tc.get("name", "") or "",
-                                        args=tc.get("args", {}) or {},
-                                        call_id=call_id,
-                                    )
-                                text_out = _ai_text(msg)
-                                if text_out and not tool_calls:
-                                    last_ai_text = text_out
-                            elif isinstance(msg, ToolMessage):
-                                full = str(msg.content) if msg.content is not None else ""
-                                yield AgentEventToolCallCompleted(
-                                    name=msg.name or "",
-                                    call_id=msg.tool_call_id or "",
-                                    result=_truncate(full),
-                                    result_full=full,
-                                    is_error=getattr(msg, "status", None) == "error",
-                                )
-            except Exception as exc:  # noqa: BLE001
-                yield AgentEventError(message=f"{type(exc).__name__}: {exc}")
-                return
-
-            yield AgentEventFinalMessage(text=last_ai_text)
-
-    def reset(self) -> None:
-        """Clear conversation history — next ``ask`` starts fresh."""
-        self.history = []
+#
+# v0.6's in-memory ``Session`` class was retired in v0.13. The cockpit's
+# Postgres-backed ``Conversation`` store + ``astream_once(transcript=...)``
+# is now the only multi-turn shape — process-local message lists no
+# longer exist as a public surface.
 
 
 async def ask_once(text: str, *, allow_destructive: bool = False) -> str:
@@ -405,9 +321,29 @@ async def astream_once(
             last_ai_text = ""
             usage_total = {"input_tokens": 0, "output_tokens": 0, "model": ""}
 
+            # v0.13 — when the caller passes a non-empty ``transcript``,
+            # parse it into typed prior-turn messages and prepend them
+            # to this turn's HumanMessage. Multi-turn coherence in the
+            # LangGraph agent depends on the model seeing prior turns;
+            # before v0.13, ``transcript`` was only consumed by
+            # auth_context (for the v0.12 escalation transcript-link)
+            # and the model saw a single isolated HumanMessage every
+            # turn. The cockpit's Conversation.transcript_text() emits
+            # the format ``role:\ncontent\n\nrole:\ncontent`` —
+            # ``_messages_from_transcript`` is the parser. Empty
+            # transcripts (chat surface pre-cockpit) yield ``[]`` so
+            # the v0.12 contract is preserved.
+            prior_messages: list[BaseMessage] = (
+                _messages_from_transcript(transcript) if transcript else []
+            )
+            initial_messages: list[BaseMessage] = [
+                *prior_messages,
+                HumanMessage(content=prompt),
+            ]
+
             try:
                 async for update in graph.astream(
-                    {"messages": [HumanMessage(content=prompt)]},
+                    {"messages": initial_messages},
                     stream_mode="updates",
                 ):
                     # update shape: {node_name: {"messages": [new_messages...]}}
@@ -529,6 +465,90 @@ async def astream_once(
                 reset_service_identity_token(identity_reset_token)
             if auth_reset_token is not None:
                 auth_context.reset_actor(auth_reset_token)
+
+
+def _messages_from_transcript(transcript: str) -> list[BaseMessage]:
+    """Parse a Conversation.transcript_text() string into typed messages.
+
+    The cockpit's transcript format (see
+    ``bss_cockpit.conversation.Conversation.transcript_text``):
+
+        user:
+        hello
+
+        assistant:
+        hi there
+
+        tool[customer.get]:
+        {"id": "C-1"}
+
+    Mapping:
+    - ``user:`` blocks → :class:`HumanMessage`
+    - ``assistant:`` blocks → :class:`AIMessage`
+    - ``tool[NAME]:`` blocks → :class:`SystemMessage` (a brief
+      "(prior tool result for NAME)" header + the body). We don't
+      reconstruct ToolMessage with a ``tool_call_id`` because that
+      field has to pair with a prior AIMessage's tool_calls; faking
+      one breaks LangGraph's assertions. SystemMessage gives the
+      model the same information without the structural lie.
+
+    Empty / malformed input returns ``[]`` — callers fall through to
+    the single-HumanMessage path. Robustness over fidelity: a
+    transcript that fails to parse should never break a turn.
+
+    Truncation: if the transcript exceeds ``_TRANSCRIPT_MAX_CHARS``,
+    keep the most recent suffix and prepend an elided-marker turn.
+    Doctrine "the trap" — long-running cockpit sessions feeding 50k
+    chars of transcript every turn is a token-cost trap. Cap here.
+    """
+    if not transcript or not transcript.strip():
+        return []
+
+    if len(transcript) > _TRANSCRIPT_MAX_CHARS:
+        transcript = (
+            f"[…earlier turns elided to keep prompt within "
+            f"{_TRANSCRIPT_MAX_CHARS} chars; ask the operator to "
+            f"/reset if continuity matters…]\n\n"
+            + transcript[-_TRANSCRIPT_MAX_CHARS:]
+        )
+
+    out: list[BaseMessage] = []
+    # Each turn is ``role:\ncontent`` separated by blank lines. Split
+    # on the canonical ``\n\n`` joiner first; the parser is forgiving
+    # about extra whitespace.
+    for block in transcript.split("\n\n"):
+        block = block.strip("\n")
+        if not block:
+            continue
+        head, _, body = block.partition("\n")
+        head = head.strip().rstrip(":")
+        body = body.strip()
+        if not head:
+            continue
+        if head == "user":
+            out.append(HumanMessage(content=body))
+        elif head == "assistant":
+            out.append(AIMessage(content=body))
+        elif head.startswith("tool"):
+            # tool[customer.get]: → SystemMessage with a prior-result note.
+            tool_name = ""
+            if head.startswith("tool[") and head.endswith("]"):
+                tool_name = head[len("tool["):-1]
+            label = (
+                f"prior tool result for {tool_name}"
+                if tool_name else "prior tool result"
+            )
+            out.append(SystemMessage(content=f"({label}):\n{body}"))
+        # Unknown roles are skipped silently — better than crashing
+        # the turn on a future role we haven't added a mapping for.
+    return out
+
+
+# Cap on the prior transcript fed back to the LLM each turn. Chosen so
+# a 50-turn cockpit session is still served (each turn is ~200-500
+# chars typically), but a runaway debug dump doesn't blow up token
+# cost. Operator can /reset to clear messages on the same session id.
+_TRANSCRIPT_MAX_CHARS = 32_000
 
 
 def _ai_text(msg: AIMessage) -> str:

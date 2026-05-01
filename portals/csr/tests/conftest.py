@@ -1,8 +1,13 @@
-"""Shared fixtures for CSR portal tests.
+"""Shared fixtures for CSR portal (v0.13 cockpit) tests.
 
-Mocks ``get_clients()`` at every route's import site so tests run
-without a live BSS stack. Each test can override the canned data on
-the fixture before exercising the route.
+The v0.13 cockpit collapses the v0.5 portal pattern; the test surface
+here covers the two remaining route files:
+
+* ``routes/cockpit.py`` — driven by tests in ``test_cockpit_routes.py``
+  against the dev DB (no mocked clients; the cockpit's read paths are
+  exercised at the route layer with real Postgres).
+* ``routes/case.py`` — read-only deep link, exercised in
+  ``test_routes_case.py`` against a mocked CRM client.
 """
 
 from __future__ import annotations
@@ -18,82 +23,38 @@ from bss_csr.config import Settings
 from bss_csr.main import create_app
 
 
-# ─── Fake clients ────────────────────────────────────────────────────
+# ─── Fake CRM client (used only by test_routes_case.py) ──────────────
 
 
 @dataclass
 class FakeCRM:
-    customers_by_id: dict[str, dict[str, Any]] = field(default_factory=dict)
-    customers_by_msisdn: dict[str, dict[str, Any]] = field(default_factory=dict)
-    customers_by_name: list[dict[str, Any]] = field(default_factory=list)
-    cases: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
-    interactions: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    case_raw: dict[str, Any] | None = None
+    case_404: bool = False
+    tickets_by_case: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    transcripts: dict[str, dict[str, Any]] = field(default_factory=dict)
+    transcript_get_error: Exception | None = None
 
-    async def get_customer(self, customer_id: str) -> dict[str, Any]:
-        if customer_id not in self.customers_by_id:
+    async def get_case(self, case_id: str) -> dict[str, Any]:
+        if self.case_404:
             from bss_clients.errors import ClientError
-            raise ClientError(404, f"Customer {customer_id} not found")
-        return dict(self.customers_by_id[customer_id])
-
-    async def find_customer_by_msisdn(self, msisdn: str) -> dict[str, Any]:
-        if msisdn not in self.customers_by_msisdn:
+            raise ClientError(404, f"Case {case_id} not found")
+        if self.case_raw is None:
             from bss_clients.errors import ClientError
-            raise ClientError(404, f"No customer for {msisdn}")
-        return dict(self.customers_by_msisdn[msisdn])
+            raise ClientError(404, f"Case {case_id} not found")
+        return dict(self.case_raw)
 
-    async def list_customers(
-        self, *, name_contains: str | None = None, **_kw: Any
-    ) -> list[dict[str, Any]]:
-        if not name_contains:
-            return list(self.customers_by_name)
-        return [
-            c for c in self.customers_by_name
-            if name_contains.lower() in (
-                f"{(c.get('individual') or {}).get('givenName','')} "
-                f"{(c.get('individual') or {}).get('familyName','')}".lower()
-            )
-        ]
+    async def list_tickets(self, *, case_id: str) -> list[dict[str, Any]]:
+        return list(self.tickets_by_case.get(case_id, []))
 
-    async def list_cases(self, *, customer_id: str) -> list[dict[str, Any]]:
-        return list(self.cases.get(customer_id, []))
-
-    async def list_interactions(
-        self, *, customer_id: str, limit: int = 20
-    ) -> list[dict[str, Any]]:
-        return list(self.interactions.get(customer_id, []))[:limit]
-
-
-@dataclass
-class FakeSubscription:
-    by_customer: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
-    by_id: dict[str, dict[str, Any]] = field(default_factory=dict)
-
-    async def list_for_customer(self, customer_id: str) -> list[dict[str, Any]]:
-        return list(self.by_customer.get(customer_id, []))
-
-    async def get(self, subscription_id: str) -> dict[str, Any]:
-        if subscription_id not in self.by_id:
-            from bss_clients.errors import ClientError
-            raise ClientError(404, "no such sub")
-        return dict(self.by_id[subscription_id])
-
-
-@dataclass
-class FakePayment:
-    by_customer: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
-
-    async def list_methods(self, *, customer_id: str) -> list[dict[str, Any]]:
-        return list(self.by_customer.get(customer_id, []))
+    async def get_chat_transcript(self, transcript_hash: str) -> dict[str, Any]:
+        if self.transcript_get_error is not None:
+            raise self.transcript_get_error
+        return dict(self.transcripts[transcript_hash])
 
 
 @dataclass
 class FakeBundle:
     crm: FakeCRM = field(default_factory=FakeCRM)
-    subscription: FakeSubscription = field(default_factory=FakeSubscription)
-    payment: FakePayment = field(default_factory=FakePayment)
-
-
-# ─── Fixtures ────────────────────────────────────────────────────────
 
 
 @pytest.fixture
@@ -102,60 +63,21 @@ def fake_clients() -> FakeBundle:
 
 
 @pytest.fixture
-def client(fake_clients: FakeBundle):
-    with patch("bss_csr.routes.search.get_clients", return_value=fake_clients), \
-         patch("bss_csr.routes.customer.get_clients", return_value=fake_clients):
+def case_client(fake_clients: FakeBundle, monkeypatch):
+    """TestClient with the case route's get_clients() patched.
+
+    Only used by test_routes_case.py — the cockpit-routes tests
+    exercise the real DB-backed flow and use their own fixture.
+    """
+    # Provide a no-op DB URL so lifespan can construct the store; the
+    # case route doesn't touch it.
+    monkeypatch.setenv(
+        "BSS_DB_URL",
+        monkeypatch.delenv("BSS_DB_URL", raising=False) or "postgresql+asyncpg://bss:bss_password@localhost:5432/bss",
+    )
+    with patch(
+        "bss_csr.routes.case.get_clients", return_value=fake_clients
+    ):
         app = create_app(Settings())
         with TestClient(app) as c:
             yield c
-
-
-@pytest.fixture
-def authed_client(client):
-    """TestClient with a logged-in operator cookie set."""
-    login = client.post(
-        "/login", data={"username": "test-csr"}, follow_redirects=False
-    )
-    assert login.status_code == 303
-    # TestClient persists cookies across requests automatically.
-    yield client
-
-
-# ─── Sample TMF-shaped payloads ──────────────────────────────────────
-
-
-def sample_customer(customer_id="CUST-test01", name=("Ada", "Lovelace")) -> dict:
-    return {
-        "id": customer_id,
-        "individual": {"givenName": name[0], "familyName": name[1]},
-        "contactMedium": [
-            {"mediumType": "email", "value": f"{customer_id.lower()}@example.com"},
-            {"mediumType": "mobile", "value": "+6590001234"},
-        ],
-        "status": "active",
-        "kycStatus": "verified",
-        "customerSince": "2026-04-23T00:00:00Z",
-    }
-
-
-def sample_subscription(
-    sub_id="SUB-007",
-    customer_id="CUST-test01",
-    state="active",
-    offering="PLAN_M",
-    msisdn="90000042",
-    balances=None,
-) -> dict:
-    return {
-        "id": sub_id,
-        "customerId": customer_id,
-        "state": state,
-        "offeringId": offering,
-        "msisdn": msisdn,
-        "iccid": "8910101000000000001",
-        "balances": balances or [
-            {"allowanceType": "data", "remaining": 5120, "total": 5120, "unit": "mb"},
-            {"allowanceType": "voice", "remaining": -1, "total": -1, "unit": "min"},
-        ],
-        "nextRenewalAt": "2026-05-23T00:00:00Z",
-    }

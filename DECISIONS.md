@@ -1878,3 +1878,200 @@ state + closed-at. The hash is a content-fingerprint; if a
 transcript needs to be reconstructed for legal hold, the case
 row + the body row form a complete record without reaching
 into a separate object store.
+
+
+## 2026-05-01 — v0.13.0 No staff-side auth
+
+**Decision:** Retire the Phase-12 staff-side OAuth/RBAC ambition. The
+v0.5 stub-login pattern is gone (every route, template, module, and
+test deleted in PR7). The operator cockpit (CLI REPL canonical;
+browser veneer at port 9002) runs single-operator-by-design behind a
+secure perimeter. `actor` for cockpit-driven downstream calls comes
+from `.bss-cli/settings.toml` — descriptive only, not verified. The
+audit trail is "who set the actor name + when" rather than "who
+typed their password".
+
+**Why:** BSS-CLI is operated by a 1–3 person team. OAuth + Keycloak +
+roles + per-tool ACLs adds operational drag (rotation, account
+lifecycle, role drift) without proportional security gain at this
+scale. The trust boundary is the perimeter (Tailscale, VPN, local
+LAN), not a login wall. CLAUDE.md's seven-motto principle 4 —
+"CLI-first, LLM-native" — is incompatible with a multi-user staff
+auth surface; doctrinal honesty argues for a clean retirement.
+
+**Alternatives rejected:**
+
+- **Keep stub login as a placeholder** until Phase 12 ships the real
+  thing. Rejected: the placeholder pretended to be auth and confused
+  contributors who reasonably assumed it'd be tightened later.
+- **Ship a real OAuth/JWT flow now.** Rejected: scope creep, weeks
+  of work, drag for a 1–3 person team. The operational cost is real
+  and unbudgeted.
+- **Defer the decision.** Rejected: deferral leaves the v0.5
+  artifact in place and signals "we'll fix this later". v0.13 is
+  the right moment to make the call explicit.
+
+**Consequences:** No `services/auth`. No 8-coarse-roles model. No
+fine-permissions = tool-name model. The cockpit's `operator_cockpit`
+profile is a coverage assertion (full registry minus `*.mine`
+wrappers), not a permission gate. If a future deployment genuinely
+needs multi-operator separation, the path is multi-tenant carve-out
+(one cockpit container per operator namespace), not a login wall on
+the same container. Customer-side auth (v0.8 portal session,
+v0.10 step-up, v0.12 chat scoping) is unchanged — this decision
+narrows the doctrine to "no STAFF auth", not "no auth".
+
+## 2026-05-01 — v0.13.0 REPL canonical, browser veneer
+
+**Decision:** The CLI REPL (`bss`) is the canonical operator
+cockpit. The browser at `localhost:9002/cockpit/<id>` is a thin
+veneer over the same Postgres-backed `cockpit.session` /
+`cockpit.message` / `cockpit.pending_destructive` tables. Both
+surfaces drive `astream_once(transcript=, actor=, channel=,
+service_identity="operator_cockpit", tool_filter="operator_cockpit",
+system_prompt=)`; the only difference is the channel name (`"cli"`
+vs `"portal-csr"`) on outbound bss-clients calls.
+
+**Why:** CLAUDE.md doctrine 4 — "CLI-first, LLM-native". The REPL
+already does 80% of the shape (slash commands, ASCII renderers,
+inline tool-call observation). Building a separate browser-only
+surface would duplicate the conversation model, the pending-
+destructive contract, the focus pin, the 360 renderer dispatch.
+One implementation, two surfaces. Operators who live in the
+terminal use `bss --session SES-...`; team members who don't open
+the same session in a browser tab.
+
+**Alternatives rejected:**
+
+- **Browser-only surface.** Rejected: contradicts the CLI-first
+  doctrine; the REPL is faster for the operator who's already in a
+  terminal.
+- **REPL-only surface.** Rejected: shipped MVNOs sometimes have
+  team members who prefer browser UIs (account managers, billing
+  analysts). The shared store costs ~200 lines of FastAPI for the
+  veneer; well worth the inclusion.
+- **Two stores, one synchronization layer.** Rejected: that's a
+  v0.5 mistake (in-memory `Session` + portal `OperatorSessionStore`
+  + `AgentAskStore`). v0.13 collapses the lot to one Postgres-backed
+  store; cross-surface drift becomes "the same SELECT against the
+  same row", not a bidirectional sync problem.
+
+**Consequences:** Slash-command parity is a doctrine target — every
+REPL command must have a browser affordance and vice versa. The
+in-memory `Session` class in `orchestrator/bss_orchestrator/session.py`
+is retired; `astream_once(transcript=)` is the only multi-turn shape
+(PR6 wires the transcript parser into the LangGraph messages list so
+the model actually sees prior turns).
+
+## 2026-05-01 — v0.13.0 OPERATOR.md prepended to system prompt
+
+**Decision:** `.bss-cli/OPERATOR.md` is the operator's editable
+contract with the agent. The cockpit's
+`bss_cockpit.build_cockpit_prompt(operator_md, ...)` prepends it
+verbatim to every system prompt. Hot-reloaded on mtime; no process
+restart. Bootstrapped on first run from a `.template` sibling (or
+from an embedded default if templates aren't on disk — needed for
+container deploys).
+
+**Why:** Operator persona + house rules (currency, tone,
+escalation rules) change more often than agent behavior — making
+them code requires a deploy; making them config (TOML) requires a
+schema; making them markdown lets the operator iterate by `vim`.
+Claude-Code-shape: the agent sees the operator's voice every turn.
+
+**Alternatives rejected:**
+
+- **Operator persona in `settings.toml`.** Rejected: TOML's prose
+  ergonomics are bad; multi-paragraph house rules become an array
+  of strings; the editor experience is worse than a markdown file.
+- **Operator persona as code.** Rejected: deploy-required iteration
+  is a non-starter for an operator-tunable preference.
+- **Per-customer OPERATOR.md.** Rejected: scope creep. One global
+  persona file; if "different operators want different defaults",
+  edit `settings.toml.actor` and let the persona stay shared (or
+  fork the file by symlink and switch links).
+
+**Consequences:** Operators can drift the cockpit into prompt-
+injection territory by writing "ignore all policy violations" into
+`OPERATOR.md`. That's the operator's choice — the trust model is
+"the perimeter delegates to the operator". CLAUDE.md anti-patterns
+flag the foot-gun explicitly so a future operator doesn't reach for
+it as an "easy override" without realising they've moved the trust
+boundary. The cockpit's safety contract (propose-then-`/confirm`,
+escalation list) is **code**-defined in
+`bss_cockpit.prompts._COCKPIT_INVARIANTS` — not editable from
+markdown.
+
+## 2026-05-01 — v0.13.0 One Conversation store, two surfaces
+
+**Decision:** Cockpit conversations live in `cockpit.session` /
+`cockpit.message` / `cockpit.pending_destructive` (alembic 0014).
+Both surfaces consume; neither reimplements. The store is owned by
+the new `bss-cockpit` workspace package. Customer chat keeps its
+own per-customer conversation store (`audit.chat_transcript`,
+v0.12) — different scoping concern, different lifecycle.
+
+**Why:** v0.5 invented `OperatorSessionStore` (cookie → operator id)
++ `AgentAskStore` (one-shot ask → SSE) + an in-memory `Session`
+class in the orchestrator (multi-turn graph state). Three stores,
+no convergence; resuming an exited REPL was impossible; the browser
+saw nothing the REPL had typed. v0.13 collapses all three into one
+Postgres-backed conversation. `astream_once(transcript=...)` (PR6)
+feeds prior turns into the LangGraph messages list so multi-turn
+coherence actually works.
+
+**Alternatives rejected:**
+
+- **Per-surface stores with sync.** Rejected: every sync layer is a
+  bug source.
+- **In-memory + checkpoint to disk.** Rejected: two surfaces, one
+  process means one cache; the moment the operator runs the REPL
+  alongside a browser, the in-memory shadow drifts.
+- **Reuse `audit.chat_transcript` for cockpit.** Rejected: customer
+  chat's per-customer scoping doesn't fit the operator's per-session
+  model; mixing the two muddles the audit trail.
+
+**Consequences:** Adding a store column requires an alembic
+migration. Schema drift is impossible (one schema, one source).
+Future convergence with the customer-chat store is a post-v0.13
+question — the two stores share API shape but not lifecycle, and
+the doctrine accepts the duplication.
+
+## 2026-05-01 — v0.13.0 Inline /confirm for destructive actions
+
+**Decision:** Destructive cockpit operations follow propose →
+operator types `/confirm` (REPL) or clicks the button (browser) →
+next turn runs `allow_destructive=True` and consumes the
+`cockpit.pending_destructive` row. The destructive-tool list is
+narrow and code-defined (`bss_orchestrator.safety.DESTRUCTIVE_TOOLS`):
+`subscription.terminate`, `payment.remove_method`,
+`customer.close`, `customer.remove_contact_medium`, `case.close`,
+`ticket.cancel`, `order.cancel`, `provisioning.set_fault_injection`,
+plus a couple of admin-shaped helpers. Additive operations (VAS
+purchase, KYC attest, plan-change schedule, case open, etc.) run
+without the bracket — they're recoverable.
+
+**Why:** The cockpit's only review surface, after staff auth
+retired, is the operator's eye on the propose payload. The LLM
+proposes wrong things sometimes; even a trusted operator wants a
+"are you sure" beat for irreversible ops. Mirrors the customer-side
+step-up pattern (v0.10) shape, but the trigger is operator
+acknowledgement rather than OTP.
+
+**Alternatives rejected:**
+
+- **Always run with `allow_destructive=True`.** Rejected: removes
+  the only review surface; an LLM hallucinating a `terminate` call
+  costs the customer a number.
+- **Always run with `allow_destructive=False`.** Rejected: the
+  cockpit becomes useless for legitimate ops.
+- **Per-action policy table.** Rejected: scope creep; the small
+  code-defined list is enough for v0.13 and easier to audit.
+
+**Consequences:** Adding a destructive tool means adding to
+`DESTRUCTIVE_TOOLS` in `bss_orchestrator/safety.py`. The
+`_DESTRUCTIVE_PREFIXES` lists in the REPL and cockpit route
+mirror this for the propose-detection side; drift between the two
+is a doctrine bug to catch by code review (no greppable test, since
+the lists serve different purposes — one filters tools, the other
+detects propose intent).

@@ -148,7 +148,7 @@ A portal is a **channel** onto the BSS — a thin HTTP surface that translates a
 | # | Portal | Port | Audience | Writes go through… | Inbound auth |
 |---|---|---|---|---|---|
 | 1 | self-serve | 9001 | Prospect browsing / signing up + post-login customer self-serve + chat | **(v0.11+)** All routine flows — signup funnel + post-login self-serve — write *directly* via `bss-clients`. The chat surface (v0.12) is the *only* orchestrator-mediated route, invoked via `astream_once(channel="portal-chat", actor=customer_id, tool_filter="customer_self_serve", service_identity="portal_self_serve")`. | **email + magic link / OTP (v0.8)**; chat additionally caps + scopes per customer (v0.12). See "Portal authentication" + "Chat scoping" below. |
-| 2 | csr | 9002 | CSR operators | `agent_bridge.ask_about_customer` → `astream_once(channel="portal-csr", actor=<op>)` | stub login (cookie); Phase 12 swaps for real OAuth |
+| 2 | csr | 9002 | Operator cockpit (browser veneer over the v0.13 cockpit Conversation store; CLI REPL is canonical) | The cockpit chat route — `routes/cockpit.py /cockpit/{id}/events` — drives `astream_once(channel="portal-csr", actor=settings.actor, service_identity="operator_cockpit", tool_filter="operator_cockpit")`. All other cockpit routes (sessions index, thread page, focus / reset / confirm POSTs) use the shared `Conversation` store directly. | **None.** v0.13 retired the v0.5 stub-login pattern (DECISIONS 2026-05-01); the cockpit runs single-operator-by-design behind a secure perimeter. `actor` from `.bss-cli/settings.toml` (descriptive, not verified). |
 
 The portal-write story split (consolidated through v0.12):
 
@@ -209,11 +209,11 @@ The agent-log widget primitives, SSE plumbing helpers (`format_frame`, `status_h
 
 Extracted in v0.5 (before the second portal was written) to prevent the agent-log widget from drifting between portals — a fix landing only in self-serve when both need it would surface as a demo bug a month later. Documented in `DECISIONS.md` 2026-04-23.
 
-**Where the streaming-tool-call surface lives now:** the v0.4 self-serve signup widget is retired (signup went direct in v0.11). The CSR `ask` flow on `/customer/{id}` still streams agent events via SSE through `bss_portal_ui.agent_log.render_html` — this is where the agent-log shape earns its keep. The v0.12 self-serve chat surface is a different shape — it streams chat-bubble HTML (full assistant text + minimal markdown), not truncated agent-log rows — and so it ships its own renderers in `portals/self-serve/bss_self_serve/routes/chat.py` while still consuming the package's `format_frame` + `status_html` for the SSE wire format. Details in `phases/V0_4_0.md`, `phases/V0_5_0.md`, and `phases/V0_12_0.md`.
+**Where the streaming-tool-call surface lives now:** the v0.4 self-serve signup widget is retired (signup went direct in v0.11). The v0.5 CSR `ask`-on-customer-360 flow is retired (PR7 in v0.13 collapsed the entire portal). The chat-bubble HTML renderers (`render_assistant_bubble` / `render_tool_pill` / `render_chat_markdown`) were extracted from `routes/chat.py` to `bss_portal_ui.chat_html` in v0.13 PR5 so the operator cockpit thread renders identically to the customer chat surface. Both surfaces share `format_frame` + `status_html` for SSE wire format. Details in `phases/V0_4_0.md`, `phases/V0_5_0.md` (retired routes), `phases/V0_12_0.md` (chat surface), and `phases/V0_13_0.md` (cockpit + helper extraction).
 
 ### Named-token perimeter (v0.9)
 
-v0.9 splits the v0.3 single-token model so each external-facing surface carries its own identity at the BSS perimeter. The diagram below shows the post-v0.9 token flow; the orchestrator and CSR keep using `BSS_API_TOKEN` (default identity), while the self-serve portal carries `BSS_PORTAL_SELF_SERVE_API_TOKEN` (`portal_self_serve` identity).
+v0.9 splits the v0.3 single-token model so each external-facing surface carries its own identity at the BSS perimeter. v0.13 added a third named token, `BSS_OPERATOR_COCKPIT_API_TOKEN`, for the cockpit. The orchestrator keeps using `BSS_API_TOKEN` (default identity); the self-serve portal carries `BSS_PORTAL_SELF_SERVE_API_TOKEN` (`portal_self_serve`); the cockpit carries `BSS_OPERATOR_COCKPIT_API_TOKEN` (`operator_cockpit`). The diagram below shows the post-v0.9 token flow.
 
 ```
                 ┌─────────────┐
@@ -270,7 +270,7 @@ Phase 12 swap: replace `BSSApiTokenMiddleware` with a JWT validator. `auth_conte
 
 ### Portal authentication (self-serve, v0.8)
 
-v0.8 puts a login wall in front of the self-serve portal. CSR console retains its v0.5 stub auth (Phase 12 picks up CSR's auth story). Schema, library, and middleware live separately so Phase 12 can swap the OAuth/JWT validator without touching business logic.
+v0.8 puts a login wall in front of the self-serve portal. The CSR (operator) surface is **not** auth-gated — v0.13 retired the v0.5 stub-login pattern entirely; the cockpit runs single-operator-by-design behind a secure perimeter (see "v0.13 operator cockpit" below). Schema, library, and middleware on the customer-side stay portable — if a future deployment ever needs real OAuth there, the swap is mechanical.
 
 - **Schema:** `portal_auth` (migration `0008_v080_portal_auth`). Four tables — `identity` (email-keyed, FK-linkable to a `customer_id`), `login_token` (OTP / magic-link / step-up, all hashed), `session` (server-side; cookie carries the id only), `login_attempt` (append-only audit + rate-limit substrate).
 - **Library:** `packages/bss-portal-auth/`. Pure Python (no HTTP service of its own). Public surface: `start_email_login` / `verify_email_login` / `current_session` / `rotate_if_due` / `revoke_session` / `link_to_customer` / `start_step_up` / `verify_step_up` / `consume_step_up_token` / `validate_pepper_present`. Tokens HMAC-SHA-256-keyed by `BSS_PORTAL_TOKEN_PEPPER` (≥32 chars; sentinel + length validated at portal startup). Comparison via `hmac.compare_digest`.
@@ -284,12 +284,125 @@ v0.8 puts a login wall in front of the self-serve portal. CSR console retains it
   ```
   request -> RequestIdMiddleware -> PortalSessionMiddleware -> route -> bss-clients (NamedTokenAuthProvider) -> services
   ```
-  Chat (v0.12) is the one self-serve route that goes `route -> astream_once -> bss-clients` (with `tool_filter="customer_self_serve"` narrowing the LLM-visible surface — see "Chat scoping" below). CSR portal: same shape as direct-write, minus `PortalSessionMiddleware` (its session story is the v0.5 stub-cookie path); the `ask` flow goes through `astream_once` like chat. When Phase 12 lands per-principal OAuth/JWT, both portals' inbound middleware is replaced; everything below the gate stays untouched.
+  Chat (v0.12) is the one self-serve route that goes `route -> astream_once -> bss-clients` (with `tool_filter="customer_self_serve"` narrowing the LLM-visible surface — see "Chat scoping" below). Operator cockpit (v0.13): the cockpit's `/cockpit/{id}/events` SSE route is the only orchestrator-mediated route on port 9002 — drives `astream_once(tool_filter="operator_cockpit", service_identity="operator_cockpit")`. No inbound middleware (perimeter trust). The customer-side gate stays portable; staff side is gone by design.
 - **Runbook:** `docs/runbooks/portal-auth.md` (token pepper generation + rotation, dev mailbox tail, brute-force investigation, unverified-identity cleanup).
 
 The **Inventory sub-domain** (MSISDN pool + eSIM profile pool) lives inside the CRM service on port 8002, mounted under `/inventory-api/v1/...`. It has its own schema (`inventory`), repositories, policies, and HTTP endpoints — just no separate container. SOM and Subscription call it via `bss-clients` as if it were a distinct service. If it outgrows CRM, extraction to an 11th container is mechanical because the boundary is already enforced.
 
 **Why 9 containers, not 10:** keeping inventory inside CRM for v0.1 reduces one network hop in the critical activation path and saves ~150MB of RAM. Domain boundary is still clean — inventory has its own schema, repositories, policies, and tool surface. See DECISIONS.md "Inventory domain hosted inside CRM service (v0.1)" for the rationale.
+
+### Operator cockpit (v0.13)
+
+v0.13 retires the v0.5 CSR portal pattern (login + 360 view + 4
+HTMX auto-refresh partials + ask-form). The CLI REPL (`bss`)
+becomes the canonical operator cockpit; the browser at port 9002
+becomes a thin veneer over the same Postgres-backed
+`Conversation` store. Both surfaces drive `astream_once` with
+identical parameters; the only difference is the channel name
+(`"cli"` vs `"portal-csr"`) and the Rich vs HTMX presentation.
+
+```
+   ┌───────── operator workstation ─────────┐
+   │                                        │
+   │  $ bss [--session SES-...] [--new]     │  ← REPL canonical
+   │      │                                 │
+   │      ▼                                 │
+   │  Conversation.{open,resume,append_*}   │
+   │      ▼                                 │
+   │  astream_once(transcript=,             │
+   │               actor=settings.actor,    │
+   │               channel="cli",           │
+   │               service_identity=        │
+   │                 "operator_cockpit",    │
+   │               tool_filter=             │
+   │                 "operator_cockpit",    │
+   │               system_prompt=           │
+   │                 build_cockpit_prompt(  │
+   │                   operator_md, ...))   │
+   │                                        │
+   │  http://localhost:9002/cockpit/<id>    │  ← browser veneer
+   │      │                                 │
+   │      ▼                                 │
+   │  /cockpit/{id}/events SSE              │
+   │  (same astream_once, channel=          │
+   │   "portal-csr")                        │
+   └────────────────┬───────────────────────┘
+                    │
+                    ▼
+   ┌────────────────────────────────────────┐
+   │ packages/bss-cockpit                   │
+   │   • Conversation + ConversationStore   │
+   │     (cockpit.session/message/pending_  │
+   │      destructive — alembic 0014)       │
+   │   • config: OPERATOR.md + settings.toml│
+   │     mtime hot-reload + autobootstrap   │
+   │   • prompts: build_cockpit_prompt      │
+   │     (operator persona prepended +      │
+   │      code-defined invariants +         │
+   │      focus + pending_destructive)      │
+   └────────────────┬───────────────────────┘
+                    │
+                    ▼
+   audit.domain_event(actor=<settings.actor>,
+                     service_identity="operator_cockpit",
+                     channel="cli"|"portal-csr")
+```
+
+**Key components.**
+
+- **`packages/bss-cockpit/`** — new workspace package owning the
+  Conversation store, the `OPERATOR.md` + `settings.toml` loader
+  (with mtime hot-reload + first-run autobootstrap from embedded
+  defaults — needed for container deploys with no `.template`
+  files on disk), and the prompt builder. Public API:
+  `Conversation`, `ConversationStore`, `ConversationSummary`,
+  `PendingDestructive`, `configure_store`, `current`,
+  `build_cockpit_prompt`, `write_operator_md`, `write_settings_toml`.
+- **`cockpit` schema (alembic 0014).** Three tables. `session`
+  carries `actor` / `customer_focus` / `allow_destructive` /
+  `state` / `label` plus `tenant_id` (DEFAULT). `message` is the
+  append-only conversation log (role / content / `tool_calls_json`).
+  `pending_destructive` is the at-most-one-per-session in-flight
+  propose row, consumed by `/confirm`.
+- **`operator_cockpit` tool profile.** Full registry minus
+  `*.mine` / `*_for_me` wrappers (those exist for prompt-injection
+  containment on the customer chat side; the operator binds via
+  `actor=settings.actor` and has no ownership scoping). 82 tools
+  on registration; coverage drift caught by
+  `validate_profiles()` at orchestrator boot.
+- **`BSS_OPERATOR_COCKPIT_API_TOKEN`.** Third named token at the
+  v0.9 perimeter. TokenMap auto-derives identity
+  `"operator_cockpit"` from the env-var name. Cockpit-driven
+  downstream calls stamp `audit.domain_event.service_identity`
+  cleanly.
+- **No login.** No `OperatorSessionStore`, no `require_operator`
+  dependency, no `BSSApiTokenMiddleware` on the portal's inbound
+  HTTP. The cockpit runs single-operator-by-design behind a
+  secure perimeter (Tailscale, VPN, local LAN). `actor` from
+  `.bss-cli/settings.toml` (descriptive, not verified).
+  DECISIONS 2026-05-01 documents the rationale.
+
+**Cross-surface round trip.** REPL writes turn → browser reads
+it → browser writes turn → REPL `--session SES-...` resumes →
+REPL sees the browser's turn. The
+`portals/csr/tests/test_cross_surface_session.py` parameter-
+ized-x3 test asserts this on every PR run.
+
+**Slash-command parity.** The REPL surface ships 11 slash
+commands: `/sessions`, `/new [LABEL]`, `/switch SES-...`,
+`/reset`, `/focus CUST-NNN`, `/focus clear`, `/360 [CUST-NNN]`,
+`/confirm`, `/config edit`, `/operator edit`, `/help`, `/exit`.
+The browser exposes equivalent affordances via the cockpit
+thread template (focus form, reset button, /confirm button,
+back to sessions index, link to `/settings`). Drift between the
+two is a doctrine bug to fix in the next sprint.
+
+**WebUI `/settings`.** Two textareas (`OPERATOR.md` + `settings.toml`)
+backed by `bss_cockpit.write_operator_md` /
+`write_settings_toml`. Validation failures preserve the operator's
+draft and echo the parser/Pydantic diagnostic in the page. Last
+good view stays in effect on parse failure (mtime hot-reload only
+swaps on a successful parse).
 
 ### Chat scoping (self-serve, v0.12)
 
@@ -389,7 +502,7 @@ the route refuses without invoking the LLM.
 | Customer chat | _absent_ | ✅ scoped + capped + escalation | ✅ unchanged shape |
 | Chat ownership trip-wire | _absent_ | ✅ defence-in-depth | ✅ unchanged shape |
 | 14-day soak | _absent_ | ✅ frozen-clock 100×14 | ⏳ public soak with real cohort |
-| Per-principal RBAC | _absent_ | _absent_ | _Phase 12, post-v1.0_ |
+| Per-principal RBAC (staff) | _absent_ | _absent_ | _retired in v0.13 — operator trust is perimeter-based; DECISIONS 2026-05-01_ |
 
 ### Note on billing in v0.1
 
@@ -722,7 +835,7 @@ Cost estimate: **~$4,000-8,000/month**.
 | TLS termination | ➖ | Expected at ALB / ingress layer, not per-service |
 | Auth between services | ⚠️ | Shared API token (v0.3) via `BSSApiTokenMiddleware` + `TokenAuthProvider`; v0.9 splits the perimeter into named tokens (`TokenMap`). Per-principal OAuth2 + JWT is Phase 12. `auth_context.py` seam unchanged — Phase 12 fills the principal from JWT claims. |
 | Per-portal named tokens | ✅ | v0.9 splits the perimeter. Self-serve portal carries `BSS_PORTAL_SELF_SERVE_API_TOKEN` → `service_identity="portal_self_serve"`; orchestrator + CSR keep `BSS_API_TOKEN` (default identity). `service_identity` flows into `audit.domain_event`, structlog, OTel spans. Rotation is per-token, restart-based. |
-| Operator-facing portal auth | ⚠️ | CSR console (v0.5) on port 9002 ships with stub login (NOT real auth). Real OAuth Phase 12. Trusted-network deploy only. |
+| Operator-facing portal auth | ✅ (by design) | v0.13 cockpit on port 9002 has no inbound auth — single-operator-by-design behind a secure perimeter. `actor` from `.bss-cli/settings.toml`. Phase-12 staff-auth retired (DECISIONS 2026-05-01). Trusted-network deploy only. |
 | Customer-facing portal auth | ✅ | Self-serve portal on 9001 ships with v0.8 email + magic-link / OTP behind `PortalSessionMiddleware`; v0.10 adds step-up auth gating every sensitive write (`SENSITIVE_ACTION_LABELS`). Public-route allowlist (`/welcome`, `/plans`, `/auth/*`, `/terms`, `/privacy`) explicit. `/signup/*` is gated on `requires_verified_email`. Per-principal OAuth Phase 12. |
 | Customer chat surface scoping | ✅ | v0.12 — `customer_self_serve` tool profile (16 curated `*.mine` wrappers + public catalog reads) + output ownership trip-wire + per-customer rate + monthly cost caps (`audit.chat_usage`, fail-closed). Five non-negotiable escalation categories via `case.open_for_me` with SHA-256-hashed transcript. 14-day soak: zero ownership trips, zero cross-customer leaks, drift 0%. |
 | Rate limiting per principal | ⚠️ | v0.12 caps the chat surface per customer (rate + monthly cost). General per-principal rate limiting on every BSS endpoint is Phase 12. |
@@ -751,7 +864,7 @@ Cost estimate: **~$4,000-8,000/month**.
 - **No service mesh.** Docker network / VPC routing is sufficient below 100k RPS.
 - **No Kafka.** RabbitMQ is lighter, simpler, and topic exchanges cover v0.1 needs. Migration path to MSK is documented for Tier 3.
 - **No Redis.** Postgres is fast enough for v0.1 workload.
-- **No authentication.** Phase 12. The architecture is shaped for clean addition via `auth_context.py` per service.
+- **No staff-side authentication.** Retired in v0.13 (DECISIONS 2026-05-01). The cockpit is single-operator-by-design behind a secure perimeter; `actor` from `.bss-cli/settings.toml`. Customer-side auth (v0.8 portal session, v0.10 step-up) is unchanged. The `auth_context.py` seam in every service stays as it was — it just stops carrying a planned future shape.
 - **No multi-tenancy at runtime.** `tenant_id` columns exist but default to `'DEFAULT'`. Activating true tenancy is a v0.3 concern.
 - **No eKYC implementation.** Channel-layer concern. BSS-CLI receives signed attestations via `customer.attest_kyc` and enforces policies.
 - **No physical SIM logistics.** eSIM-only in v0.1.

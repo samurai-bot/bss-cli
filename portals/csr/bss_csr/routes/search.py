@@ -1,59 +1,114 @@
-"""Search — name fragment OR full MSISDN.
+"""GET /search — find a customer by name or MSISDN, jump into a session.
 
-If the query parses as a phone number (digits + optional +), redirect
-straight to the customer 360 of the owning customer (single hit, no
-intermediate page). Otherwise fall back to a name LIKE filter via
-``customer.list``.
+Lighter than the v0.5 search route: returns a card list, not a 360
+view. Each card has a "Start cockpit session about this customer"
+button that POSTs ``/cockpit/new`` with the customer pre-pinned.
+
+MSISDN-shaped queries don't 303 to a 360 (the 360 page is gone in
+v0.13); they fall through to the same name-search flow with the
+digits as the query, which `crm.find_customer_by_msisdn` resolves
+to a card.
 """
 
 from __future__ import annotations
 
+import re
+
+import structlog
 from bss_clients.errors import ClientError
 from bss_orchestrator.clients import get_clients
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from ..deps import require_operator
-from ..session import OperatorSession
 from ..templating import templates
-from ..views import flatten_customer, looks_like_msisdn
 
+log = structlog.get_logger(__name__)
 router = APIRouter()
 
 
+_MSISDN_RE = re.compile(r"^\+?\d{6,}$")
+
+
+def _looks_like_msisdn(query: str) -> bool:
+    return bool(_MSISDN_RE.match(query.strip()))
+
+
 @router.get("/search", response_class=HTMLResponse)
-async def search(
-    request: Request,
-    q: str = "",
-    operator: OperatorSession = Depends(require_operator),
-) -> HTMLResponse:
+async def search(request: Request, q: str = "") -> HTMLResponse:
     q_clean = q.strip()
     results: list[dict] = []
+    clients = get_clients()
 
-    if q_clean and looks_like_msisdn(q_clean):
-        # Try MSISDN lookup; jump straight to the customer 360 on a hit.
+    if q_clean and _looks_like_msisdn(q_clean):
         digits = q_clean.lstrip("+").replace(" ", "")
         try:
-            customer_raw = await get_clients().crm.find_customer_by_msisdn(digits)
+            cust = await clients.crm.find_customer_by_msisdn(digits)
         except ClientError:
-            customer_raw = None
-        if customer_raw:
-            return RedirectResponse(
-                url=f"/customer/{customer_raw['id']}",
-                status_code=303,
-            )
-        # Fall through to the name-contains search. The query "looked
-        # like" an MSISDN but no number matched — operators who type an
-        # all-digit name fragment (test scenarios with hex run_ids that
-        # happen to be all-digits, customer names like '007') still
-        # deserve a real search instead of an empty page.
-
-    if q_clean:
-        raw = await get_clients().crm.list_customers(name_contains=q_clean)
-        results = [flatten_customer(c) for c in raw]
+            cust = None
+        if cust:
+            results = [_flatten_customer(cust)]
+    elif q_clean:
+        try:
+            raw = await clients.crm.list_customers(name_contains=q_clean)
+        except ClientError:
+            raw = []
+        results = [_flatten_customer(c) for c in (raw or [])]
 
     return templates.TemplateResponse(
         request,
         "search.html",
-        {"operator": operator, "q": q_clean, "results": results},
+        {
+            "active_page": "search",
+            "model": "(env default)",
+            "q": q_clean,
+            "results": results,
+        },
     )
+
+
+@router.post("/search/start_session", response_model=None)
+async def search_start_session(
+    customer_id: str = Form(...),
+) -> RedirectResponse:
+    """Open a fresh cockpit session pinned to a customer; 303 to it.
+
+    Mirrors POST /cockpit/new but takes the focus on creation so the
+    operator lands on the thread already pinned.
+    """
+    from bss_cockpit import OPERATOR_ACTOR, Conversation
+
+    label_safe = customer_id[:32]
+    conv = await Conversation.open(
+        actor=OPERATOR_ACTOR,
+        label=f"customer {label_safe}",
+        customer_focus=customer_id,
+    )
+    return RedirectResponse(
+        url=f"/cockpit/{conv.session_id}", status_code=303
+    )
+
+
+def _flatten_customer(c: dict) -> dict:
+    individual = c.get("individual") or {}
+    name = " ".join(
+        s for s in [individual.get("givenName"), individual.get("familyName")] if s
+    ).strip() or c.get("name", "—")
+    email = ""
+    msisdn = ""
+    for cm in c.get("contactMedium") or []:
+        if cm.get("mediumType") == "email" and not email:
+            email = cm.get("value", "") or (cm.get("characteristic") or {}).get(
+                "emailAddress", ""
+            )
+        if cm.get("mediumType") == "mobile" and not msisdn:
+            msisdn = cm.get("value", "") or (cm.get("characteristic") or {}).get(
+                "phoneNumber", ""
+            )
+    return {
+        "id": c.get("id", "?"),
+        "name": name,
+        "status": c.get("status", "?"),
+        "kyc_status": c.get("kycStatus", c.get("kyc_status", "?")),
+        "email": email,
+        "msisdn": msisdn,
+    }

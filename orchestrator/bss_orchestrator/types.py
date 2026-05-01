@@ -3,9 +3,15 @@
 Every tool signature MUST use these aliases — never raw ``str`` for IDs or enums.
 
 Why it matters: the LLM sees the Annotated metadata in the JSON schema emitted
-for each tool. When the type says ``Annotated[str, "Subscription ID in SUB-NNN
-format"]``, a small cheap model like MiMo v2 Flash generates valid SUB-NNN IDs
-instead of fabricating ``sub-abc-123``. The type hint IS the semantic hint.
+for each tool. When the type says ``Annotated[str, "Subscription ID with the
+SUB- prefix"]``, a small cheap model generates valid SUB- IDs instead of
+fabricating ``sub-abc-123``. The type hint IS the semantic hint.
+
+v0.13.1 — descriptions emphasize "opaque suffix; pass through verbatim" so
+the LLM doesn't refuse hex-style ids (e.g. CASE-3360cc22) it expected to
+match a "CASE-NNN" pattern. The actual id format varies by aggregate
+(some sequential 4-digit, some 8-hex); the LLM should never validate or
+"correct" the suffix.
 
 For enum-shaped fields, ``Literal[...]`` renders as a JSON-schema enum and the
 LLM respects the finite set.
@@ -24,63 +30,74 @@ from typing import Annotated, Literal
 
 CustomerId = Annotated[
     str,
-    "Customer ID in CUST-NNN format, e.g. CUST-007. "
-    "Get from customer.list or customer.create — never fabricate.",
+    "Customer ID with the CUST- prefix (e.g. CUST-fbcd3c87). The "
+    "suffix is opaque — never validate or rewrite it. Pass through "
+    "verbatim from a prior tool result (customer.list, "
+    "customer.find_by_msisdn, customer.create). Never fabricate.",
 ]
 SubscriptionId = Annotated[
     str,
-    "Subscription ID in SUB-NNN format, e.g. SUB-007. "
-    "Get from subscription.list_for_customer.",
+    "Subscription ID with the SUB- prefix (e.g. SUB-0937). The "
+    "suffix is opaque. Pass through verbatim from "
+    "subscription.list_for_customer or similar reads.",
 ]
 OrderId = Annotated[
     str,
-    "Product Order ID in ORD-NNN format, e.g. ORD-014. "
-    "Get from order.list or order.create.",
+    "Product Order ID with the ORD- prefix (e.g. ORD-0349). The "
+    "suffix is opaque. Pass through verbatim from order.list or "
+    "order.create.",
 ]
 ServiceOrderId = Annotated[
     str,
-    "Service Order ID in SO-NNN format, e.g. SO-022. "
-    "Get from service_order.list_for_order.",
+    "Service Order ID with the SO- prefix. The suffix is opaque. "
+    "Pass through verbatim from service_order.list_for_order.",
 ]
 ServiceId = Annotated[
     str,
-    "Service ID in SVC-NNN format, e.g. SVC-033. "
-    "Get from service.list_for_subscription.",
+    "Service ID with the SVC- prefix (e.g. SVC-0755). The suffix is "
+    "opaque. Pass through verbatim from service.list_for_subscription.",
 ]
 CaseId = Annotated[
     str,
-    "Case ID in CASE-NNN format, e.g. CASE-042. Get from case.list.",
+    "Case ID with the CASE- prefix (e.g. CASE-3360cc22). The suffix "
+    "is opaque — never validate, rewrite, or 'correct' it. Pass "
+    "through verbatim from case.list / case.list_for_me / case.open / "
+    "case.open_for_me.",
 ]
 TicketId = Annotated[
     str,
-    "Ticket ID in TKT-NNN format, e.g. TKT-101. Get from ticket.list.",
+    "Ticket ID with the TKT- prefix. The suffix is opaque. Pass "
+    "through verbatim from ticket.list.",
 ]
 ContactMediumId = Annotated[
     str,
-    "Contact Medium ID in CM-NNN format, e.g. CM-012. Get from customer.get.",
+    "Contact Medium ID with the CM- prefix. The suffix is opaque. "
+    "Pass through verbatim from customer.get.",
 ]
 PaymentMethodId = Annotated[
     str,
-    "Payment Method ID in PM-NNNN format, e.g. PM-0042. "
-    "Get from payment.list_methods.",
+    "Payment Method ID with the PM- prefix. The suffix is opaque. "
+    "Pass through verbatim from payment.list_methods.",
 ]
 PaymentAttemptId = Annotated[
     str,
-    "Payment Attempt ID in PAY-NNNNNN format, e.g. PAY-000042.",
+    "Payment Attempt ID with the PAY- prefix. The suffix is opaque.",
 ]
 AgentId = Annotated[
     str,
-    "Agent ID in AGT-NNN format, e.g. AGT-004. Get from agents.list.",
+    "Agent ID with the AGT- prefix. The suffix is opaque. Pass "
+    "through verbatim from agents.list.",
 ]
 ProvisioningTaskId = Annotated[
     str,
-    "Provisioning task ID in PTK-NNN format, e.g. PTK-044. "
-    "Get from provisioning.list_tasks.",
+    "Provisioning task ID with the PTK- prefix. The suffix is opaque. "
+    "Pass through verbatim from provisioning.list_tasks.",
 ]
 AggregateId = Annotated[
     str,
-    "Prefixed ID matching the aggregate_type, e.g. 'SUB-007' for subscription, "
-    "'ORD-014' for order. Never fabricate — read from a prior tool result.",
+    "Prefixed ID matching the aggregate_type (SUB- / ORD- / CASE- / "
+    "etc.). The suffix is opaque. Never fabricate — read from a "
+    "prior tool result.",
 ]
 ProductOfferingId = Annotated[
     str,

@@ -34,6 +34,7 @@ import hashlib
 from .. import auth_context
 from ..clients import get_clients
 from ..types import (
+    CaseState,
     EscalationCategory,
     IsoDatetime,
     ProductOfferingId,
@@ -126,7 +127,7 @@ async def subscription_get_mine(subscription_id: SubscriptionId) -> dict[str, An
     """Read one of the logged-in customer's subscriptions in full.
 
     Args:
-        subscription_id: SUB-NNN owned by the actor. Cross-customer
+        subscription_id: the actor-owned subscription id (opaque suffix). Cross-customer
             attempts return ``policy.subscription.not_owned_by_actor``.
 
     Returns:
@@ -151,7 +152,7 @@ async def subscription_get_balance_mine(
     to see ``used / total`` for each resource.
 
     Args:
-        subscription_id: SUB-NNN owned by the actor.
+        subscription_id: the actor-owned subscription id (opaque suffix).
 
     Returns:
         Balance dict ``{subscriptionId, balances: [{type, used, total,
@@ -177,7 +178,7 @@ async def subscription_get_lpa_mine(
     payload.
 
     Args:
-        subscription_id: SUB-NNN owned by the actor.
+        subscription_id: the actor-owned subscription id (opaque suffix).
 
     Returns:
         ``{subscriptionId, iccid, imsi, activationCode, msisdn}``.
@@ -208,7 +209,7 @@ async def usage_history_mine(
     narrowed to one of their subscriptions.
 
     Args:
-        subscription_id: Optional SUB-NNN to narrow the query to one
+        subscription_id: Optional subscription id (SUB-...) to narrow the query to one
             of the customer's lines. Cross-customer attempts return
             ``policy.subscription.not_owned_by_actor``. When omitted,
             usage across every line owned by the customer is returned.
@@ -337,7 +338,7 @@ async def vas_purchase_for_me(
     from ``catalog.list_vas`` — never invent one.
 
     Args:
-        subscription_id: SUB-NNN owned by the actor.
+        subscription_id: the actor-owned subscription id (opaque suffix).
         vas_offering_id: VAS offering id (e.g. ``VAS_DATA_5GB``)
             from ``catalog.list_vas``.
 
@@ -375,7 +376,7 @@ async def subscription_schedule_plan_change_mine(
     until then.
 
     Args:
-        subscription_id: SUB-NNN owned by the actor.
+        subscription_id: the actor-owned subscription id (opaque suffix).
         new_offering_id: Target offering (e.g. ``PLAN_L``). Must be
             in the active catalog and different from the current
             plan.
@@ -409,7 +410,7 @@ async def subscription_cancel_pending_plan_change_mine(
     is nothing pending.
 
     Args:
-        subscription_id: SUB-NNN owned by the actor.
+        subscription_id: the actor-owned subscription id (opaque suffix).
 
     Returns:
         Updated subscription dict with the pending fields cleared.
@@ -442,7 +443,7 @@ async def subscription_terminate_mine(
     chat-driven terminations from CSR / scenario / API ones.
 
     Args:
-        subscription_id: SUB-NNN owned by the actor.
+        subscription_id: the actor-owned subscription id (opaque suffix).
 
     Returns:
         Updated subscription dict with ``state="terminated"``.
@@ -487,6 +488,66 @@ _ESCALATION_TO_PRIORITY: dict[str, str] = {
     "bereavement": "medium",
     "other": "medium",
 }
+
+
+@register("case.list_for_me")
+async def case_list_for_me(
+    state: CaseState | None = None,
+) -> list[dict[str, Any]]:
+    """List cases the logged-in customer has on file with us.
+
+    Use this when the customer asks "what's my case ID?", "is my case
+    still open?", "why was my case closed?", or any similar follow-up
+    after a prior escalation. The wrapper binds ``customer_id`` from
+    ``auth_context.current().actor``; the LLM signature must NOT carry
+    a ``customer_id`` parameter (the v0.12 prompt-injection containment
+    seam).
+
+    Args:
+        state: Optional filter — ``"open"`` / ``"in_progress"`` /
+            ``"resolved"`` / ``"closed"``. Default returns every case
+            for this customer regardless of state.
+
+    Returns:
+        List of case dicts. **All fields are customer-facing** — pass
+        them through plainly when the customer asks. No "internal
+        only" classification exists in v0.13. Each dict includes:
+
+        - ``id``                — opaque case id (CASE-...)
+        - ``subject``           — the case headline
+        - ``state``             — open / in_progress / pending_customer
+                                  / resolved / closed
+        - ``category``          — e.g. ``billing_dispute``, ``fraud``
+        - ``priority``          — high / medium / low
+        - ``resolution_code``   — closure reason slug (e.g. ``fixed``,
+                                  ``duplicate``). Tell the customer
+                                  in plain English ("we closed it as
+                                  fixed").
+        - ``opened_at`` / ``closed_at`` — ISO timestamps.
+        - ``notes``             — list of ``{body, author_agent_id,
+                                  created_at}``. These are NOTES THE
+                                  CUSTOMER CAN SEE — there is no
+                                  internal/external distinction in
+                                  v0.13. Quote them when asked why a
+                                  case was closed; if a note is
+                                  CSR-jargon-y ("non issue"), you may
+                                  paraphrase, but don't pretend it
+                                  doesn't exist.
+        - ``chatTranscriptHash`` — present when the case was opened
+                                   from this chat surface. Don't
+                                   surface the hash itself; it's an
+                                   audit pointer.
+
+        Empty list when the customer has no cases — render plainly
+        ("no cases on file").
+
+    Raises:
+        chat.no_actor_bound: invoked outside a chat-scoped session.
+    """
+    actor = _require_actor()
+    return await get_clients().crm.list_cases(
+        customer_id=actor, state=state
+    )
 
 
 @register("case.open_for_me")

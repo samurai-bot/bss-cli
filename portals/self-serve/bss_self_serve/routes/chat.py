@@ -35,7 +35,6 @@ widget it does not truncate.
 from __future__ import annotations
 
 import asyncio
-import html as _html
 import re as _re
 from collections.abc import AsyncIterator
 from urllib.parse import urlencode
@@ -54,6 +53,12 @@ from bss_orchestrator.session import (
     astream_once,
 )
 from bss_portal_auth import IdentityView
+from bss_portal_ui import (
+    render_assistant_bubble as _chat_assistant_html,
+    render_chat_markdown as _render_chat_markdown,
+    render_tool_pill as _chat_tool_pill_html,
+    strip_reasoning_leakage as _strip_reasoning_leakage,
+)
 from bss_portal_ui.sse import format_frame as _sse_frame
 from bss_portal_ui.sse import status_html as _status_html
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
@@ -71,6 +76,32 @@ _OWNERSHIP_VIOLATION_REPLY = (
     "Sorry — I couldn't complete that. Please try again, or contact "
     "support if the issue persists."
 )
+
+# v0.13.1 — anti-hallucination. Detect FIRST-PERSON ACTIVE escalation
+# claims ("I've escalated this", "I'm raising a case") and verify
+# case.open_for_me actually fired this turn. Past-tense / third-person
+# language ("your case has been raised", "case ID is CASE-123") is
+# the LLM legitimately recapping a prior escalation; we don't want
+# to false-positive on those when the customer asks "what's my case
+# ID" later.
+_RE_ESCALATION_CLAIM = _re.compile(
+    r"\bI(?:'ve| have| am| will|'ll|'m)?\s+(?:"
+    r"escalat\w*"
+    r"|(?:raised?|opened?|filed?|raising|opening|filing)\s+"
+    r"(?:a|the|your)?\s*case"
+    r")\b",
+    _re.IGNORECASE,
+)
+_ESCALATION_HALLUCINATION_FALLBACK = (
+    "I can't take this further on my own — please email support directly "
+    "at {email} so a human agent can look into it. Sorry for the extra "
+    "step."
+)
+
+
+def _claims_escalation(text: str) -> bool:
+    """True if the assistant's reply claims to have escalated."""
+    return bool(_RE_ESCALATION_CLAIM.search(text or ""))
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -400,6 +431,12 @@ async def chat_events(
 
         yield _sse_frame("status", _status_html("live"))
 
+        # v0.13.1 — track tool calls on this turn so we can detect
+        # escalation hallucinations. If the assistant claims to have
+        # escalated but never called case.open_for_me, replace the
+        # text with a safe fallback (no fake-escalation reply).
+        called_tools_this_turn: list[str] = []
+
         try:
             async for event in astream_once(
                 turn.question,
@@ -459,18 +496,41 @@ async def chat_events(
                 # Tool calls render as small inline pills so the
                 # customer can see what the agent is doing.
                 if isinstance(event, AgentEventToolCallStarted):
+                    called_tools_this_turn.append(event.name)
                     yield _sse_frame(
                         "message", _chat_tool_pill_html(event.name)
                     )
                     continue
 
                 if isinstance(event, AgentEventFinalMessage):
-                    text = event.text or ""
+                    text = _strip_reasoning_leakage(event.text or "")
+                    is_error = False
+                    # Anti-hallucination: if the reply claims to have
+                    # escalated but case.open_for_me wasn't actually
+                    # called this turn, replace with a safe fallback.
+                    # Doctrine-coupled: the v0.12 escalation contract
+                    # is "the case row IS the escalation"; a model
+                    # hallucinating the sentence without the side
+                    # effect is a doctrine violation we fix at the
+                    # edge, not by retrying the LLM.
+                    if (
+                        _claims_escalation(text)
+                        and "case.open_for_me" not in called_tools_this_turn
+                    ):
+                        log.warning(
+                            "chat.escalation_hallucination",
+                            cap_key=cap_key,
+                            called_tools=called_tools_this_turn,
+                        )
+                        text = _ESCALATION_HALLUCINATION_FALLBACK.format(
+                            email=identity.email or "support@bss-cli.local"
+                        )
+                        is_error = True
                     turn.done = True
                     turn.final_text = text
                     conv.append("assistant", text)
                     yield _sse_frame(
-                        "message", _chat_assistant_html(text)
+                        "message", _chat_assistant_html(text, error=is_error)
                     )
                     yield _sse_frame("status", _status_html("done"))
                     return
@@ -496,92 +556,8 @@ async def chat_events(
     )
 
 
-# ── Inline HTML renderers (chat-flavoured, not agent-log shaped) ─────
-
-
-def _chat_assistant_html(text: str, *, error: bool = False) -> str:
-    """Full assistant reply as a chat bubble with minimal markdown.
-
-    Doctrine: the LLM's output is hostile-by-default. We HTML-escape
-    everything first, then convert a small whitelisted set of
-    markdown tokens (``**bold**``, ``*italic*``, ``_italic_``,
-    `` `code` ``, ``- list`` / ``* list``, paragraph breaks) into
-    HTML. No raw-HTML pass-through; no link/image rendering (those
-    invite XSS via crafted prompt-injection responses)."""
-    css = "chat-bubble chat-bubble-assistant"
-    if error:
-        css += " chat-bubble-error"
-    return f'<div class="{css}">{_render_chat_markdown(text)}</div>'
-
-
-_RE_BOLD = _re.compile(r"\*\*(?P<inner>[^*\n]+)\*\*")
-_RE_ITALIC_AST = _re.compile(r"(?<!\*)\*(?P<inner>[^*\n]+)\*(?!\*)")
-_RE_ITALIC_UND = _re.compile(r"(?<!\w)_(?P<inner>[^_\n]+)_(?!\w)")
-_RE_CODE = _re.compile(r"`(?P<inner>[^`\n]+)`")
-_RE_LIST_ITEM = _re.compile(r"^\s*[\*\-]\s+(?P<body>.*)$")
-
-
-def _render_inline(line: str) -> str:
-    """Apply inline markdown to a single, already-HTML-escaped line.
-    Order matters: code spans first (they shadow ``*`` etc.); bold
-    before italic so ``**`` doesn't get partially-eaten."""
-    out = _RE_CODE.sub(lambda m: f"<code>{m.group('inner')}</code>", line)
-    out = _RE_BOLD.sub(lambda m: f"<strong>{m.group('inner')}</strong>", out)
-    out = _RE_ITALIC_AST.sub(lambda m: f"<em>{m.group('inner')}</em>", out)
-    out = _RE_ITALIC_UND.sub(lambda m: f"<em>{m.group('inner')}</em>", out)
-    return out
-
-
-def _render_chat_markdown(text: str) -> str:
-    """Block-level + inline render. HTML-escapes the whole text
-    once up front, then walks lines grouping list runs and
-    paragraphs."""
-    escaped = _html.escape(text or "")
-    lines = escaped.split("\n")
-
-    out: list[str] = []
-    para: list[str] = []
-    list_items: list[str] = []
-
-    def _flush_list() -> None:
-        if list_items:
-            out.append(
-                "<ul>"
-                + "".join(f"<li>{_render_inline(it)}</li>" for it in list_items)
-                + "</ul>"
-            )
-            list_items.clear()
-
-    def _flush_para() -> None:
-        if para:
-            joined = "<br>".join(_render_inline(p) for p in para)
-            out.append(f"<p>{joined}</p>")
-            para.clear()
-
-    for raw in lines:
-        line = raw.rstrip()
-        item_match = _RE_LIST_ITEM.match(line)
-        if item_match:
-            _flush_para()
-            list_items.append(item_match.group("body"))
-            continue
-        if not line.strip():
-            # blank line — paragraph / list break
-            _flush_list()
-            _flush_para()
-            continue
-        _flush_list()
-        para.append(line)
-
-    _flush_list()
-    _flush_para()
-    return "".join(out) or "&nbsp;"
-
-
-def _chat_tool_pill_html(tool_name: str) -> str:
-    return (
-        '<div class="chat-tool-pill">'
-        f'<span class="chat-tool-icon">≈</span>'
-        f'<span class="chat-tool-name">{_html.escape(tool_name)}</span>'
-        "</div>"
-    )
+# Chat-bubble HTML renderers were lifted to packages/bss-portal-ui/
+# (bss_portal_ui.chat_html) in v0.13 PR5 so the operator cockpit's
+# chat thread renders identically to this customer-chat surface.
+# Imports above alias them under their original underscore-prefixed
+# names so this module's body reads unchanged.

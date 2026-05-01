@@ -23,7 +23,7 @@ async def subscription_get(subscription_id: SubscriptionId) -> dict[str, Any]:
     is active, blocked, or terminated.
 
     Args:
-        subscription_id: Subscription ID in SUB-NNN format.
+        subscription_id: Subscription ID with the SUB- prefix (opaque suffix).
 
     Returns:
         Subscription dict ``{id, customerId, offeringId, msisdn, iccid,
@@ -43,7 +43,7 @@ async def subscription_list_for_customer(
     """List a customer's subscriptions.
 
     Args:
-        customer_id: Customer ID in CUST-NNN format.
+        customer_id: Customer ID with the CUST- prefix (opaque suffix).
 
     Returns:
         List of subscription summary dicts. Call ``subscription.get`` for full detail.
@@ -60,7 +60,7 @@ async def subscription_get_balance(subscription_id: SubscriptionId) -> dict[str,
     VAS top-up — the user wants to know ``used / total`` for each resource.
 
     Args:
-        subscription_id: Subscription ID in SUB-NNN format.
+        subscription_id: Subscription ID with the SUB- prefix (opaque suffix).
 
     Returns:
         Balance dict ``{subscriptionId, balances: [{type, used, total, unit}]}``.
@@ -91,7 +91,7 @@ async def subscription_purchase_vas(
     allowance top-up on an active subscription.
 
     Args:
-        subscription_id: Subscription ID in SUB-NNN format.
+        subscription_id: Subscription ID with the SUB- prefix (opaque suffix).
         vas_offering_id: VAS offering ID (e.g. ``VAS_DATA_5GB``). Get this
             from ``catalog.list_vas`` — do not guess.
 
@@ -130,7 +130,7 @@ async def subscription_terminate(subscription_id: SubscriptionId) -> dict[str, A
     up again and would NOT get the same number back.
 
     Args:
-        subscription_id: Subscription ID in SUB-NNN format.
+        subscription_id: Subscription ID with the SUB- prefix (opaque suffix).
 
     Returns:
         Updated subscription dict with ``state="terminated"``.
@@ -149,7 +149,7 @@ async def subscription_renew_now(subscription_id: SubscriptionId) -> dict[str, A
     only for edge cases.
 
     Args:
-        subscription_id: Subscription ID in SUB-NNN format.
+        subscription_id: Subscription ID with the SUB- prefix (opaque suffix).
 
     Returns:
         Updated subscription dict with fresh ``balances`` and new ``nextRenewalAt``.
@@ -176,7 +176,7 @@ async def subscription_schedule_plan_change(
     immediate effect — that's the doctrine.
 
     Args:
-        subscription_id: Subscription ID in SUB-NNN format.
+        subscription_id: Subscription ID with the SUB- prefix (opaque suffix).
         new_offering_id: Target offering (e.g. ``PLAN_L``). Must be in the
             active catalog and different from the current plan.
 
@@ -253,7 +253,7 @@ async def subscription_cancel_pending_plan_change(
     """Cancel a pending plan change. Idempotent — no-op if nothing is pending.
 
     Args:
-        subscription_id: Subscription ID in SUB-NNN format.
+        subscription_id: Subscription ID with the SUB- prefix (opaque suffix).
 
     Returns:
         Updated subscription dict with pending fields cleared.
@@ -273,7 +273,7 @@ async def subscription_get_esim_activation(
     needs to re-install the eSIM profile.
 
     Args:
-        subscription_id: Subscription ID in SUB-NNN format.
+        subscription_id: Subscription ID with the SUB- prefix (opaque suffix).
 
     Returns:
         ``{subscriptionId, iccid, imsi, activationCode, msisdn}``. The

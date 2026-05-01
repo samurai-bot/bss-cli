@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>BSS-CLI Cockpit{% block title_suffix %}{% endblock %}</title>
+  <meta name="viewport" content="width=1280" />
+  <link rel="stylesheet" href="/portal-ui/static/css/portal_base.css" />
+  <link rel="stylesheet" href="/static/css/csr.css" />
+  <script src="/portal-ui/static/js/htmx.min.js" defer></script>
+  <script src="/portal-ui/static/js/htmx-sse.js" defer></script>
+</head>
+<body>
+  <header class="cockpit-header">
+    <div class="cockpit-header-left">
+      <a href="/" class="cockpit-brand">
+        <span class="cockpit-brand-mark">●</span>
+        <span class="cockpit-brand-name">bss-cli</span>
+        <span class="cockpit-brand-tag">operator cockpit</span>
+      </a>
+    </div>
+    <nav class="cockpit-header-nav">
+      <a href="/" class="cockpit-nav-link {% if active_page == 'sessions' %}is-active{% endif %}">Sessions</a>
+      <a href="/search" class="cockpit-nav-link {% if active_page == 'search' %}is-active{% endif %}">Find customer</a>
+      <form method="post" action="/cockpit/new" class="cockpit-nav-form">
+        <button type="submit" class="cockpit-nav-cta">+ New conversation</button>
+      </form>
+      <a href="/settings" class="cockpit-nav-link {% if active_page == 'settings' %}is-active{% endif %}">Settings</a>
+    </nav>
+    <div class="cockpit-header-right">
+      <span class="cockpit-meta">{{ model or "(env default)" }}</span>
+    </div>
+  </header>
+
+  <main class="cockpit-main">
+    {% block main %}{% endblock %}
+  </main>
+</body>
+</html>

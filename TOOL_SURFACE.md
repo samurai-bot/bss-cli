@@ -223,6 +223,7 @@ v0.12 PR6 ships the escalation tool.
 | `subscription.cancel_pending_plan_change_mine` | update | Clear a pending plan change. Idempotent. |
 | `subscription.terminate_mine` | destructive | Terminate one of the actor's lines — releases MSISDN + eSIM. Gated by `safety.py`; `reason="customer_chat"` for audit attribution. |
 | `case.open_for_me` | create | Open an escalation case on the actor's behalf for one of the five non-negotiable categories (fraud / billing_dispute / regulator_complaint / identity_recovery / bereavement, plus `other`). The transcript is hashed + persisted; the case carries the hash. |
+| `case.list_for_me` | read | v0.13.1 — list the actor's cases (id, subject, state, category) so the LLM can answer "what's my case ID?" without hallucinating past-tense escalation language. |
 
 ## Admin tools — `(admin only, not in LLM registry)`
 

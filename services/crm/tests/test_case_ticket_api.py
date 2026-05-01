@@ -114,6 +114,51 @@ class TestCaseLifecycle:
         )
         assert r.status_code == 422  # Can't resolve from open — need ack → start first
 
+    async def test_close_fast_forwards_from_open(self, client: AsyncClient):
+        """v0.13.1 — POST /case/{id}/close auto-resolves an open case
+        instead of forcing the caller through resolve+close. Operator
+        UX: one tool call from "close this case" intent to closed
+        state, instead of a multi-tool LLM round trip."""
+        cust_id = await _create_customer(client, ".close-fast")
+        r = await client.post(
+            f"{CASE_PREFIX}/case",
+            json={"customer_id": cust_id, "subject": "Close fast"},
+        )
+        case_id = r.json()["id"]
+        # Case is freshly open; no tickets blocking.
+        assert r.json()["state"] == "open"
+
+        r = await client.post(
+            f"{CASE_PREFIX}/case/{case_id}/close",
+            json={"resolution_code": "fixed"},
+        )
+        assert r.status_code == 200
+        assert r.json()["state"] == "closed"
+        assert r.json()["resolution_code"] == "fixed"
+
+    async def test_close_fast_forwards_from_in_progress(
+        self, client: AsyncClient
+    ):
+        """Same fast-forward path from in_progress (after ``take``)."""
+        cust_id = await _create_customer(client, ".close-fast2")
+        r = await client.post(
+            f"{CASE_PREFIX}/case",
+            json={"customer_id": cust_id, "subject": "Close fast 2"},
+        )
+        case_id = r.json()["id"]
+        # Take it to in_progress first.
+        r = await client.patch(
+            f"{CASE_PREFIX}/case/{case_id}",
+            json={"trigger": "take"},
+        )
+        assert r.json()["state"] == "in_progress"
+        r = await client.post(
+            f"{CASE_PREFIX}/case/{case_id}/close",
+            json={"resolution_code": "duplicate"},
+        )
+        assert r.status_code == 200
+        assert r.json()["state"] == "closed"
+
     async def test_cancel_case_from_open(self, client: AsyncClient):
         cust_id = await _create_customer(client, ".cancel")
         r = await client.post(
