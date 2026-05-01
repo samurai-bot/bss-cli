@@ -114,7 +114,7 @@ steps:
     base_url: "{{ portal_base }}"
     expect:
       status: 200
-      body_contains: ["Cockpit sessions"]
+      body_contains: ["Hello, operator", "Recent conversations"]
 
   - name: operator opens a fresh cockpit session
     http: POST /cockpit/new

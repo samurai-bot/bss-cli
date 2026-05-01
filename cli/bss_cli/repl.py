@@ -41,6 +41,7 @@ from typing import Any, Callable
 
 from bss_clients.errors import ClientError
 from bss_cockpit import (
+    OPERATOR_ACTOR,
     Conversation,
     ConversationStore,
     build_cockpit_prompt,
@@ -298,10 +299,11 @@ def _bootstrap_store_and_config() -> tuple[ConversationStore, str, str]:
     configure_store(store)
 
     # Load settings.toml + OPERATOR.md (autobootstraps on first run).
+    # v0.13.1 — actor is hardcoded; settings.toml carries non-identity
+    # preferences only (model, ports, allow_destructive_default).
     cfg = cockpit_config_current()
-    actor = cfg.settings.operator.actor
     model = cfg.settings.llm.model or orch_settings.llm_model
-    return store, actor, model
+    return store, OPERATOR_ACTOR, model
 
 
 # ─── Slash command handlers ───────────────────────────────────────────

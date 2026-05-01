@@ -1,51 +1,125 @@
 {% extends "cockpit_layout.html" %}
-{% block title %}{{ conversation.session_id }} · cockpit · bss-cli{% endblock %}
+{% block title %}{{ thread_title or conversation.session_id }} · cockpit{% endblock %}
 
 {% block main %}
-<section class="cockpit-thread">
-  <header class="cockpit-section-header">
-    <a class="back-link" href="/">← sessions</a>
-    <h1 class="page-title"><code>{{ conversation.session_id }}</code></h1>
-    {% if conversation.label %}<span class="cockpit-thread-label">{{ conversation.label }}</span>{% endif %}
+<section
+  class="cockpit-page thread-page"
+  {% if stream_session_id %}
+  hx-ext="sse"
+  sse-connect="/cockpit/{{ conversation.session_id }}/events"
+  {% endif %}
+>
+  <header class="thread-header">
+    <a class="thread-back" href="/">← all conversations</a>
+    <div class="thread-header-titles">
+      <h1 class="thread-title">{{ thread_title or "(empty conversation)" }}</h1>
+      {% if focus_label %}
+        <div class="thread-focus">Focus: <strong>{{ focus_label }}</strong></div>
+      {% endif %}
+    </div>
+    <div class="thread-actions">
+      <form method="post" action="/cockpit/{{ conversation.session_id }}/focus" class="thread-focus-form">
+        <input
+          type="text"
+          name="customer_id"
+          value="{{ conversation.customer_focus or '' }}"
+          placeholder="CUST-NNN (blank to clear)"
+        />
+        <button type="submit" class="thread-action-btn">Pin</button>
+      </form>
+      <form method="post" action="/cockpit/{{ conversation.session_id }}/reset" class="thread-action-form">
+        <button type="submit" class="thread-action-btn">Reset</button>
+      </form>
+      <form method="post" action="/cockpit/{{ conversation.session_id }}/confirm" class="thread-action-form">
+        <button type="submit" class="thread-action-btn thread-confirm-btn">/confirm</button>
+      </form>
+    </div>
   </header>
 
-  <aside class="cockpit-thread-meta">
-    <form method="post" action="/cockpit/{{ conversation.session_id }}/focus" class="cockpit-focus-form">
-      <label>
-        Focus:
-        <input type="text" name="customer_id" value="{{ conversation.customer_focus or '' }}" placeholder="CUST-NNN (blank to clear)" />
-      </label>
-      <button type="submit">Set focus</button>
-    </form>
-    <form method="post" action="/cockpit/{{ conversation.session_id }}/reset" class="cockpit-action-form">
-      <button type="submit" class="cockpit-action-btn">Reset</button>
-    </form>
-    <form method="post" action="/cockpit/{{ conversation.session_id }}/confirm" class="cockpit-action-form">
-      <button type="submit" class="cockpit-action-btn">/confirm</button>
-    </form>
-  </aside>
+  <div class="thread-stream" id="thread-stream">
+    {% if not transcript_blocks and not stream_session_id %}
+      <div class="thread-empty">
+        <p class="thread-empty-title">Start a conversation.</p>
+        <p class="thread-empty-hint">
+          Try <code>show me CUST-001</code>, <code>list active subscriptions</code>,
+          or <code>any blocked customers today?</code>.
+          The agent has full read access; destructive operations propose first
+          and wait for <code>/confirm</code>.
+        </p>
+      </div>
+    {% endif %}
 
-  <div class="cockpit-thread-stream" id="cockpit-thread-stream">
     {% for block in transcript_blocks %}
       {% if block.role == "user" %}
-        <div class="chat-bubble chat-bubble-user"><p>{{ block.body }}</p></div>
+        <div class="chat-bubble chat-bubble-user">
+          <p>{{ block.body }}</p>
+        </div>
       {% elif block.role == "assistant" %}
-        <div class="chat-bubble chat-bubble-assistant"><p>{{ block.body }}</p></div>
+        <div class="chat-bubble chat-bubble-assistant">
+          {{ block.body_html | safe }}
+        </div>
       {% elif block.role == "tool" %}
-        <div class="chat-tool-pill"><span class="chat-tool-icon">≈</span><span class="chat-tool-name">{{ block.tool_name or "tool" }}</span></div>
-        {% if block.body %}<pre class="cockpit-tool-body">{{ block.body }}</pre>{% endif %}
+        <details class="chat-tool-block">
+          <summary>
+            <span class="chat-tool-icon">≈</span>
+            <span class="chat-tool-name">{{ block.tool_name or "tool" }}</span>
+            <span class="chat-tool-hint">click to expand</span>
+          </summary>
+          <pre class="chat-tool-body">{{ block.body }}</pre>
+        </details>
       {% endif %}
     {% endfor %}
 
     {% if stream_session_id %}
-      <div sse-swap="message" hx-swap="beforeend" sse-close="status"></div>
-      <div class="cockpit-status-line" sse-swap="status" hx-swap="innerHTML"></div>
+      <div class="thread-stream-incoming" sse-swap="message" hx-swap="beforeend"></div>
+      <div class="thread-stream-status" sse-swap="status" hx-swap="innerHTML"></div>
     {% endif %}
   </div>
 
-  <form method="post" action="/cockpit/{{ conversation.session_id }}/turn" class="cockpit-turn-form">
-    <textarea name="message" rows="3" placeholder="type a request or a /command…" required></textarea>
-    <button type="submit" class="cockpit-turn-btn">Send</button>
+  <form
+    method="post"
+    action="/cockpit/{{ conversation.session_id }}/turn"
+    class="thread-compose"
+    id="thread-compose"
+  >
+    <textarea
+      name="message"
+      id="thread-compose-input"
+      rows="3"
+      placeholder="Ask the agent…  (Enter to send, Shift+Enter for newline)"
+      required
+      autocomplete="off"
+    ></textarea>
+    <button type="submit" class="thread-send-btn">Send</button>
   </form>
 </section>
+
+<script>
+(function () {
+  const stream = document.getElementById("thread-stream");
+  const form = document.getElementById("thread-compose");
+  const input = document.getElementById("thread-compose-input");
+
+  // Autoscroll to the bottom on initial load + on every SSE message.
+  function scrollToBottom() {
+    if (!stream) return;
+    stream.scrollTop = stream.scrollHeight;
+  }
+  scrollToBottom();
+  document.body.addEventListener("htmx:sseMessage", scrollToBottom);
+  document.body.addEventListener("htmx:afterSwap", scrollToBottom);
+
+  // Enter to send, Shift+Enter for newline.
+  if (input && form) {
+    input.addEventListener("keydown", function (ev) {
+      if (ev.key === "Enter" && !ev.shiftKey) {
+        ev.preventDefault();
+        if (input.value.trim().length === 0) return;
+        form.submit();
+      }
+    });
+    input.focus();
+  }
+})();
+</script>
 {% endblock %}

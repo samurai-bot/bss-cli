@@ -2,11 +2,10 @@
 # in .env (BSS_*_API_TOKEN, DB URL, OpenRouter key). This file is
 # operator-local; the autobootstrapper copies .template → settings.toml
 # on first run.
-
-[operator]
-# X-BSS-Actor stamped on cockpit-driven downstream calls. Audit
-# attribution; descriptive only (no auth verification).
-actor = "operator"
+#
+# v0.13.1 — `actor` is hardcoded (always "operator"). The cockpit runs
+# single-operator-by-design behind a secure perimeter; this file
+# carries non-identity preferences only.
 
 [llm]
 # Overrides BSS_LLM_MODEL when set. Comment out to fall back to env.

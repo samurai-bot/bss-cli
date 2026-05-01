@@ -7,8 +7,8 @@ handlers persist + validate via :mod:`bss_cockpit.config` helpers and
 the parser's diagnostic message echoed in-page.
 
 No auth — same single-operator-by-design contract as the rest of the
-cockpit. ``actor`` for any audit trail comes from
-``bss_cockpit.current().settings.operator.actor``.
+cockpit. ``actor`` for any audit trail is hardcoded to
+``bss_cockpit.OPERATOR_ACTOR`` (v0.13.1).
 
 Doctrine-coupled: this is the only write path to either file outside
 the REPL's ``/operator edit`` and ``/config edit`` slash commands.
@@ -23,6 +23,7 @@ from typing import Any
 
 import structlog
 from bss_cockpit import (
+    OPERATOR_ACTOR,
     current as cockpit_config_current,
     write_operator_md,
     write_settings_toml,
@@ -45,7 +46,7 @@ def _settings_context(
 ) -> dict[str, Any]:
     cfg = cockpit_config_current()
     return {
-        "actor": cfg.settings.operator.actor,
+        "actor": OPERATOR_ACTOR,
         "model": cfg.settings.llm.model or "(env default)",
         "operator_md": cfg.operator_md,
         "settings_toml": cfg.settings_path.read_text(encoding="utf-8"),
@@ -87,10 +88,7 @@ async def settings_save_operator_md(
             },
             status_code=400,
         )
-    log.info(
-        "cockpit.settings.operator_md_saved",
-        actor=cockpit_config_current().settings.operator.actor,
-    )
+    log.info("cockpit.settings.operator_md_saved", actor=OPERATOR_ACTOR)
     return RedirectResponse(url="/settings?flash=operator_saved", status_code=303)
 
 

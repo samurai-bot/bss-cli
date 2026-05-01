@@ -28,6 +28,7 @@ Future PRs (per phases/V0_13_0.md):
 from __future__ import annotations
 
 from .config import (
+    OPERATOR_ACTOR,
     CockpitConfig,
     CockpitSettings,
     current,
@@ -45,6 +46,7 @@ from .conversation import (
 from .prompts import build_cockpit_prompt
 
 __all__ = [
+    "OPERATOR_ACTOR",
     "CockpitConfig",
     "CockpitSettings",
     "Conversation",

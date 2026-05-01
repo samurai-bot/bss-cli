@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import structlog
 from bss_clients.errors import ClientError
-from bss_cockpit import current as cockpit_config_current
+from bss_cockpit import OPERATOR_ACTOR, current as cockpit_config_current
 from bss_orchestrator.clients import get_clients
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
@@ -81,7 +81,7 @@ async def case_thread(request: Request, case_id: str) -> HTMLResponse:
         request,
         "case_thread.html",
         {
-            "actor": cfg.settings.operator.actor,
+            "actor": OPERATOR_ACTOR,
             "model": cfg.settings.llm.model or "(env default)",
             "case": {
                 "id": case_raw.get("id", case_id),

@@ -90,8 +90,12 @@ def test_index_renders_empty_state_when_no_sessions(cockpit_client) -> None:
     r = cockpit_client.get("/")
     assert r.status_code == 200
     body = r.text
-    assert "Cockpit sessions" in body
-    assert "No active cockpit sessions" in body or "New session" in body
+    # v0.13.1 redesign — sessions index has a hero greeting + a
+    # "Recent conversations" section with an empty-state hint when no
+    # sessions exist.
+    assert "Hello, operator" in body
+    assert "Recent conversations" in body
+    assert "No conversations yet" in body
 
 
 # ── New / open / resume ───────────────────────────────────────────────

@@ -22,9 +22,6 @@ from bss_cockpit.config import reset_cache
 
 
 _GOOD_TOML = """\
-[operator]
-actor = "ck"
-
 [llm]
 model = "google/gemma-4-26b-a4b-it"
 temperature = 0.2
@@ -74,9 +71,9 @@ def test_get_settings_renders_both_files(settings_client) -> None:
     assert "OPERATOR.md" in body
     assert "settings.toml" in body
     assert "I am the test operator." in body
-    # The textarea content is HTML-escaped (Jinja's default escape filter
-    # turns " into &#34;), so match the raw token without the quote chars.
-    assert "actor = &#34;ck&#34;" in body or "actor = \"ck\"" in body
+    # The textarea content is HTML-escaped (Jinja's default escape filter).
+    # Match the model line, which is a string we own in _GOOD_TOML.
+    assert "google/gemma-4-26b-a4b-it" in body
 
 
 def test_post_settings_operator_persists_and_reloads(
@@ -113,7 +110,7 @@ def test_post_settings_operator_rejects_empty(
 def test_post_settings_config_persists_and_reloads(
     settings_client, settings_root: Path
 ) -> None:
-    new_toml = _GOOD_TOML.replace('actor = "ck"', 'actor = "alice"')
+    new_toml = _GOOD_TOML.replace("temperature = 0.2", "temperature = 0.7")
     r = settings_client.post(
         "/settings/config",
         data={"settings_toml": new_toml},
@@ -122,9 +119,7 @@ def test_post_settings_config_persists_and_reloads(
     assert r.status_code == 303
     assert "flash=config_saved" in r.headers["location"]
     body = settings_client.get("/settings?flash=config_saved").text
-    # textarea content is HTML-escaped; the diagnostics block isn't.
-    assert "alice" in body
-    assert "actor = &#34;alice&#34;" in body or "actor = \"alice\"" in body
+    assert "temperature = 0.7" in body
 
 
 def test_post_settings_config_rejects_invalid_toml(
@@ -147,14 +142,12 @@ def test_post_settings_config_rejects_invalid_toml(
 def test_post_settings_config_rejects_pydantic_failure(
     settings_client, settings_root: Path
 ) -> None:
-    """actor must be non-empty — write_settings_toml rejects via
-    Pydantic, the route renders 400 with the diagnostic."""
-    bad = _GOOD_TOML.replace('actor = "ck"', 'actor = ""')
+    """temperature is a float — a string trips Pydantic v2 validation."""
+    bad = _GOOD_TOML.replace("temperature = 0.2", 'temperature = "hot"')
     r = settings_client.post(
         "/settings/config",
         data={"settings_toml": bad},
         follow_redirects=False,
     )
     assert r.status_code == 400
-    # Pydantic v2 surfaces "should have at least 1 character"
     assert "ValidationError" in r.text

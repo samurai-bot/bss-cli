@@ -1,49 +1,62 @@
 {% extends "cockpit_layout.html" %}
-{% block title %}Cockpit · {{ actor }} · bss-cli{% endblock %}
+{% block title %}Sessions · cockpit · bss-cli{% endblock %}
 
 {% block main %}
-<section class="cockpit-sessions-index">
-  <header class="cockpit-section-header">
-    <h1 class="page-title">Cockpit sessions</h1>
-    <form method="post" action="/cockpit/new" class="cockpit-new-form">
+<section class="cockpit-page sessions-page">
+  <div class="cockpit-hero">
+    <h1 class="cockpit-hero-title">Hello, operator.</h1>
+    <p class="cockpit-hero-sub">Pick up where you left off, or start a fresh conversation.</p>
+    <form method="get" action="/search" class="cockpit-hero-search">
       <input
         type="text"
-        name="label"
-        placeholder="optional label"
-        class="cockpit-new-label"
+        name="q"
+        placeholder="Search a customer by name or MSISDN…"
+        autocomplete="off"
+        autofocus
       />
-      <button type="submit" class="cockpit-new-btn">New session</button>
+      <button type="submit">Search</button>
     </form>
-  </header>
+  </div>
 
-  {% if sessions %}
-  <table class="cockpit-sessions-table">
-    <thead>
-      <tr>
-        <th>Session</th>
-        <th>Label</th>
-        <th>Focus</th>
-        <th>Last active</th>
-        <th class="num">Msgs</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for s in sessions %}
-      <tr>
-        <td><a href="/cockpit/{{ s.session_id }}"><code>{{ s.session_id }}</code></a></td>
-        <td>{{ s.label or "—" }}</td>
-        <td>{% if s.customer_focus %}<a href="/case/?customer={{ s.customer_focus }}">{{ s.customer_focus }}</a>{% else %}—{% endif %}</td>
-        <td><code>{{ s.last_active_at.strftime("%Y-%m-%d %H:%M") }}</code></td>
-        <td class="num">{{ s.message_count }}</td>
-      </tr>
+  <div class="sessions-section">
+    <div class="sessions-section-header">
+      <h2>Recent conversations</h2>
+      <form method="post" action="/cockpit/new" class="cockpit-inline-new">
+        <input type="hidden" name="label" value="" />
+        <button type="submit" class="cockpit-link-btn">+ New conversation</button>
+      </form>
+    </div>
+
+    {% if grouped_sessions %}
+      {% for group in grouped_sessions %}
+      <div class="sessions-group">
+        <div class="sessions-group-label">{{ group.label }}</div>
+        <ul class="sessions-list">
+          {% for s in group.rows %}
+          <li class="sessions-row">
+            <a href="/cockpit/{{ s.session_id }}" class="sessions-row-link">
+              <div class="sessions-row-title">{{ s.title }}</div>
+              <div class="sessions-row-meta">
+                {% if s.focus_label %}<span class="sessions-row-focus">{{ s.focus_label }}</span>{% endif %}
+                <span class="sessions-row-time">{{ s.last_active_human }}</span>
+                <span class="sessions-row-msgs">{{ s.message_count }} message{% if s.message_count != 1 %}s{% endif %}</span>
+              </div>
+            </a>
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
       {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <p class="empty-state">
-    No active cockpit sessions yet for <strong>{{ actor }}</strong>.
-    Open one with the button above, or run <code>bss</code> in your terminal.
-  </p>
-  {% endif %}
+    {% else %}
+      <div class="sessions-empty">
+        <p>No conversations yet.</p>
+        <p class="cockpit-hint">
+          Search for a customer above to dive in, or start a free-form conversation
+          with the agent — a place to ask <em>"how's the catalog looking?"</em> or
+          <em>"any blocked subscriptions today?"</em>.
+        </p>
+      </div>
+    {% endif %}
+  </div>
 </section>
 {% endblock %}

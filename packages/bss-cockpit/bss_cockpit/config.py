@@ -46,6 +46,15 @@ from pydantic import BaseModel, Field, ValidationError
 log = structlog.get_logger(__name__)
 
 
+# v0.13.1 — actor is hardcoded. The cockpit runs single-operator-by-
+# design behind a secure perimeter; the audit attribution name is
+# always ``"operator"``. Removing it from settings.toml eliminates a
+# whole class of cross-surface drift (REPL writing under one actor,
+# browser filtering by another) and matches the "secure perimeter"
+# trust story — no per-user identity story to preserve.
+OPERATOR_ACTOR: str = "operator"
+
+
 # Embedded default templates. The container deployment may not have
 # the repo's .template files on disk (only Python code is bundled in
 # the wheel). When the autobootstrap can't find a .template sibling,
@@ -71,9 +80,6 @@ I am the operator. I run a small MVNO on BSS-CLI and use this cockpit daily.
 """
 
 _DEFAULT_SETTINGS_TOML = """\
-[operator]
-actor = "operator"
-
 [llm]
 model = "google/gemma-4-26b-a4b-it"
 temperature = 0.2
@@ -93,10 +99,6 @@ csr_portal = 9002
 # ─────────────────────────────────────────────────────────────────────
 
 
-class _OperatorSection(BaseModel):
-    actor: str = Field(min_length=1, max_length=64)
-
-
 class _LlmSection(BaseModel):
     model: str | None = None
     temperature: float = 0.2
@@ -114,11 +116,14 @@ class CockpitSettings(BaseModel):
     """Validated view of ``.bss-cli/settings.toml``.
 
     Sections are discrete to keep validation errors locatable in the
-    operator's editor (a typo under ``[operator]`` says so by section
-    name, not just by key).
+    operator's editor (a typo under ``[llm]`` says so by section name,
+    not just by key).
+
+    v0.13.1 — the ``[operator].actor`` field is gone; cockpit actor is
+    hardcoded to ``OPERATOR_ACTOR = "operator"``. The settings file is
+    now purely tunable preference, no identity claims.
     """
 
-    operator: _OperatorSection
     llm: _LlmSection = _LlmSection()
     cockpit: _CockpitSection = _CockpitSection()
     ports: _PortsSection = _PortsSection()

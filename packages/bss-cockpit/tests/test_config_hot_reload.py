@@ -21,9 +21,6 @@ from bss_cockpit.config import (
 )
 
 _GOOD_TOML = """\
-[operator]
-actor = "ck"
-
 [llm]
 model = "google/gemma-4-26b-a4b-it"
 temperature = 0.2
@@ -64,7 +61,7 @@ def test_current_returns_validated_view(root) -> None:
     cfg = current(root=root)
     assert cfg.operator_md == _GOOD_OPERATOR_MD
     assert isinstance(cfg.settings, CockpitSettings)
-    assert cfg.settings.operator.actor == "ck"
+    assert cfg.settings.llm.model == "google/gemma-4-26b-a4b-it"
     assert cfg.settings.cockpit.allow_destructive_default is False
     assert cfg.settings.ports.csr_portal == 9002
 
@@ -97,7 +94,7 @@ def test_autobootstrap_copies_templates_when_missing(tmp_path) -> None:
     cfg = current(root=tmp_path)
     assert (tmp_path / "OPERATOR.md").read_text() == "# Default\n"
     assert (tmp_path / "settings.toml").exists()
-    assert cfg.settings.operator.actor == "ck"
+    assert cfg.settings.llm.model == "google/gemma-4-26b-a4b-it"
 
 
 def test_autobootstrap_does_not_overwrite_existing(root) -> None:
@@ -112,7 +109,7 @@ def test_autobootstrap_does_not_overwrite_existing(root) -> None:
 
 def test_invalid_toml_after_good_load_keeps_serving_last_good(root) -> None:
     good = current(root=root)
-    assert good.settings.operator.actor == "ck"
+    assert good.settings.llm.model == "google/gemma-4-26b-a4b-it"
 
     # Corrupt the file
     (root / "settings.toml").write_text("not = valid = toml")
@@ -136,9 +133,9 @@ def test_invalid_toml_on_first_load_raises(tmp_path) -> None:
 def test_pydantic_validation_failure_keeps_last_good(root) -> None:
     good = current(root=root)
 
-    # actor must be non-empty
+    # temperature is float-typed; a string trips Pydantic validation.
     (root / "settings.toml").write_text(
-        _GOOD_TOML.replace('actor = "ck"', 'actor = ""')
+        _GOOD_TOML.replace("temperature = 0.2", 'temperature = "hot"')
     )
     os.utime(
         root / "settings.toml",
@@ -173,8 +170,8 @@ def test_write_settings_toml_validates_first(root) -> None:
 
 
 def test_write_settings_toml_persists_and_returns_validated(root) -> None:
-    new = _GOOD_TOML.replace('actor = "ck"', 'actor = "alice"')
+    new = _GOOD_TOML.replace("temperature = 0.2", "temperature = 0.7")
     validated = write_settings_toml(new, root=root)
-    assert validated.operator.actor == "alice"
+    assert validated.llm.temperature == 0.7
     cfg = current(root=root)
-    assert cfg.settings.operator.actor == "alice"
+    assert cfg.settings.llm.temperature == 0.7

@@ -29,12 +29,16 @@ from __future__ import annotations
 import asyncio
 import json as _json
 from collections.abc import AsyncIterator
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import structlog
 from bss_clients.errors import ClientError
+from bss_clock import now as clock_now
 from bss_cockpit import (
+    OPERATOR_ACTOR,
     Conversation,
+    ConversationSummary,
     build_cockpit_prompt,
     current as cockpit_config_current,
 )
@@ -47,6 +51,7 @@ from bss_orchestrator.session import (
 )
 from bss_portal_ui import (
     render_assistant_bubble,
+    render_chat_markdown,
     render_tool_pill,
 )
 from bss_portal_ui.sse import format_frame as _sse_frame
@@ -107,8 +112,8 @@ def _is_destructive(tool_name: str) -> bool:
 
 
 def _operator_actor() -> str:
-    """``actor`` for cockpit turns. Source-of-truth is settings.toml."""
-    return cockpit_config_current().settings.operator.actor
+    """``actor`` for cockpit turns. Hardcoded in v0.13.1 — perimeter trust."""
+    return OPERATOR_ACTOR
 
 
 async def _load_focus_snapshot(customer_id: str) -> dict[str, Any]:
@@ -167,19 +172,148 @@ async def _load_focus_snapshot(customer_id: str) -> dict[str, Any]:
 
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> HTMLResponse:
-    """Sessions index — the operator's recent cockpit sessions."""
+    """Sessions index — recent operator conversations, time-grouped."""
     cfg = cockpit_config_current()
-    actor = cfg.settings.operator.actor
-    rows = await Conversation.list_for(actor)
+    rows = await Conversation.list_for(OPERATOR_ACTOR)
+    grouped = await _group_sessions_for_index(rows)
     return templates.TemplateResponse(
         request,
         "sessions_index.html",
         {
-            "actor": actor,
+            "active_page": "sessions",
             "model": cfg.settings.llm.model or "(env default)",
-            "sessions": rows,
+            "grouped_sessions": grouped,
         },
     )
+
+
+async def _group_sessions_for_index(
+    rows: list[ConversationSummary],
+) -> list[dict[str, Any]]:
+    """Build the time-grouped + name-resolved view for the sessions list.
+
+    For each session we fetch the first user message (cheap — one row
+    per session) to use as the human-friendly title, and resolve
+    customer focus to a name via crm.get_customer (best-effort; falls
+    back to the CUST-id if the lookup fails).
+    """
+    if not rows:
+        return []
+
+    clients = get_clients()
+
+    # 1. Resolve customer focus → name in a single pass.
+    focus_ids = sorted({r.customer_focus for r in rows if r.customer_focus})
+    focus_name_by_id: dict[str, str] = {}
+    for cust_id in focus_ids:
+        try:
+            cust = await clients.crm.get_customer(cust_id)
+            individual = cust.get("individual") or {}
+            name = " ".join(
+                s for s in [individual.get("givenName"), individual.get("familyName")] if s
+            ).strip() or cust.get("name", "") or cust_id
+            focus_name_by_id[cust_id] = name
+        except Exception:  # noqa: BLE001
+            focus_name_by_id[cust_id] = cust_id  # fall back
+
+    # 2. Resolve each session's first user message → title.
+    title_by_session: dict[str, str] = {}
+    for r in rows:
+        title_by_session[r.session_id] = await _first_user_message_title(
+            r.session_id, fallback=r.label
+        )
+
+    # 3. Time-bucket newest-first. clock_now is the source of truth.
+    now = clock_now()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    yesterday_start = today_start - timedelta(days=1)
+    week_start = today_start - timedelta(days=7)
+
+    buckets: dict[str, list[dict[str, Any]]] = {
+        "Today": [],
+        "Yesterday": [],
+        "Earlier this week": [],
+        "Older": [],
+    }
+
+    for r in rows:
+        last_active = _aware(r.last_active_at)
+        if last_active >= today_start:
+            label = "Today"
+        elif last_active >= yesterday_start:
+            label = "Yesterday"
+        elif last_active >= week_start:
+            label = "Earlier this week"
+        else:
+            label = "Older"
+
+        focus_label = (
+            focus_name_by_id.get(r.customer_focus)
+            if r.customer_focus else None
+        )
+        buckets[label].append({
+            "session_id": r.session_id,
+            "title": title_by_session[r.session_id],
+            "focus_label": focus_label,
+            "last_active_human": _humanize_time(last_active, now),
+            "message_count": r.message_count,
+        })
+
+    return [
+        {"label": label, "rows": rows_in_bucket}
+        for label, rows_in_bucket in buckets.items()
+        if rows_in_bucket
+    ]
+
+
+async def _first_user_message_title(
+    session_id: str, *, fallback: str | None
+) -> str:
+    """First user message in the session, trimmed for the sessions list.
+
+    Falls back to the operator-provided label, then to a generic
+    "(empty conversation)" placeholder.
+    """
+    # Use the conversation API rather than reach into the store
+    # internals, so a future reshape of the message table doesn't
+    # break this path.
+    try:
+        conv = await Conversation.resume(session_id)
+        transcript = await conv.transcript_text()
+    except Exception:  # noqa: BLE001
+        return fallback or "(empty conversation)"
+    for block in transcript.split("\n\n"):
+        block = block.strip()
+        if not block:
+            continue
+        head, _, body = block.partition("\n")
+        if head.strip().rstrip(":") == "user":
+            text = body.strip().split("\n", 1)[0]
+            if len(text) > 80:
+                text = text[:77] + "…"
+            return text or fallback or "(empty conversation)"
+    return fallback or "(empty conversation)"
+
+
+def _aware(dt: datetime) -> datetime:
+    """Coerce naive datetimes to UTC-aware (Postgres returns aware; tests
+    occasionally pass naive — keep the comparison total-orderable)."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _humanize_time(when: datetime, now: datetime) -> str:
+    """Compact human time: "14:32", "yesterday 09:15", "Apr 23 17:40"."""
+    when = _aware(when)
+    now = _aware(now)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    yesterday_start = today_start - timedelta(days=1)
+    if when >= today_start:
+        return when.strftime("%H:%M")
+    if when >= yesterday_start:
+        return f"yesterday {when.strftime('%H:%M')}"
+    return when.strftime("%b %d %H:%M")
 
 
 @router.post("/cockpit/new")
@@ -202,15 +336,44 @@ async def cockpit_thread(
         raise HTTPException(status_code=404, detail=str(exc))
 
     transcript = await conv.transcript_text()
+    blocks = _split_transcript_blocks(transcript)
+    # Pre-render assistant bubbles through the shared markdown
+    # converter so reload-after-stream looks identical to live SSE.
+    for b in blocks:
+        if b["role"] == "assistant":
+            b["body_html"] = render_chat_markdown(b["body"])
+        elif b["role"] == "user":
+            b["body_html"] = b["body"]
+        else:
+            b["body_html"] = b["body"]
+
+    # Build a thread title from the first user message; resolve focus
+    # to a customer name (best-effort).
+    thread_title = await _first_user_message_title(
+        session_id, fallback=conv.label
+    )
+    focus_label: str | None = None
+    if conv.customer_focus:
+        try:
+            cust = await get_clients().crm.get_customer(conv.customer_focus)
+            individual = cust.get("individual") or {}
+            focus_label = " ".join(
+                s for s in [individual.get("givenName"), individual.get("familyName")] if s
+            ).strip() or conv.customer_focus
+        except Exception:  # noqa: BLE001
+            focus_label = conv.customer_focus
+
     cfg = cockpit_config_current()
     return templates.TemplateResponse(
         request,
         "cockpit_thread.html",
         {
-            "actor": cfg.settings.operator.actor,
+            "active_page": "thread",
             "model": cfg.settings.llm.model or "(env default)",
             "conversation": conv,
-            "transcript_blocks": _split_transcript_blocks(transcript),
+            "thread_title": thread_title,
+            "focus_label": focus_label,
+            "transcript_blocks": blocks,
             "stream_session_id": request.query_params.get("turn", ""),
         },
     )
@@ -332,7 +495,7 @@ async def cockpit_events(
         raise HTTPException(status_code=404, detail=str(exc))
 
     cfg = cockpit_config_current()
-    actor = cfg.settings.operator.actor
+    actor = OPERATOR_ACTOR
 
     # Pull the latest user message off the conversation. Bail cleanly
     # if there isn't one (page reload after the turn already streamed).
