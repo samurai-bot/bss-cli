@@ -12,6 +12,7 @@ dependencies = [
     "bss-middleware",
     "typer>=0.12",
     "rich>=13.7",
+    "prompt-toolkit>=3.0",
     "qrcode>=7.4",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",

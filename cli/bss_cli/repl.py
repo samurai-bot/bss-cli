@@ -35,17 +35,22 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import readline  # noqa: F401 — enables Up/Down history + line editing on input()
 import subprocess
 from pathlib import Path
 from typing import Any, Callable
 
-# v0.13.1 — persistent REPL history. Plain `import readline` already
-# wires Up/Down + Ctrl-R for the running session; loading + saving a
-# history file makes it survive across ``bss`` invocations. Stored
-# under .bss-cli/ alongside OPERATOR.md + settings.toml.
+from prompt_toolkit import PromptSession
+from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+from prompt_toolkit.formatted_text import ANSI
+from prompt_toolkit.history import FileHistory
+
+
+# v0.13.1 — persistent REPL history under ``.bss-cli/repl_history``.
+# Survives across ``bss`` invocations. prompt_toolkit handles Up/Down
+# + Ctrl-R + line editing natively on every platform Rich's input()
+# bypass didn't (the readline approach was unreliable under Rich's
+# Prompt.ask).
 _HISTORY_FILE_NAME = "repl_history"
-_HISTORY_MAX_LINES = 1000
 
 
 def _bss_cli_dir() -> Path:
@@ -57,34 +62,24 @@ def _bss_cli_dir() -> Path:
     return Path(__file__).resolve().parents[2] / ".bss-cli"
 
 
-def _setup_repl_history() -> None:
-    """Load + register save-on-exit for ``.bss-cli/repl_history``.
+def _make_prompt_session() -> PromptSession:
+    """Build a prompt_toolkit session with FileHistory.
 
-    Best-effort: a missing dir, an unreadable file, or a noreadline
-    stub on a weird platform all fall through silently — Up/Down still
-    work for the running session even without the file.
+    Falls back to an in-memory history if the dir isn't writable —
+    Up/Down still work for the running session.
     """
     bss_dir = _bss_cli_dir()
+    history = None
     try:
         bss_dir.mkdir(parents=True, exist_ok=True)
+        history = FileHistory(str(bss_dir / _HISTORY_FILE_NAME))
     except OSError:
-        return
-    history_path = bss_dir / _HISTORY_FILE_NAME
-    try:
-        if history_path.exists():
-            readline.read_history_file(str(history_path))
-    except (OSError, AttributeError):
-        pass
-    readline.set_history_length(_HISTORY_MAX_LINES)
-    import atexit
-
-    def _save() -> None:
-        try:
-            readline.write_history_file(str(history_path))
-        except (OSError, AttributeError):
-            pass
-
-    atexit.register(_save)
+        history = None
+    return PromptSession(
+        history=history,
+        auto_suggest=AutoSuggestFromHistory(),
+        enable_history_search=True,  # Ctrl-R / Ctrl-N substring search
+    )
 
 from bss_clients.errors import ClientError
 from bss_cockpit import (
@@ -729,8 +724,9 @@ def run_repl(
         rprint(f"[red]Cockpit unavailable:[/] {exc}")
         return
 
-    # v0.13.1 — Up/Down history + persistent across bss invocations.
-    _setup_repl_history()
+    # v0.13.1 — prompt_toolkit prompt: Up/Down history + Ctrl-R search
+    # + persistent across bss invocations + fish-style auto-suggest.
+    prompt_session = _make_prompt_session()
 
     bss_cli_dir = Path(__file__).resolve().parents[2] / ".bss-cli"
 
@@ -778,8 +774,16 @@ def run_repl(
         )
 
         while True:
+            # ANSI-coloured prompt label rendered identically to the
+            # prior Rich shape (bold "bss:" + yellow last-8 chars of
+            # session id + cyan "> ").
+            prompt_label = ANSI(
+                f"\033[1mbss\033[0m:"
+                f"\033[33m{conv.session_id[-8:]}\033[0m"
+                f"\033[36m> \033[0m"
+            )
             try:
-                line = Prompt.ask(f"[bold]bss[/]:[yellow]{conv.session_id[-8:]}[/]").strip()
+                line = prompt_session.prompt(prompt_label).strip()
             except (EOFError, KeyboardInterrupt):
                 rprint()
                 break
@@ -824,6 +828,40 @@ def run_repl(
                     )
                 )
             except Exception as e:  # pragma: no cover — surface at runtime
+                # v0.13.1 — defensive recovery: if the session row
+                # disappeared mid-REPL (e.g. a test fixture truncated
+                # cockpit.session, or the operator ran reset-db in
+                # another shell), Postgres raises a FK violation on
+                # the message INSERT. Detect that specifically and
+                # offer a fresh session rather than crashing the loop.
+                msg = str(e)
+                missing_session = (
+                    "fk_message_session_id_session" in msg
+                    or "ForeignKeyViolation" in msg
+                )
+                if missing_session:
+                    rprint(
+                        f"[yellow]Session {conv.session_id} no longer "
+                        "exists in the cockpit store — opening a "
+                        "fresh one.[/]"
+                    )
+                    try:
+                        conv = loop.run_until_complete(
+                            Conversation.open(actor=actor, label=label)
+                        )
+                        rprint(
+                            _render_banner(
+                                actor=actor,
+                                model=model,
+                                session_id=conv.session_id,
+                                customer_focus=conv.customer_focus,
+                                allow_destructive_default=allow_destructive,
+                            )
+                        )
+                    except Exception as inner:  # noqa: BLE001
+                        rprint(f"[red]Cannot open new session:[/] {inner}")
+                        break
+                    continue
                 rprint(f"[red]LLM error:[/] {e}")
                 continue
     finally:
