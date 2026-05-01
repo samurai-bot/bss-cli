@@ -148,9 +148,10 @@ services:
       som:     { condition: service_healthy }
       provisioning-sim: { condition: service_healthy }
 
-  # v0.5 — CSR (customer service rep) console. Stub auth; reaches every
-  # downstream BSS service for read paths and routes writes through the
-  # orchestrator via agent_bridge. Port 9002 follows the 9xxx portal range.
+  # v0.13 — operator cockpit (browser veneer over the cockpit
+  # Conversation store; CLI REPL is the canonical surface). No inbound
+  # auth — single-operator-by-design behind a secure perimeter.
+  # Port 9002 follows the 9xxx portal range.
   portal-csr:
     <<: *bss-service
     build:
@@ -168,6 +169,16 @@ services:
       BSS_MEDIATION_URL: http://mediation:8000
       BSS_PROVISIONING_URL: http://provisioning-sim:8000
       BSS_RATING_URL: http://rating:8000
+      # v0.13 — cockpit reads OPERATOR.md + settings.toml from this
+      # dir (env override of bss_cockpit.config._bss_cli_dir).
+      BSS_COCKPIT_DIR: /cockpit-state
+    volumes:
+      # Bind-mount the host's .bss-cli/ so OPERATOR.md + settings.toml
+      # edits persist across container restarts. The autobootstrap
+      # creates the actual files on first run if missing (falling back
+      # to bss_cockpit's embedded defaults if templates aren't there
+      # either).
+      - ./.bss-cli:/cockpit-state
     depends_on:
       catalog: { condition: service_healthy }
       crm:     { condition: service_healthy }

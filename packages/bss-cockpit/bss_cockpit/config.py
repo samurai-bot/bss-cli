@@ -31,6 +31,7 @@ Doctrine notes (per phases/V0_13_0.md):
 
 from __future__ import annotations
 
+import os
 import shutil
 import threading
 import tomllib
@@ -43,6 +44,48 @@ from bss_clock import now as clock_now
 from pydantic import BaseModel, Field, ValidationError
 
 log = structlog.get_logger(__name__)
+
+
+# Embedded default templates. The container deployment may not have
+# the repo's .template files on disk (only Python code is bundled in
+# the wheel). When the autobootstrap can't find a .template sibling,
+# it falls back to writing these constants. Keeps cockpit boots
+# resilient regardless of how the package landed (uv workspace, wheel,
+# or Docker image with an unmounted .bss-cli/).
+_DEFAULT_OPERATOR_MD = """\
+# Operator persona
+
+I am the operator. I run a small MVNO on BSS-CLI and use this cockpit daily.
+
+## House rules
+
+- Use SGD with two-decimal precision in all money references.
+- Default to terse, action-first replies. Render ASCII tables/cards inline when listing things.
+- For destructive actions, propose first with a one-line summary and wait for `/confirm`.
+- Escalations stay on the v0.12 list (fraud, billing dispute, regulator complaint, identity recovery, bereavement) — open a case via `case.open` for those, do not auto-resolve.
+
+## Defaults
+
+- Currency: SGD
+- Tone: factual, dry, no upsell
+"""
+
+_DEFAULT_SETTINGS_TOML = """\
+[operator]
+actor = "operator"
+
+[llm]
+model = "google/gemma-4-26b-a4b-it"
+temperature = 0.2
+
+[cockpit]
+allow_destructive_default = false
+
+[ports]
+csr_portal = 9002
+
+[dev_service_urls]
+"""
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -103,12 +146,22 @@ def _repo_root() -> Path:
     """Locate the .bss-cli/ directory relative to the package install.
 
     The package lives under ``packages/bss-cockpit/`` so ``parents[3]``
-    of this file is the repo root.
+    of this file is the repo root in a workspace-install layout.
     """
     return Path(__file__).resolve().parents[3]
 
 
 def _bss_cli_dir() -> Path:
+    """Where to find OPERATOR.md + settings.toml.
+
+    Resolution order:
+      1. ``BSS_COCKPIT_DIR`` env var (absolute path; deployed cockpit
+         containers set this to a bind-mounted writable volume).
+      2. ``<repo_root>/.bss-cli`` for workspace dev.
+    """
+    override = os.environ.get("BSS_COCKPIT_DIR", "").strip()
+    if override:
+        return Path(override)
     return _repo_root() / ".bss-cli"
 
 
@@ -123,24 +176,41 @@ _cache = _Cache()
 _lock = threading.Lock()
 
 
-def _autobootstrap_if_missing(path: Path, template_suffix: str = ".template") -> None:
-    """Copy ``path.with_suffix(... + .template)`` → ``path`` on first run.
+_EMBEDDED_DEFAULTS: dict[str, str] = {
+    "OPERATOR.md": _DEFAULT_OPERATOR_MD,
+    "settings.toml": _DEFAULT_SETTINGS_TOML,
+}
 
-    Idempotent: returns silently if ``path`` already exists or no
-    template exists. Logs the bootstrap so operators see what happened
-    on first start.
+
+def _autobootstrap_if_missing(path: Path, template_suffix: str = ".template") -> None:
+    """Materialize ``path`` from a sibling .template, or from an
+    embedded package default if no .template is present.
+
+    Idempotent: returns silently if ``path`` already exists. Logs the
+    bootstrap so operators see what happened on first start. Also
+    creates the parent directory if it doesn't exist (deployed
+    containers point ``BSS_COCKPIT_DIR`` at a fresh empty volume).
     """
     if path.exists():
         return
+    path.parent.mkdir(parents=True, exist_ok=True)
     template = path.with_name(path.name + template_suffix)
-    if not template.exists():
+    if template.exists():
+        shutil.copy2(template, path)
+        log.info(
+            "cockpit.config.autobootstrap",
+            target=str(path),
+            source=str(template),
+        )
         return
-    shutil.copy2(template, path)
-    log.info(
-        "cockpit.config.autobootstrap",
-        target=str(path),
-        source=str(template),
-    )
+    embedded = _EMBEDDED_DEFAULTS.get(path.name)
+    if embedded is not None:
+        path.write_text(embedded, encoding="utf-8")
+        log.info(
+            "cockpit.config.autobootstrap_embedded",
+            target=str(path),
+            note="no .template sibling found; wrote package default",
+        )
 
 
 def _load_from_disk(

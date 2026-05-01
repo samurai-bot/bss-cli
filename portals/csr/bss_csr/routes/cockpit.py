@@ -27,6 +27,7 @@ must match cockpit.py only.
 from __future__ import annotations
 
 import asyncio
+import json as _json
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -108,6 +109,57 @@ def _is_destructive(tool_name: str) -> bool:
 def _operator_actor() -> str:
     """``actor`` for cockpit turns. Source-of-truth is settings.toml."""
     return cockpit_config_current().settings.operator.actor
+
+
+async def _load_focus_snapshot(customer_id: str) -> dict[str, Any]:
+    """Best-effort customer + subscription snapshot for the focus block.
+
+    Mirrors the v0.5 ``agent_bridge`` pattern: when an operator pins a
+    customer for the cockpit session, the system prompt carries enough
+    state for the LLM to make a single-shot tool call without rounds
+    of discovery. Returns ``{}`` on any read failure — the prompt
+    falls back to a focus-only block.
+    """
+    try:
+        clients = get_clients()
+        cust = await clients.crm.get_customer(customer_id)
+    except (ClientError, Exception):  # noqa: BLE001
+        return {}
+    individual = cust.get("individual") or {}
+    name = " ".join(
+        s for s in [individual.get("givenName"), individual.get("familyName")] if s
+    ).strip() or customer_id
+    snapshot: dict[str, Any] = {
+        "customer_id": customer_id,
+        "customer_name": name,
+        "customer_status": cust.get("status", "?"),
+        "kyc_status": cust.get("kycStatus", "?"),
+    }
+    try:
+        subs = await clients.subscription.list_for_customer(customer_id)
+    except (ClientError, Exception):  # noqa: BLE001
+        subs = []
+    if subs:
+        # Surface the first sub's state + headline balance row so the
+        # LLM doesn't need to call subscription.get to discover that
+        # the line is blocked.
+        primary = subs[0]
+        snapshot["subscription_id"] = primary.get("id", "")
+        snapshot["subscription_state"] = primary.get("state", "?")
+        snapshot["msisdn"] = primary.get("msisdn", "")
+        snapshot["offering_id"] = primary.get("offeringId", "")
+        balances = primary.get("balances") or []
+        if balances:
+            data_row = next(
+                (b for b in balances if b.get("type") == "data"
+                 or b.get("allowanceType") == "data"),
+                balances[0],
+            )
+            snapshot["data_remaining"] = data_row.get(
+                "remaining", data_row.get("used")
+            )
+            snapshot["data_total"] = data_row.get("total", "")
+    return snapshot
 
 
 # ── Routes ───────────────────────────────────────────────────────────
@@ -324,14 +376,27 @@ async def cockpit_events(
     # message. The user message itself becomes the prompt.
     prior_blocks = blocks[:last_user_index]
     prior_transcript = _join_blocks(prior_blocks)
+
+    extra_context: dict[str, Any] = {
+        "model": cfg.settings.llm.model or "(env default)",
+        "session_id": conv.session_id,
+    }
+    # Mirror v0.5 agent_bridge: when focus is pinned, surface a
+    # customer/sub snapshot so the LLM can act in one shot without
+    # discovery rounds (some models leak tool-call markup as text
+    # when starved of context — DECISIONS 2026-05-01).
+    if conv.customer_focus:
+        snapshot = await _load_focus_snapshot(conv.customer_focus)
+        if snapshot:
+            extra_context["focus_snapshot"] = _json.dumps(
+                snapshot, separators=(",", ":")
+            )
+
     system_prompt = build_cockpit_prompt(
         operator_md=cfg.operator_md,
         customer_focus=conv.customer_focus,
         pending_destructive=pending,
-        extra_context={
-            "model": cfg.settings.llm.model or "(env default)",
-            "session_id": conv.session_id,
-        },
+        extra_context=extra_context,
     )
 
     captured_tool_calls: list[dict[str, Any]] = []
