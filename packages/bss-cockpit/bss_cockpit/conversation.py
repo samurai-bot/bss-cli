@@ -66,6 +66,26 @@ log = structlog.get_logger(__name__)
 
 
 @dataclass(frozen=True)
+class ConversationMessage:
+    """One row from ``cockpit.message``, structured for template /
+    render consumption.
+
+    v0.13.1 — the prior path was to serialize messages into a single
+    text transcript via ``transcript_text()`` and re-parse on the
+    consumer side, which is lossy when an assistant message contains
+    blank lines (e.g., a markdown table separating paragraphs). This
+    dataclass exposes the rows directly so renderers don't have to
+    parse anything.
+    """
+
+    id: int
+    role: str  # 'user' | 'assistant' | 'tool'
+    content: str
+    tool_name: str | None
+    created_at: datetime
+
+
+@dataclass(frozen=True)
 class ConversationSummary:
     """One row of ``Conversation.list_for(actor)`` output.
 
@@ -435,6 +455,42 @@ class Conversation:
             await db.commit()
         self.last_active_at = now
         return int(row.id)
+
+    async def list_messages(self) -> list[ConversationMessage]:
+        """Structured view of the message log for template / renderer
+        consumption. Avoids the lossy ``\\n\\n``-split round trip that
+        ``transcript_text()`` + a re-parser produce.
+        """
+        async with self.store._factory() as db:
+            rows = (
+                await db.execute(
+                    text(
+                        """
+                        SELECT id, role, content, tool_calls_json, created_at
+                        FROM cockpit.message
+                        WHERE session_id = :sid
+                        ORDER BY created_at, id
+                        """
+                    ),
+                    {"sid": self.session_id},
+                )
+            ).all()
+        out: list[ConversationMessage] = []
+        for r in rows:
+            tc = r.tool_calls_json
+            tool_name: str | None = None
+            if r.role == "tool" and isinstance(tc, dict):
+                tool_name = tc.get("tool_name") or None
+            out.append(
+                ConversationMessage(
+                    id=int(r.id),
+                    role=r.role,
+                    content=r.content,
+                    tool_name=tool_name,
+                    created_at=r.created_at,
+                )
+            )
+        return out
 
     async def transcript_text(self) -> str:
         """Plain-text transcript for ``astream_once(transcript=...)``.

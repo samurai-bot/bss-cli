@@ -38,6 +38,7 @@ from .config import (
 )
 from .conversation import (
     Conversation,
+    ConversationMessage,
     ConversationStore,
     ConversationSummary,
     PendingDestructive,
@@ -50,6 +51,7 @@ __all__ = [
     "CockpitConfig",
     "CockpitSettings",
     "Conversation",
+    "ConversationMessage",
     "ConversationStore",
     "ConversationSummary",
     "PendingDestructive",

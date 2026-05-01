@@ -76,15 +76,18 @@ _OWNERSHIP_VIOLATION_REPLY = (
     "support if the issue persists."
 )
 
-# v0.13.1 — anti-hallucination. Detect "escalated" / "human agent"
-# language in the assistant's reply and verify case.open_for_me
-# actually fired this turn.
+# v0.13.1 — anti-hallucination. Detect FIRST-PERSON ACTIVE escalation
+# claims ("I've escalated this", "I'm raising a case") and verify
+# case.open_for_me actually fired this turn. Past-tense / third-person
+# language ("your case has been raised", "case ID is CASE-123") is
+# the LLM legitimately recapping a prior escalation; we don't want
+# to false-positive on those when the customer asks "what's my case
+# ID" later.
 _RE_ESCALATION_CLAIM = _re.compile(
-    r"\b("
-    r"escalated|escalat(?:e|ing)"
-    r"|human agent"
-    r"|(?:raise(?:d)?|open(?:ed)?|fil(?:e|ed))\s+a\s+case"
-    r"|case\s+(?:has\s+been\s+)?(?:raised|opened|filed)"
+    r"\bI(?:'ve| have| am| will|'ll|'m)?\s+(?:"
+    r"escalat\w*"
+    r"|(?:raised?|opened?|filed?|raising|opening|filing)\s+"
+    r"(?:a|the|your)?\s*case"
     r")\b",
     _re.IGNORECASE,
 )

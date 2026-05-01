@@ -34,6 +34,7 @@ import hashlib
 from .. import auth_context
 from ..clients import get_clients
 from ..types import (
+    CaseState,
     EscalationCategory,
     IsoDatetime,
     ProductOfferingId,
@@ -487,6 +488,38 @@ _ESCALATION_TO_PRIORITY: dict[str, str] = {
     "bereavement": "medium",
     "other": "medium",
 }
+
+
+@register("case.list_for_me")
+async def case_list_for_me(
+    state: CaseState | None = None,
+) -> list[dict[str, Any]]:
+    """List cases the logged-in customer has open with us.
+
+    Use this when the customer asks "what's my case ID?", "is my case
+    still open?", or similar follow-ups after a prior escalation. The
+    wrapper binds ``customer_id`` from ``auth_context.current().actor``;
+    the LLM signature must NOT carry a customer_id parameter (the v0.12
+    prompt-injection containment seam).
+
+    Args:
+        state: Optional filter — ``"open"`` / ``"in_progress"`` /
+            ``"resolved"`` / ``"closed"``. Default returns every case
+            for this customer regardless of state.
+
+    Returns:
+        List of case dicts (id, subject, state, category, createdAt,
+        chatTranscriptHash if linked from a chat escalation). Empty
+        list when the customer has no cases — render that to the
+        customer in plain English ("no open cases on file").
+
+    Raises:
+        chat.no_actor_bound: invoked outside a chat-scoped session.
+    """
+    actor = _require_actor()
+    return await get_clients().crm.list_cases(
+        customer_id=actor, state=state
+    )
 
 
 @register("case.open_for_me")

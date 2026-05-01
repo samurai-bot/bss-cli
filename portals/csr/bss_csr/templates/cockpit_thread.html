@@ -1,5 +1,5 @@
 {% extends "cockpit_layout.html" %}
-{% block title %}{{ thread_title or conversation.session_id }} · cockpit{% endblock %}
+{% block title_suffix %} · {{ thread_title or conversation.session_id }}{% endblock %}
 
 {% block main %}
 <section

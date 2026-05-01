@@ -68,6 +68,11 @@ TOOL_PROFILES: dict[str, set[str]] = {
         # case open (PR6) — escalation to a human via the five
         # non-negotiable categories.
         "case.open_for_me",
+        # case list (v0.13.1) — customer asks "what's my case ID?" or
+        # "is my case still open?". Without this the LLM hallucinates
+        # past-tense escalation language because it has no tool to
+        # answer with real data.
+        "case.list_for_me",
     },
 
     # v0.13 — the operator cockpit profile. Full registry coverage

@@ -335,22 +335,33 @@ async def cockpit_thread(
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
-    transcript = await conv.transcript_text()
-    blocks = _split_transcript_blocks(transcript)
-    # Pre-render assistant bubbles through the shared markdown
-    # converter so reload-after-stream looks identical to live SSE.
-    for b in blocks:
-        if b["role"] == "assistant":
-            b["body_html"] = render_chat_markdown(b["body"])
-        elif b["role"] == "user":
-            b["body_html"] = b["body"]
+    # v0.13.1 — fetch the structured message rows directly. The prior
+    # path serialized to text and re-parsed on \n\n boundaries, which
+    # truncated assistant bubbles whose body contained blank lines
+    # (e.g., paragraph break + markdown table). Renderers consume
+    # ConversationMessage rows now; nothing parses transcript text.
+    rows = await conv.list_messages()
+    blocks: list[dict[str, Any]] = []
+    for row in rows:
+        block: dict[str, Any] = {
+            "role": row.role,
+            "tool_name": row.tool_name or "",
+            "body": row.content,
+        }
+        if row.role == "assistant":
+            block["body_html"] = render_chat_markdown(row.content)
         else:
-            b["body_html"] = b["body"]
+            block["body_html"] = row.content
+        blocks.append(block)
 
-    # Build a thread title from the first user message; resolve focus
-    # to a customer name (best-effort).
-    thread_title = await _first_user_message_title(
-        session_id, fallback=conv.label
+    # Thread title from first user message (no parsing — direct lookup
+    # over the structured rows).
+    thread_title = next(
+        (
+            (r.content[:77] + "…") if len(r.content) > 80 else r.content
+            for r in rows if r.role == "user"
+        ),
+        conv.label or "(empty conversation)",
     )
     focus_label: str | None = None
     if conv.customer_focus:

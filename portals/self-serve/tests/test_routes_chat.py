@@ -378,15 +378,17 @@ def test_astream_once_only_imported_in_chat_route() -> None:
 # ── v0.13.1: anti-hallucination escalation guard ────────────────────
 
 
-def test_claims_escalation_recognizes_common_phrasing() -> None:
-    """Guard helper: phrases the LLM uses to claim escalation."""
+def test_claims_escalation_recognizes_first_person_active() -> None:
+    """Guard helper: matches the LLM's first-person ACTIVE escalation
+    claims (the signal that it's claiming to do something this turn)."""
     from bss_self_serve.routes.chat import _claims_escalation
 
     assert _claims_escalation("I've escalated this to a human agent.")
-    assert _claims_escalation("Escalating now — sit tight.")
-    assert _claims_escalation("Your case has been raised. Hear back soon.")
-    assert _claims_escalation("I've opened a case for our team.")
-    assert _claims_escalation("I've filed a case on your behalf.")
+    assert _claims_escalation("I am escalating this now.")
+    assert _claims_escalation("I will escalate this to support.")
+    assert _claims_escalation("I've opened a case for you.")
+    assert _claims_escalation("I'm filing a case on your behalf.")
+    assert _claims_escalation("I've raised a case.")
 
 
 def test_claims_escalation_does_not_match_routine_replies() -> None:
@@ -396,6 +398,24 @@ def test_claims_escalation_does_not_match_routine_replies() -> None:
     assert not _claims_escalation("PLAN_S costs SGD 5/month.")
     assert not _claims_escalation("")
     assert not _claims_escalation(None)  # type: ignore[arg-type]
+
+
+def test_claims_escalation_does_not_false_positive_on_past_recap() -> None:
+    """When the customer asks "what's my case ID?" after a prior
+    escalation, the LLM legitimately recaps in past-tense / third-
+    person — that should NOT trip the guard. Otherwise the customer
+    is told to email support every time they reference an existing
+    case (the v0.13.1 regression that prompted this tightening)."""
+    from bss_self_serve.routes.chat import _claims_escalation
+
+    assert not _claims_escalation(
+        "Your case has been raised — case ID is CASE-123."
+    )
+    assert not _claims_escalation("The case I opened earlier is CASE-123.")
+    assert not _claims_escalation("Case CASE-123 is being handled.")
+    assert not _claims_escalation(
+        "Your case from yesterday is still open."
+    )
 
 
 def test_escalation_fallback_template_carries_email() -> None:

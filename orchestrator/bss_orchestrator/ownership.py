@@ -112,6 +112,12 @@ OWNERSHIP_PATHS: dict[str, list[str]] = {
     "subscription.terminate_mine": ["customerId"],
     # PR6 — the case-open response carries the actor's customerId.
     "case.open_for_me": ["customerId"],
+    # v0.13.1 — case.list_for_me returns a list of cases, each with
+    # the actor's customerId. The wrapper passes customer_id from
+    # auth_context, but the trip-wire still asserts on the response
+    # shape so a future server-side bug returning another customer's
+    # row is caught.
+    "case.list_for_me": ["[*].customerId"],
 }
 
 

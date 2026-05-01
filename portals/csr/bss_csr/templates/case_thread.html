@@ -1,5 +1,5 @@
 {% extends "cockpit_layout.html" %}
-{% block title %}{{ case.id }} · {{ case.subject or "case" }} · bss-cli cockpit{% endblock %}
+{% block title_suffix %} · {{ case.id }}{% endblock %}
 
 {% block main %}
 <a class="back-link" href="/">← cockpit sessions</a>
