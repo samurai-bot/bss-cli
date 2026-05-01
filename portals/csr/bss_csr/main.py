@@ -1,14 +1,20 @@
-"""FastAPI app factory for the CSR (customer service rep) portal.
+"""FastAPI app factory for the operator cockpit (v0.13).
 
-Per V0_5_0.md §9 + §Security model:
+Per phases/V0_13_0.md the v0.5 CSR portal pattern is retired. The
+browser is now a thin veneer over the Postgres-backed cockpit
+``Conversation`` store; the canonical surface is the CLI REPL. No
+login. ``actor`` for cockpit turns comes from
+``.bss-cli/settings.toml`` via ``bss_cockpit.config.current()``.
+
 - ``BSSApiTokenMiddleware`` is NOT on the portal's inbound HTTP. The
-  stub login is the inbound gate (cookie-based; not real auth — see
-  Phase 12). Outbound calls to BSS services carry ``BSS_API_TOKEN``
-  via the orchestrator's existing ``TokenAuthProvider`` wiring.
+  cockpit runs single-operator-by-design behind a secure perimeter
+  (CLAUDE.md anti-pattern, DECISIONS 2026-05-01). Outbound calls to
+  BSS services carry the cockpit's named token via the
+  v0.9 ``NamedTokenAuthProvider("operator_cockpit", ...)``.
 - ``configure_telemetry(service_name="portal-csr")`` runs in lifespan
   so portal spans surface in ``bss trace``.
-- The shared ``bss-portal-ui`` package owns the agent log widget +
-  vendored HTMX + base CSS, mounted at ``/portal-ui/static/``.
+- The shared ``bss-portal-ui`` package owns the cockpit's static
+  assets at ``/portal-ui/static/``.
 """
 
 from __future__ import annotations
@@ -17,17 +23,16 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import os
 import structlog
+from bss_cockpit import ConversationStore, configure_store
 from bss_portal_ui import STATIC_DIR as SHARED_STATIC_DIR
 from bss_telemetry import configure_telemetry
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .agent_session import AgentAskStore
 from .config import Settings
-from .deps import install_redirect_handler
-from .session import OperatorSessionStore
 
 log = structlog.get_logger(__name__)
 
@@ -36,13 +41,31 @@ log = structlog.get_logger(__name__)
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     settings = app.state.settings
     configure_telemetry(service_name="portal-csr", app=app)
-    app.state.session_store = OperatorSessionStore(
-        ttl_seconds=settings.bss_portal_csr_session_ttl,
+
+    # v0.13 — boot the cockpit Conversation store. Both surfaces
+    # (the CLI REPL and this browser veneer) share the singleton via
+    # the bss_cockpit.configure_store() default-store registry.
+    db_url = os.environ.get("BSS_DB_URL", "")
+    if not db_url:
+        raise RuntimeError(
+            "BSS_DB_URL is unset; the operator cockpit cannot boot "
+            "without its Conversation store."
+        )
+    store = ConversationStore(db_url=db_url)
+    configure_store(store)
+    app.state.cockpit_store = store
+
+    log.info(
+        "cockpit.starting",
+        service=settings.service_name,
+        version=settings.version,
     )
-    app.state.agent_ask_store = AgentAskStore(ttl_seconds=1800)
-    log.info("portal.starting", service=settings.service_name)
-    yield
-    log.info("portal.stopping", service=settings.service_name)
+    try:
+        yield
+    finally:
+        log.info("cockpit.stopping", service=settings.service_name)
+        await store.dispose()
+        configure_store(None)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -54,7 +77,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.settings = settings
-    install_redirect_handler(app)
 
     static_dir = Path(__file__).resolve().parent / "static"
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
@@ -74,14 +96,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             }
         )
 
-    from .routes import agent_events, ask, auth, case, customer, search
+    from .routes import case, cockpit
 
-    app.include_router(auth.router)
-    app.include_router(search.router)
-    app.include_router(customer.router)
+    app.include_router(cockpit.router)
     app.include_router(case.router)
-    app.include_router(ask.router)
-    app.include_router(agent_events.router)
 
     return app
 

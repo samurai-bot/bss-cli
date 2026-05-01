@@ -1,8 +1,8 @@
-{% extends "base.html" %}
-{% block title %}{{ case.id }} · {{ case.subject or "case" }} · bss-cli csr{% endblock %}
+{% extends "cockpit_layout.html" %}
+{% block title %}{{ case.id }} · {{ case.subject or "case" }} · bss-cli cockpit{% endblock %}
 
 {% block main %}
-<a class="back-link" href="/customer/{{ case.customer_id }}">← back to customer</a>
+<a class="back-link" href="/">← cockpit sessions</a>
 
 <header class="case-header">
   <div class="case-header-row">
@@ -14,7 +14,7 @@
     {% if case.priority %}<div><dt>Priority</dt><dd>{{ case.priority }}</dd></div>{% endif %}
     {% if case.category %}<div><dt>Category</dt><dd>{{ case.category }}</dd></div>{% endif %}
     {% if case.agent_id %}<div><dt>Assigned</dt><dd>{{ case.agent_id }}</dd></div>{% endif %}
-    {% if case.customer_id %}<div><dt>Customer</dt><dd><a href="/customer/{{ case.customer_id }}">{{ case.customer_id }}</a></dd></div>{% endif %}
+    {% if case.customer_id %}<div><dt>Customer</dt><dd><code>{{ case.customer_id }}</code></dd></div>{% endif %}
     {% if case.created_at %}<div><dt>Created</dt><dd><code>{{ case.created_at[:19] | replace('T', ' ') }}</code></dd></div>{% endif %}
   </dl>
 </header>
@@ -56,14 +56,12 @@
     {% endfor %}
   </ul>
   {% else %}
-  <p class="empty-state">No notes yet. The operator can add one by asking the agent on the customer's 360 view.</p>
+  <p class="empty-state">No notes yet. Open a cockpit session and ask the agent to add one.</p>
   {% endif %}
 </section>
 
 {# v0.12 — chat transcript (only when the case was opened from the
-   customer chat surface via case.open_for_me). The hash is rendered
-   so the operator can quote it; the body is pre-formatted so
-   indentation and newlines from the conversation survive. #}
+   customer chat surface via case.open_for_me). #}
 {% if case.chat_transcript_hash %}
 <section class="three-sixty-section chat-transcript-section">
   <h2>Chat transcript</h2>

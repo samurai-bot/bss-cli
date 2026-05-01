@@ -1,27 +1,26 @@
-"""Case thread drill-in — read-only.
+"""Case thread drill-in — read-only deep link.
 
-V0_5_0.md §6: shows a single case with its child tickets and the
-notes timeline. No writes; if the operator needs to add a note or
-transition a ticket, they ask the agent on the parent customer 360.
+Per phases/V0_13_0.md §3.2, the case page is the one v0.5 surface kept
+into v0.13: useful for copy-paste case-id deep links from a chat
+session, slack, or a runbook. No login dependency anymore — the
+cockpit runs single-operator-by-design behind a secure perimeter.
 
-v0.12 PR8: when a case carries ``chat_transcript_hash`` (i.e. it
-was opened by the chat surface via ``case.open_for_me``), the
-CSR-facing page renders a "Chat transcript" panel below the notes.
-The transcript is fetched via ``CRMClient.get_chat_transcript`` —
-the same route the orchestrator's ``case.show_transcript_for`` tool
-uses on the agent side.
+Continues the v0.12 contract: when a case carries
+``chat_transcript_hash`` (i.e. it was opened by the customer chat
+surface via ``case.open_for_me``), the page renders a "Chat
+transcript" panel below the notes. The transcript is fetched via
+``CRMClient.get_chat_transcript``.
 """
 
 from __future__ import annotations
 
 import structlog
 from bss_clients.errors import ClientError
+from bss_cockpit import current as cockpit_config_current
 from bss_orchestrator.clients import get_clients
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
-from ..deps import require_operator
-from ..session import OperatorSession
 from ..templating import templates
 
 log = structlog.get_logger(__name__)
@@ -29,11 +28,7 @@ router = APIRouter()
 
 
 @router.get("/case/{case_id}", response_class=HTMLResponse)
-async def case_thread(
-    request: Request,
-    case_id: str,
-    operator: OperatorSession = Depends(require_operator),
-) -> HTMLResponse:
+async def case_thread(request: Request, case_id: str) -> HTMLResponse:
     clients = get_clients()
     try:
         case_raw = await clients.crm.get_case(case_id)
@@ -42,8 +37,6 @@ async def case_thread(
             raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
         raise
 
-    # Tickets may already be inline on the case payload; if not, fetch
-    # them via the list endpoint. Notes the same way.
     tickets = case_raw.get("tickets") or []
     if not tickets:
         try:
@@ -56,9 +49,6 @@ async def case_thread(
         key=lambda n: n.get("createdAt", ""),
     )
 
-    # v0.12 — transcript link, if any. Failures (transcript archived,
-    # service down) render the "linked but not retrievable" empty
-    # state rather than failing the whole case page.
     transcript_hash = (
         case_raw.get("chatTranscriptHash")
         or case_raw.get("chat_transcript_hash")
@@ -86,11 +76,13 @@ async def case_thread(
                 "error": "Transcript is no longer retrievable. It may have been archived.",
             }
 
+    cfg = cockpit_config_current()
     return templates.TemplateResponse(
         request,
         "case_thread.html",
         {
-            "operator": operator,
+            "actor": cfg.settings.operator.actor,
+            "model": cfg.settings.llm.model or "(env default)",
             "case": {
                 "id": case_raw.get("id", case_id),
                 "subject": case_raw.get("subject", ""),

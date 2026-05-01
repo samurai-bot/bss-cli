@@ -2074,6 +2074,7 @@ version = "0.1.0"
 source = { editable = "portals/csr" }
 dependencies = [
     { name = "bss-clients" },
+    { name = "bss-cockpit" },
     { name = "bss-middleware" },
     { name = "bss-orchestrator" },
     { name = "bss-portal-ui" },
@@ -2097,6 +2098,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "bss-clients", editable = "packages/bss-clients" },
+    { name = "bss-cockpit", editable = "packages/bss-cockpit" },
     { name = "bss-middleware", editable = "packages/bss-middleware" },
     { name = "bss-orchestrator", editable = "orchestrator" },
     { name = "bss-portal-ui", editable = "packages/bss-portal-ui" },

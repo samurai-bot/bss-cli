@@ -1,0 +1,49 @@
+{% extends "cockpit_layout.html" %}
+{% block title %}Cockpit · {{ actor }} · bss-cli{% endblock %}
+
+{% block main %}
+<section class="cockpit-sessions-index">
+  <header class="cockpit-section-header">
+    <h1 class="page-title">Cockpit sessions</h1>
+    <form method="post" action="/cockpit/new" class="cockpit-new-form">
+      <input
+        type="text"
+        name="label"
+        placeholder="optional label"
+        class="cockpit-new-label"
+      />
+      <button type="submit" class="cockpit-new-btn">New session</button>
+    </form>
+  </header>
+
+  {% if sessions %}
+  <table class="cockpit-sessions-table">
+    <thead>
+      <tr>
+        <th>Session</th>
+        <th>Label</th>
+        <th>Focus</th>
+        <th>Last active</th>
+        <th class="num">Msgs</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in sessions %}
+      <tr>
+        <td><a href="/cockpit/{{ s.session_id }}"><code>{{ s.session_id }}</code></a></td>
+        <td>{{ s.label or "—" }}</td>
+        <td>{% if s.customer_focus %}<a href="/case/?customer={{ s.customer_focus }}">{{ s.customer_focus }}</a>{% else %}—{% endif %}</td>
+        <td><code>{{ s.last_active_at.strftime("%Y-%m-%d %H:%M") }}</code></td>
+        <td class="num">{{ s.message_count }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty-state">
+    No active cockpit sessions yet for <strong>{{ actor }}</strong>.
+    Open one with the button above, or run <code>bss</code> in your terminal.
+  </p>
+  {% endif %}
+</section>
+{% endblock %}

@@ -17,19 +17,19 @@ class Settings(BaseSettings):
     )
 
     service_name: str = "portal-csr"
-    version: str = "0.5.0"
+    version: str = "0.13.0"
     log_level: str = "INFO"
 
-    # Upstream BSS service endpoints (read-path; writes go through the
-    # orchestrator via agent_bridge).
+    # Upstream BSS service endpoints. Reads go direct via bss-clients;
+    # writes flow through the orchestrator-mediated cockpit chat
+    # (astream_once) — see routes/cockpit.py.
     catalog_url: str = "http://catalog:8000"
     com_url: str = "http://com:8000"
     crm_url: str = "http://crm:8000"
     payment_url: str = "http://payment:8000"
     subscription_url: str = "http://subscription:8000"
 
-    # Stub login session lifetime — operator stays logged in across
-    # idle gaps within a single demo run, but session is lost on
-    # process restart (in-memory).
+    # Port the browser veneer binds to. v0.13: no auth — the cockpit
+    # runs single-operator-by-design behind a secure perimeter
+    # (CLAUDE.md anti-pattern, DECISIONS 2026-05-01).
     bss_portal_csr_port: int = 9002
-    bss_portal_csr_session_ttl: int = 3600  # one hour
