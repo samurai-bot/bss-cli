@@ -35,9 +35,56 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import readline  # noqa: F401 — enables Up/Down history + line editing on input()
 import subprocess
 from pathlib import Path
 from typing import Any, Callable
+
+# v0.13.1 — persistent REPL history. Plain `import readline` already
+# wires Up/Down + Ctrl-R for the running session; loading + saving a
+# history file makes it survive across ``bss`` invocations. Stored
+# under .bss-cli/ alongside OPERATOR.md + settings.toml.
+_HISTORY_FILE_NAME = "repl_history"
+_HISTORY_MAX_LINES = 1000
+
+
+def _bss_cli_dir() -> Path:
+    """Mirror bss_cockpit.config._bss_cli_dir — same precedence:
+    BSS_COCKPIT_DIR override, else <repo>/.bss-cli."""
+    override = os.environ.get("BSS_COCKPIT_DIR", "").strip()
+    if override:
+        return Path(override)
+    return Path(__file__).resolve().parents[2] / ".bss-cli"
+
+
+def _setup_repl_history() -> None:
+    """Load + register save-on-exit for ``.bss-cli/repl_history``.
+
+    Best-effort: a missing dir, an unreadable file, or a noreadline
+    stub on a weird platform all fall through silently — Up/Down still
+    work for the running session even without the file.
+    """
+    bss_dir = _bss_cli_dir()
+    try:
+        bss_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return
+    history_path = bss_dir / _HISTORY_FILE_NAME
+    try:
+        if history_path.exists():
+            readline.read_history_file(str(history_path))
+    except (OSError, AttributeError):
+        pass
+    readline.set_history_length(_HISTORY_MAX_LINES)
+    import atexit
+
+    def _save() -> None:
+        try:
+            readline.write_history_file(str(history_path))
+        except (OSError, AttributeError):
+            pass
+
+    atexit.register(_save)
 
 from bss_clients.errors import ClientError
 from bss_cockpit import (
@@ -681,6 +728,9 @@ def run_repl(
     except RuntimeError as exc:
         rprint(f"[red]Cockpit unavailable:[/] {exc}")
         return
+
+    # v0.13.1 — Up/Down history + persistent across bss invocations.
+    _setup_repl_history()
 
     bss_cli_dir = Path(__file__).resolve().parents[2] / ".bss-cli"
 
