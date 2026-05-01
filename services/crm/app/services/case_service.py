@@ -183,7 +183,32 @@ class CaseService:
         return case
 
     async def close_case(self, case_id: str, *, resolution_code: str) -> Case:
-        return await self.transition_case(case_id, "close", resolution_code=resolution_code)
+        """Close a case, fast-forwarding through ``resolved`` if needed.
+
+        v0.13.1 — operator UX: in the cockpit, the LLM proposes
+        ``case.close`` directly. The state machine requires a case to
+        be ``resolved`` before it can transition to ``closed``, but
+        forcing the operator (or LLM) to run a separate ``case.transition
+        → resolve`` first turns a one-turn intent into a two-tool
+        round-trip the model often gets wrong. We collapse that here:
+        if the case is in a state from which ``resolve`` is legal
+        (``open`` / ``in_progress``), run that transition first.
+        Tickets-still-open or other policy violations surface
+        unchanged.
+        """
+        case = await self._case_repo.get(case_id)
+        if case is None:
+            from app.policies.base import PolicyViolation
+            raise PolicyViolation(
+                rule="case.not_found",
+                message=f"Case {case_id} not found",
+                context={"case_id": case_id},
+            )
+        if case_state.is_valid_transition(case.state, "resolve"):
+            await self.transition_case(case_id, "resolve")
+        return await self.transition_case(
+            case_id, "close", resolution_code=resolution_code
+        )
 
     async def add_note(
         self, case_id: str, *, body: str, author_agent_id: str | None = None
