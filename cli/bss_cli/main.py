@@ -2,11 +2,49 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Annotated
 
 import typer
 from bss_telemetry import configure_telemetry
 from rich import print as rprint
+
+
+def _bootstrap_env_from_dotenv() -> None:
+    """Load `<repo>/.env` into ``os.environ`` if not already exported.
+
+    The cockpit REPL (v0.13+) needs ``BSS_DB_URL`` and
+    ``BSS_OPERATOR_COCKPIT_API_TOKEN`` available as process env — both
+    are read directly via ``os.environ`` (the cockpit's
+    ``ConversationStore`` and ``astream_once``'s
+    ``_resolve_token_for_service_identity`` resp.). ``uv run bss``
+    doesn't source ``.env`` automatically; pre-v0.13 the REPL was
+    in-memory and got away without DB credentials, so the gap never
+    surfaced. Auto-loading here keeps the operator workflow simple:
+    ``uv run bss`` works out of the box.
+
+    Existing env vars take precedence — exported values from a parent
+    shell or compose file are not overwritten.
+    """
+    env_path = Path(__file__).resolve().parents[2] / ".env"
+    if not env_path.exists():
+        return
+    for raw in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, sep, value = line.partition("=")
+        if not sep:
+            continue
+        key = key.strip()
+        # Strip optional surrounding quotes — common in .env files.
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+_bootstrap_env_from_dotenv()
 
 from .commands import (
     admin as admin_cmd,
