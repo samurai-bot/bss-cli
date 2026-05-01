@@ -7,11 +7,16 @@ through SSE. v0.12 originated these helpers in
 cockpit thread renders identically without copy-paste drift.
 
 Doctrine: the LLM's output is hostile-by-default. We HTML-escape every
-character first, then convert a small whitelisted set of markdown tokens
-(``**bold**``, ``*italic*``, ``_italic_``, `` `code` ``, ``- list`` /
-``* list``, paragraph breaks) into HTML. No raw-HTML pass-through; no
-link/image rendering — those would invite XSS via crafted prompt-injection
-responses. Same shape on both surfaces; same security boundary.
+character first, then convert a whitelisted set of markdown tokens into
+HTML. No raw-HTML pass-through; no link/image rendering — those would
+invite XSS via crafted prompt-injection responses. Same shape on both
+surfaces; same security boundary.
+
+v0.13.1 — extended block-level support: headings (``#``..``####``),
+numbered lists (``1.``), code fences (``` ``` ```), and pipe tables
+(``| col | col |``). Catalog and balance summaries from the LLM
+typically come back as tables; render them as real ``<table>`` rather
+than literal pipe characters.
 """
 
 from __future__ import annotations
@@ -26,11 +31,23 @@ __all__ = [
 ]
 
 
+# ── Inline patterns ─────────────────────────────────────────────────
+
+
 _RE_BOLD = _re.compile(r"\*\*(?P<inner>[^*\n]+)\*\*")
 _RE_ITALIC_AST = _re.compile(r"(?<!\*)\*(?P<inner>[^*\n]+)\*(?!\*)")
 _RE_ITALIC_UND = _re.compile(r"(?<!\w)_(?P<inner>[^_\n]+)_(?!\w)")
 _RE_CODE = _re.compile(r"`(?P<inner>[^`\n]+)`")
+
+# Block-level patterns. Operating on already-HTML-escaped text.
 _RE_LIST_ITEM = _re.compile(r"^\s*[\*\-]\s+(?P<body>.*)$")
+_RE_OL_ITEM = _re.compile(r"^\s*\d+[.)]\s+(?P<body>.*)$")
+_RE_HEADING = _re.compile(r"^(?P<hashes>#{1,4})\s+(?P<body>.+?)\s*#*\s*$")
+_RE_CODE_FENCE = _re.compile(r"^\s*```")
+# A pipe-table row: starts and ends with `|`, has ≥1 inner pipe.
+_RE_TABLE_ROW = _re.compile(r"^\s*\|.+\|\s*$")
+# Separator row (after the header): cells are `---` / `:---:` / `---:` / `:---`
+_RE_TABLE_SEP_CELL = _re.compile(r"^\s*:?-{2,}:?\s*$")
 
 
 def _render_inline(line: str) -> str:
@@ -46,29 +63,63 @@ def _render_inline(line: str) -> str:
     return out
 
 
+def _split_table_row(row: str) -> list[str]:
+    """Parse a ``| a | b | c |`` row into ``["a", "b", "c"]``.
+
+    Trims leading/trailing pipe + whitespace, splits on ``|``, applies
+    inline markdown to each cell.
+    """
+    trimmed = row.strip()
+    if trimmed.startswith("|"):
+        trimmed = trimmed[1:]
+    if trimmed.endswith("|"):
+        trimmed = trimmed[:-1]
+    return [cell.strip() for cell in trimmed.split("|")]
+
+
+def _is_table_separator(row: str) -> bool:
+    """True if every cell of ``row`` is a markdown table separator (``---``)."""
+    cells = _split_table_row(row)
+    if not cells:
+        return False
+    return all(_RE_TABLE_SEP_CELL.match(c) for c in cells)
+
+
 def render_chat_markdown(text: str) -> str:
     """Block-level + inline markdown render for assistant chat output.
 
     HTML-escapes the whole text once up front, then walks lines grouping
-    list runs and paragraphs. Returns a single-line HTML string suitable
-    for the ``data:`` field of an SSE frame (no embedded newlines after
-    the join).
+    list runs, tables, code fences, and paragraphs. Returns a single
+    HTML string. Embedded newlines DO appear in the output for tables /
+    code fences — SSE consumers should strip them at the wire layer if
+    they need a single-line ``data:`` field.
     """
     escaped = _html.escape(text or "")
     lines = escaped.split("\n")
 
     out: list[str] = []
     para: list[str] = []
-    list_items: list[str] = []
+    ul_items: list[str] = []
+    ol_items: list[str] = []
+    fence_buf: list[str] | None = None
 
-    def _flush_list() -> None:
-        if list_items:
+    def _flush_ul() -> None:
+        if ul_items:
             out.append(
                 "<ul>"
-                + "".join(f"<li>{_render_inline(it)}</li>" for it in list_items)
+                + "".join(f"<li>{_render_inline(it)}</li>" for it in ul_items)
                 + "</ul>"
             )
-            list_items.clear()
+            ul_items.clear()
+
+    def _flush_ol() -> None:
+        if ol_items:
+            out.append(
+                "<ol>"
+                + "".join(f"<li>{_render_inline(it)}</li>" for it in ol_items)
+                + "</ol>"
+            )
+            ol_items.clear()
 
     def _flush_para() -> None:
         if para:
@@ -76,23 +127,106 @@ def render_chat_markdown(text: str) -> str:
             out.append(f"<p>{joined}</p>")
             para.clear()
 
-    for raw in lines:
-        line = raw.rstrip()
-        item_match = _RE_LIST_ITEM.match(line)
-        if item_match:
-            _flush_para()
-            list_items.append(item_match.group("body"))
-            continue
-        if not line.strip():
-            # blank line — paragraph / list break
-            _flush_list()
-            _flush_para()
-            continue
-        _flush_list()
-        para.append(line)
+    def _flush_blocks() -> None:
+        _flush_ul()
+        _flush_ol()
+        _flush_para()
 
-    _flush_list()
-    _flush_para()
+    i = 0
+    while i < len(lines):
+        line = lines[i].rstrip()
+
+        # Code fence: collect until closing fence; emit a <pre><code>.
+        if fence_buf is not None:
+            if _RE_CODE_FENCE.match(line):
+                # Closing fence.
+                out.append(
+                    "<pre><code>" + "\n".join(fence_buf) + "</code></pre>"
+                )
+                fence_buf = None
+            else:
+                fence_buf.append(line)
+            i += 1
+            continue
+        if _RE_CODE_FENCE.match(line):
+            _flush_blocks()
+            fence_buf = []
+            i += 1
+            continue
+
+        # Pipe table: header row + separator + ≥0 body rows.
+        if _RE_TABLE_ROW.match(line) and i + 1 < len(lines) and \
+                _RE_TABLE_ROW.match(lines[i + 1]) and \
+                _is_table_separator(lines[i + 1]):
+            _flush_blocks()
+            header_cells = _split_table_row(line)
+            i += 2  # skip header + separator
+            body_rows: list[list[str]] = []
+            while i < len(lines) and _RE_TABLE_ROW.match(lines[i]):
+                body_rows.append(_split_table_row(lines[i]))
+                i += 1
+            head_html = (
+                "<thead><tr>"
+                + "".join(f"<th>{_render_inline(c)}</th>" for c in header_cells)
+                + "</tr></thead>"
+            )
+            body_html = "<tbody>" + "".join(
+                "<tr>"
+                + "".join(f"<td>{_render_inline(c)}</td>" for c in row)
+                + "</tr>"
+                for row in body_rows
+            ) + "</tbody>"
+            out.append(f"<table class='chat-table'>{head_html}{body_html}</table>")
+            continue
+
+        # Heading.
+        m_h = _RE_HEADING.match(line)
+        if m_h:
+            _flush_blocks()
+            depth = len(m_h.group("hashes"))
+            # Cap at <h6> as a sanity backstop, render starting at <h3>
+            # so chat bubbles don't blow up to page-title size.
+            tag = f"h{min(6, max(3, 2 + depth))}"
+            out.append(
+                f"<{tag}>{_render_inline(m_h.group('body'))}</{tag}>"
+            )
+            i += 1
+            continue
+
+        # Unordered list.
+        m_ul = _RE_LIST_ITEM.match(line)
+        if m_ul:
+            _flush_para()
+            _flush_ol()
+            ul_items.append(m_ul.group("body"))
+            i += 1
+            continue
+
+        # Ordered list.
+        m_ol = _RE_OL_ITEM.match(line)
+        if m_ol:
+            _flush_para()
+            _flush_ul()
+            ol_items.append(m_ol.group("body"))
+            i += 1
+            continue
+
+        # Blank line — paragraph / list break.
+        if not line.strip():
+            _flush_blocks()
+            i += 1
+            continue
+
+        # Plain paragraph line.
+        _flush_ul()
+        _flush_ol()
+        para.append(line)
+        i += 1
+
+    # Close any open buffer cleanly.
+    if fence_buf is not None:
+        out.append("<pre><code>" + "\n".join(fence_buf) + "</code></pre>")
+    _flush_blocks()
     return "".join(out) or "&nbsp;"
 
 
@@ -101,11 +235,18 @@ def render_assistant_bubble(text: str, *, error: bool = False) -> str:
 
     Adds ``chat-bubble-error`` modifier when ``error=True`` so portal
     CSS can dim or red-tint a fallback / ownership-violation reply.
+
+    SSE wire format requires a single-line ``data:`` field; tables and
+    code fences embed real newlines in the rendered output for human
+    readability. Strip them here so the SSE frame stays one line; the
+    browser renders them identically (HTML doesn't care about newlines
+    inside <table>/<pre>).
     """
     css = "chat-bubble chat-bubble-assistant"
     if error:
         css += " chat-bubble-error"
-    return f'<div class="{css}">{render_chat_markdown(text)}</div>'
+    rendered = render_chat_markdown(text).replace("\n", "")
+    return f'<div class="{css}">{rendered}</div>'
 
 
 def render_tool_pill(tool_name: str) -> str:

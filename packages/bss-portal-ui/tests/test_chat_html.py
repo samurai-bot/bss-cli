@@ -112,3 +112,98 @@ def test_tool_pill_shape() -> None:
     assert 'class="chat-tool-pill"' in out
     assert "subscription.terminate" in out
     assert "≈" in out  # pill icon
+
+
+# ── v0.13.1 extended block-level: tables, headings, ol, code fences ──
+
+
+def test_pipe_table_renders_as_html_table() -> None:
+    md = (
+        "| Plan | Price | Data |\n"
+        "|------|-------|------|\n"
+        "| PLAN_S | $5 | 1 GB |\n"
+        "| PLAN_M | $10 | 5 GB |\n"
+    )
+    out = render_chat_markdown(md)
+    assert "<table" in out
+    assert "<thead>" in out and "<th>Plan</th>" in out
+    assert "<tbody>" in out
+    assert "<td>PLAN_S</td>" in out and "<td>$5</td>" in out
+    # Pipes shouldn't leak as literal characters.
+    assert "| Plan |" not in out
+
+
+def test_table_separator_with_alignment_markers() -> None:
+    md = (
+        "| Col | Right |\n"
+        "|:----|------:|\n"
+        "| a | b |\n"
+    )
+    out = render_chat_markdown(md)
+    assert "<table" in out
+    assert "<th>Col</th>" in out
+    assert "<td>a</td>" in out
+
+
+def test_table_with_inline_markdown_in_cells() -> None:
+    md = (
+        "| Plan | Notes |\n"
+        "|------|-------|\n"
+        "| **PLAN_S** | uses `5 GB` |\n"
+    )
+    out = render_chat_markdown(md)
+    assert "<strong>PLAN_S</strong>" in out
+    assert "<code>5 GB</code>" in out
+
+
+def test_heading_renders_h3_minimum() -> None:
+    out = render_chat_markdown("# Top heading")
+    assert "<h3>Top heading</h3>" in out
+    out2 = render_chat_markdown("### Smaller heading")
+    assert "<h5>Smaller heading</h5>" in out2
+
+
+def test_numbered_list_renders_ol() -> None:
+    md = "1. first\n2. second\n3. third"
+    out = render_chat_markdown(md)
+    assert out.count("<li>") == 3
+    assert "<ol>" in out
+    assert "<ul>" not in out
+
+
+def test_code_fence_renders_pre_block() -> None:
+    md = "```\nfoo bar\nbaz\n```"
+    out = render_chat_markdown(md)
+    assert "<pre><code>foo bar\nbaz</code></pre>" in out
+
+
+def test_code_fence_inside_does_not_render_inner_markdown() -> None:
+    md = "```\n**not bold**\n```"
+    out = render_chat_markdown(md)
+    # Inside the fence, markdown is preserved literally (HTML-escaped).
+    assert "<pre><code>**not bold**</code></pre>" in out
+
+
+def test_unclosed_code_fence_doesnt_swallow_subsequent_blocks() -> None:
+    """Defensive — a stray ```\\n at the end shouldn't crash. We close
+    the pre block at end-of-text."""
+    md = "```\nstuff\nmore stuff"
+    out = render_chat_markdown(md)
+    assert "<pre><code>stuff\nmore stuff</code></pre>" in out
+
+
+def test_separator_row_alone_is_treated_as_paragraph() -> None:
+    """A standalone ``|----|`` line without a preceding header is just
+    text — no table emitted."""
+    md = "|----|"
+    out = render_chat_markdown(md)
+    assert "<table" not in out
+
+
+def test_assistant_bubble_strips_inner_newlines_for_sse() -> None:
+    """SSE data: must be one line; tables embed newlines in the
+    rendered HTML for human readability. The bubble wrapper strips
+    them at the wire layer."""
+    md = "| a | b |\n|---|---|\n| 1 | 2 |"
+    bubble = render_assistant_bubble(md)
+    assert "\n" not in bubble

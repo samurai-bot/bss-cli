@@ -373,3 +373,39 @@ def test_astream_once_only_imported_in_chat_route() -> None:
         "Per the v0.11+ doctrine, only the chat surface is "
         "orchestrator-mediated."
     )
+
+
+# ── v0.13.1: anti-hallucination escalation guard ────────────────────
+
+
+def test_claims_escalation_recognizes_common_phrasing() -> None:
+    """Guard helper: phrases the LLM uses to claim escalation."""
+    from bss_self_serve.routes.chat import _claims_escalation
+
+    assert _claims_escalation("I've escalated this to a human agent.")
+    assert _claims_escalation("Escalating now — sit tight.")
+    assert _claims_escalation("Your case has been raised. Hear back soon.")
+    assert _claims_escalation("I've opened a case for our team.")
+    assert _claims_escalation("I've filed a case on your behalf.")
+
+
+def test_claims_escalation_does_not_match_routine_replies() -> None:
+    from bss_self_serve.routes.chat import _claims_escalation
+
+    assert not _claims_escalation("Your data balance is 5GB.")
+    assert not _claims_escalation("PLAN_S costs SGD 5/month.")
+    assert not _claims_escalation("")
+    assert not _claims_escalation(None)  # type: ignore[arg-type]
+
+
+def test_escalation_fallback_template_carries_email() -> None:
+    """The fallback message is the only sentence the customer sees on
+    a hallucinated escalation; verify the email lands in it."""
+    from bss_self_serve.routes.chat import _ESCALATION_HALLUCINATION_FALLBACK
+
+    rendered = _ESCALATION_HALLUCINATION_FALLBACK.format(email="ck@example.com")
+    assert "ck@example.com" in rendered
+    assert "support" in rendered.lower()
+    # Should NOT use the verbatim escalation phrase — that's what
+    # we're filtering out.
+    assert "escalated" not in rendered.lower()

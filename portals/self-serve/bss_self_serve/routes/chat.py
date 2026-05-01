@@ -35,6 +35,7 @@ widget it does not truncate.
 from __future__ import annotations
 
 import asyncio
+import re as _re
 from collections.abc import AsyncIterator
 from urllib.parse import urlencode
 
@@ -74,6 +75,29 @@ _OWNERSHIP_VIOLATION_REPLY = (
     "Sorry — I couldn't complete that. Please try again, or contact "
     "support if the issue persists."
 )
+
+# v0.13.1 — anti-hallucination. Detect "escalated" / "human agent"
+# language in the assistant's reply and verify case.open_for_me
+# actually fired this turn.
+_RE_ESCALATION_CLAIM = _re.compile(
+    r"\b("
+    r"escalated|escalat(?:e|ing)"
+    r"|human agent"
+    r"|(?:raise(?:d)?|open(?:ed)?|fil(?:e|ed))\s+a\s+case"
+    r"|case\s+(?:has\s+been\s+)?(?:raised|opened|filed)"
+    r")\b",
+    _re.IGNORECASE,
+)
+_ESCALATION_HALLUCINATION_FALLBACK = (
+    "I can't take this further on my own — please email support directly "
+    "at {email} so a human agent can look into it. Sorry for the extra "
+    "step."
+)
+
+
+def _claims_escalation(text: str) -> bool:
+    """True if the assistant's reply claims to have escalated."""
+    return bool(_RE_ESCALATION_CLAIM.search(text or ""))
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -403,6 +427,12 @@ async def chat_events(
 
         yield _sse_frame("status", _status_html("live"))
 
+        # v0.13.1 — track tool calls on this turn so we can detect
+        # escalation hallucinations. If the assistant claims to have
+        # escalated but never called case.open_for_me, replace the
+        # text with a safe fallback (no fake-escalation reply).
+        called_tools_this_turn: list[str] = []
+
         try:
             async for event in astream_once(
                 turn.question,
@@ -462,6 +492,7 @@ async def chat_events(
                 # Tool calls render as small inline pills so the
                 # customer can see what the agent is doing.
                 if isinstance(event, AgentEventToolCallStarted):
+                    called_tools_this_turn.append(event.name)
                     yield _sse_frame(
                         "message", _chat_tool_pill_html(event.name)
                     )
@@ -469,11 +500,33 @@ async def chat_events(
 
                 if isinstance(event, AgentEventFinalMessage):
                     text = event.text or ""
+                    is_error = False
+                    # Anti-hallucination: if the reply claims to have
+                    # escalated but case.open_for_me wasn't actually
+                    # called this turn, replace with a safe fallback.
+                    # Doctrine-coupled: the v0.12 escalation contract
+                    # is "the case row IS the escalation"; a model
+                    # hallucinating the sentence without the side
+                    # effect is a doctrine violation we fix at the
+                    # edge, not by retrying the LLM.
+                    if (
+                        _claims_escalation(text)
+                        and "case.open_for_me" not in called_tools_this_turn
+                    ):
+                        log.warning(
+                            "chat.escalation_hallucination",
+                            cap_key=cap_key,
+                            called_tools=called_tools_this_turn,
+                        )
+                        text = _ESCALATION_HALLUCINATION_FALLBACK.format(
+                            email=identity.email or "support@bss-cli.local"
+                        )
+                        is_error = True
                     turn.done = True
                     turn.final_text = text
                     conv.append("assistant", text)
                     yield _sse_frame(
-                        "message", _chat_assistant_html(text)
+                        "message", _chat_assistant_html(text, error=is_error)
                     )
                     yield _sse_frame("status", _status_html("done"))
                     return
