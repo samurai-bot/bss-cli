@@ -186,7 +186,7 @@ async def trace_for_order(order_id: OrderId) -> dict[str, Any]:
     happened during this order's processing".
 
     Args:
-        order_id: Commercial Order ID in ORD-NNN format.
+        order_id: Commercial Order ID with the ORD- prefix (opaque suffix).
 
     Returns:
         Summary dict per ``trace.get``, plus ``orderId``. ``error`` field
@@ -219,7 +219,7 @@ async def trace_for_subscription(subscription_id: SubscriptionId) -> dict[str, A
     then fetch + summarize from Jaeger.
 
     Args:
-        subscription_id: Subscription ID in SUB-NNN format.
+        subscription_id: Subscription ID with the SUB- prefix (opaque suffix).
 
     Returns:
         Summary dict per ``trace.get``, plus ``subscriptionId``.

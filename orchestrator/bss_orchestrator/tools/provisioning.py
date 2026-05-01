@@ -41,7 +41,7 @@ async def provisioning_get_task(task_id: ProvisioningTaskId) -> dict[str, Any]:
     """Read a single provisioning task with error + timing detail.
 
     Args:
-        task_id: Provisioning Task ID in PTK-NNN format.
+        task_id: Provisioning Task ID with the PTK- prefix (opaque suffix).
 
     Returns:
         Task dict including ``lastError``, ``startedAt``, ``completedAt``.
@@ -61,7 +61,7 @@ async def provisioning_resolve_stuck(
     out-of-band by network ops). Only valid when the task is in ``stuck`` state.
 
     Args:
-        task_id: Provisioning Task ID in PTK-NNN format.
+        task_id: Provisioning Task ID with the PTK- prefix (opaque suffix).
         note: Required free-text note describing what was done.
 
     Returns:
@@ -81,7 +81,7 @@ async def provisioning_retry_failed(task_id: ProvisioningTaskId) -> dict[str, An
     """Retry a FAILED provisioning task (up to ``maxAttempts``).
 
     Args:
-        task_id: Provisioning Task ID in PTK-NNN format.
+        task_id: Provisioning Task ID with the PTK- prefix (opaque suffix).
 
     Returns:
         Updated task dict.

@@ -14,7 +14,7 @@ async def service_order_get(service_order_id: ServiceOrderId) -> dict[str, Any]:
     """Read a service order by ID.
 
     Args:
-        service_order_id: Service Order ID in SO-NNN format.
+        service_order_id: Service Order ID with the SO- prefix (opaque suffix).
 
     Returns:
         Service order dict with items + state.
@@ -33,7 +33,7 @@ async def service_order_list_for_order(
     always exactly one SO per COM order.
 
     Args:
-        commercial_order_id: Commercial Order ID in ORD-NNN format.
+        commercial_order_id: Commercial Order ID with the ORD- prefix (opaque suffix).
 
     Returns:
         List of service order dicts.
@@ -49,7 +49,7 @@ async def service_get(service_id: ServiceId) -> dict[str, Any]:
     """Get a service with its state history and characteristics (MSISDN, ICCID).
 
     Args:
-        service_id: Service ID in SVC-NNN format.
+        service_id: Service ID with the SVC- prefix (opaque suffix).
 
     Returns:
         Service dict ``{id, serviceType, name, state, characteristics, parentServiceId?}``.
@@ -67,7 +67,7 @@ async def service_list_for_subscription(
     """List the CFS + RFS tree belonging to a subscription.
 
     Args:
-        subscription_id: Subscription ID in SUB-NNN format.
+        subscription_id: Subscription ID with the SUB- prefix (opaque suffix).
 
     Returns:
         Flat list of service dicts (mix of CFS and RFS). The CFS has
