@@ -28,10 +28,46 @@ __all__ = [
     "render_assistant_bubble",
     "render_tool_pill",
     "render_chat_markdown",
+    "strip_reasoning_leakage",
 ]
 
 
 # ── Inline patterns ─────────────────────────────────────────────────
+
+
+# v0.13.1 — gemma occasionally leaks reasoning-step tokens into the
+# regular content channel ("thought\n\n<answer>" or "<think>...</think>").
+# Strip them at the renderer layer so the customer sees the answer
+# only. Either show a real thinking ribbon or don't show one.
+_RE_THINK_BLOCK = _re.compile(
+    r"<think(?:ing)?>.*?</think(?:ing)?>", _re.IGNORECASE | _re.DOTALL
+)
+_RE_LEADING_THOUGHT = _re.compile(
+    r"^\s*(?:thought|thinking)\s*[:\-]?\s*\n+", _re.IGNORECASE
+)
+
+
+def strip_reasoning_leakage(text: str) -> str:
+    """Public alias of the internal helper, for callers that want to
+    sanitize text before persisting it (so the conversation row
+    doesn't carry the leaked reasoning either)."""
+    return _strip_reasoning_leakage(text)
+
+
+def _strip_reasoning_leakage(text: str) -> str:
+    """Remove gemma-style reasoning leakage from the start of a reply.
+
+    Two shapes seen in the wild:
+    - ``<think>...</think>\\nAnswer.`` — XML-style block.
+    - ``thought\\n\\nAnswer.`` — bare "thought" header with a newline.
+
+    Both are stripped; the rest of the reply renders normally.
+    """
+    if not text:
+        return text
+    cleaned = _RE_THINK_BLOCK.sub("", text)
+    cleaned = _RE_LEADING_THOUGHT.sub("", cleaned, count=1)
+    return cleaned.lstrip()
 
 
 _RE_BOLD = _re.compile(r"\*\*(?P<inner>[^*\n]+)\*\*")
@@ -93,8 +129,12 @@ def render_chat_markdown(text: str) -> str:
     HTML string. Embedded newlines DO appear in the output for tables /
     code fences — SSE consumers should strip them at the wire layer if
     they need a single-line ``data:`` field.
+
+    v0.13.1 — strips gemma's reasoning leakage (``<think>...</think>``,
+    leading ``thought\\n``) before rendering.
     """
-    escaped = _html.escape(text or "")
+    cleaned = _strip_reasoning_leakage(text or "")
+    escaped = _html.escape(cleaned)
     lines = escaped.split("\n")
 
     out: list[str] = []

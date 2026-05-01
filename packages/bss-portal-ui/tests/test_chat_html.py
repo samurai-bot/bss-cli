@@ -207,3 +207,43 @@ def test_assistant_bubble_strips_inner_newlines_for_sse() -> None:
     md = "| a | b |\n|---|---|\n| 1 | 2 |"
     bubble = render_assistant_bubble(md)
     assert "\n" not in bubble
+
+
+# ── v0.13.1 — gemma reasoning-leakage stripping ──────────────────────
+
+
+def test_strip_leading_thought_header() -> None:
+    """Bare ``thought\\n\\nAnswer.`` shape — gemma's reasoning channel
+    leaking into the regular content channel."""
+    from bss_portal_ui import strip_reasoning_leakage
+
+    out = strip_reasoning_leakage("thought\n\nThe answer is 42.")
+    assert out == "The answer is 42."
+
+
+def test_strip_think_xml_block() -> None:
+    """``<think>...</think>`` block style — strip the whole block."""
+    from bss_portal_ui import strip_reasoning_leakage
+
+    out = strip_reasoning_leakage(
+        "<think>weighing options...</think>\nThe answer is 42."
+    )
+    assert "weighing" not in out
+    assert "The answer is 42." in out
+
+
+def test_strip_does_not_touch_normal_text() -> None:
+    from bss_portal_ui import strip_reasoning_leakage
+
+    out = strip_reasoning_leakage("Plain reply with no leakage.")
+    assert out == "Plain reply with no leakage."
+
+
+def test_renderer_strips_thought_before_render() -> None:
+    """Integration: the bubble renderer chain strips the leakage as
+    part of render_chat_markdown — so neither the SSE frame nor the
+    persisted conversation row carries the gemma-style "thought"
+    prefix."""
+    bubble = render_assistant_bubble("thought\n\nHello, world.")
+    assert "thought" not in bubble.lower()
+    assert "Hello, world." in bubble

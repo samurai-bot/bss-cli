@@ -403,11 +403,17 @@ class CRMClient(BSSClient):
     async def close_case(
         self, case_id: str, *, resolution_code: str
     ) -> dict[str, Any]:
-        """POST /crm-api/v1/case/{id}/close — policy-gated."""
+        """POST /crm-api/v1/case/{id}/close — policy-gated.
+
+        v0.13.1 — body uses snake_case ``resolution_code`` to match the
+        ``CloseCaseRequest`` Pydantic schema in
+        ``services/crm/app/schemas/internal/case.py``. The prior
+        ``resolutionCode`` (camelCase) caused 422s on every close.
+        """
         resp = await self._request(
             "POST",
             f"/crm-api/v1/case/{case_id}/close",
-            json={"resolutionCode": resolution_code},
+            json={"resolution_code": resolution_code},
         )
         return resp.json()
 

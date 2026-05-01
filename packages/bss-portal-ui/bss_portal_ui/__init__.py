@@ -27,6 +27,7 @@ from .chat_html import (
     render_assistant_bubble,
     render_chat_markdown,
     render_tool_pill,
+    strip_reasoning_leakage,
 )
 from .paths import STATIC_DIR, TEMPLATE_DIR
 
@@ -36,4 +37,5 @@ __all__ = [
     "render_assistant_bubble",
     "render_chat_markdown",
     "render_tool_pill",
+    "strip_reasoning_leakage",
 ]

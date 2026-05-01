@@ -53,6 +53,7 @@ from bss_portal_ui import (
     render_assistant_bubble,
     render_chat_markdown,
     render_tool_pill,
+    strip_reasoning_leakage,
 )
 from bss_portal_ui.sse import format_frame as _sse_frame
 from bss_portal_ui.sse import status_html as _status_html
@@ -546,6 +547,27 @@ async def cockpit_events(
     pending = await conv.consume_pending_destructive()
     allow_destructive_this_turn = pending is not None
 
+    # v0.13.1 — slash-command interceptor for /confirm typed in the
+    # textarea. Some LLMs (gemma) leak tool-call markup as plain text
+    # rather than structured tool_calls; when that happens, no
+    # ToolCallStarted event fires and pending_destructive never gets
+    # stashed. The operator typing /confirm rightly expects "now run
+    # the destructive thing" — even without a stashed propose. We
+    # honour that intent: if the user message starts with /confirm,
+    # this turn runs with allow_destructive=True regardless of the
+    # pending row, and we strip the slash command from the prompt.
+    # Doctrine note: this widens the trust beat by one turn —
+    # acceptable for a single-operator-by-design cockpit behind a
+    # secure perimeter (DECISIONS 2026-05-01).
+    if user_message.lstrip().lower().startswith("/confirm"):
+        allow_destructive_this_turn = True
+        # Replace the prompt with a clear authorisation cue so the
+        # LLM picks up the prior turn's propose context.
+        user_message = (
+            "(operator typed /confirm — proceed with the prior "
+            "destructive proposal now; call the tool)"
+        )
+
     # Transcript fed into the LLM = everything BEFORE the new user
     # message. The user message itself becomes the prompt.
     prior_blocks = blocks[:last_user_index]
@@ -613,7 +635,7 @@ async def cockpit_events(
                     yield _sse_frame("status", _status_html("error"))
                     return
                 if isinstance(event, AgentEventFinalMessage):
-                    text = event.text or "(no reply)"
+                    text = strip_reasoning_leakage(event.text or "") or "(no reply)"
                     asst_id = await conv.append_assistant_turn(
                         text, tool_calls_json=captured_tool_calls or None
                     )

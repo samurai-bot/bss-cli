@@ -57,6 +57,7 @@ from bss_portal_ui import (
     render_assistant_bubble as _chat_assistant_html,
     render_chat_markdown as _render_chat_markdown,
     render_tool_pill as _chat_tool_pill_html,
+    strip_reasoning_leakage as _strip_reasoning_leakage,
 )
 from bss_portal_ui.sse import format_frame as _sse_frame
 from bss_portal_ui.sse import status_html as _status_html
@@ -502,7 +503,7 @@ async def chat_events(
                     continue
 
                 if isinstance(event, AgentEventFinalMessage):
-                    text = event.text or ""
+                    text = _strip_reasoning_leakage(event.text or "")
                     is_error = False
                     # Anti-hallucination: if the reply claims to have
                     # escalated but case.open_for_me wasn't actually
