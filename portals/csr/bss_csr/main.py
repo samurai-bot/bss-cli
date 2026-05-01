@@ -96,10 +96,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             }
         )
 
-    from .routes import case, cockpit
+    from .routes import case, cockpit, settings as settings_routes
 
     app.include_router(cockpit.router)
     app.include_router(case.router)
+    app.include_router(settings_routes.router)
 
     return app
 

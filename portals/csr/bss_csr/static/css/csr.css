@@ -388,3 +388,38 @@
   margin-left: 12px;
   font-family: var(--mono); font-size: 12px; color: var(--fg-muted);
 }
+
+/* PR8 — settings page */
+.cockpit-settings { display: flex; flex-direction: column; gap: 24px; }
+.settings-block {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 16px 20px;
+}
+.settings-block h2 { margin: 0 0 8px; font-size: 16px; }
+.settings-meta { font-size: 13px; color: var(--fg-muted); margin: 0 0 12px; }
+.settings-block textarea {
+  width: 100%; box-sizing: border-box;
+  font-family: var(--mono); font-size: 13px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg);
+  resize: vertical;
+}
+.settings-block button { margin-top: 8px; }
+.settings-flash {
+  padding: 8px 12px; background: var(--bg-inset);
+  border-left: 3px solid var(--accent-green, #4a9d4a);
+  font-family: var(--mono); font-size: 12px;
+}
+.settings-error {
+  padding: 8px 12px; background: var(--bg-inset);
+  border-left: 3px solid var(--accent-red, #b94a4a);
+  font-family: var(--mono); font-size: 12px;
+  color: var(--accent-red, #b94a4a);
+  white-space: pre-wrap;
+}
+.settings-diagnostics dl { margin: 0; }
