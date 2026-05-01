@@ -6,6 +6,7 @@ description = "BSS-CLI command-line interface — direct verbs + LLM REPL"
 dependencies = [
     "bss-clients",
     "bss-clock",
+    "bss-cockpit",
     "bss-orchestrator",
     "bss-telemetry",
     "bss-middleware",
@@ -34,6 +35,7 @@ dev = [
 [tool.uv.sources]
 bss-clients = { workspace = true }
 bss-clock = { workspace = true }
+bss-cockpit = { workspace = true }
 bss-orchestrator = { workspace = true }
 bss-telemetry = { workspace = true }
 bss-middleware = { workspace = true }

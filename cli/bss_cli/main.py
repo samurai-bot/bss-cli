@@ -64,10 +64,41 @@ def ask_cmd(
     run_single_shot(prompt, allow_destructive=allow_destructive)
 
 
-# `bss` with no subcommand → REPL.
+# `bss` with no subcommand → REPL (canonical CSR cockpit, v0.13).
 @app.callback(invoke_without_command=True)
 def _default(
     ctx: typer.Context,
+    session: Annotated[
+        str | None,
+        typer.Option(
+            "--session",
+            help="Resume a specific cockpit session id (SES-...).",
+        ),
+    ] = None,
+    new: Annotated[
+        bool,
+        typer.Option(
+            "--new",
+            help="Force a fresh cockpit session even if one is active.",
+        ),
+    ] = False,
+    label: Annotated[
+        str | None,
+        typer.Option(
+            "--label",
+            help="Optional human-readable label for the new session.",
+        ),
+    ] = None,
+    list_sessions: Annotated[
+        bool,
+        typer.Option(
+            "--list",
+            help=(
+                "Print operator's recent cockpit sessions and exit "
+                "(non-interactive)."
+            ),
+        ),
+    ] = False,
     allow_destructive: Annotated[
         bool, typer.Option("--allow-destructive")
     ] = False,
@@ -84,7 +115,13 @@ def _default(
     except ImportError as e:
         rprint(f"[red]REPL unavailable: {e}[/]")
         raise typer.Exit(code=1)
-    run_repl(allow_destructive=allow_destructive)
+    run_repl(
+        allow_destructive=allow_destructive,
+        session_id=session,
+        force_new=new,
+        label=label,
+        list_only=list_sessions,
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover

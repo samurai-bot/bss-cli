@@ -191,6 +191,7 @@ source = { editable = "cli" }
 dependencies = [
     { name = "bss-clients" },
     { name = "bss-clock" },
+    { name = "bss-cockpit" },
     { name = "bss-middleware" },
     { name = "bss-orchestrator" },
     { name = "bss-telemetry" },
@@ -217,6 +218,7 @@ dev = [
 requires-dist = [
     { name = "bss-clients", editable = "packages/bss-clients" },
     { name = "bss-clock", editable = "packages/bss-clock" },
+    { name = "bss-cockpit", editable = "packages/bss-cockpit" },
     { name = "bss-middleware", editable = "packages/bss-middleware" },
     { name = "bss-orchestrator", editable = "orchestrator" },
     { name = "bss-telemetry", editable = "packages/bss-telemetry" },
