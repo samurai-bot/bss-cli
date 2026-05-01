@@ -12,7 +12,15 @@
 | **v0.3.0** | 2026-04-23 | Shared `BSS_API_TOKEN` middleware on every BSS service. CLI + orchestrator + scenario runner inject the header automatically. Sentinel `changeme` rejects on startup. Token rotation runbook. |
 | **v0.4.0** | 2026-04-23 | Self-serve customer portal on port **9001**. FastAPI + Jinja + HTMX. **Every portal write goes through the LLM orchestrator** — not bss-clients. Agent log widget streams tool calls live via SSE. Pre-baked Myinfo KYC, mock tokenizer, eSIM QR PNG. Fifth hero scenario drives the portal HTTP-to-end. |
 | **v0.5.0** | 2026-04-23 | CSR agent console on port **9002**. Stub login (NOT real auth — populates `X-BSS-Actor` for audit). Search by name or MSISDN, customer 360, ask form. Agent receives customer + subscription snapshot in the prompt. Auto-refresh on completion. Shared `bss-portal-ui` package extracted before second portal was written. Sixth hero scenario. |
-| **v0.6.0** | *in progress* | Maintenance + polish. Docs sweep (README, ARCHITECTURE, CONTRIBUTING, ROADMAP, screenshots). Renderer polish on 5 hero ASCII renderers. Tech-debt sweep (catalog reorg, Dockerfile evaluation, doctrine grep guard, TOOL_SURFACE reconciliation, ship-criteria re-measurement). No new features. |
+| **v0.6.0** | 2026-04-23 | Maintenance + polish. Docs sweep (README, ARCHITECTURE, CONTRIBUTING, ROADMAP, screenshots). Renderer polish on 5 hero ASCII renderers. Tech-debt sweep (catalog reorg, Dockerfile evaluation, doctrine grep guard, TOOL_SURFACE reconciliation, ship-criteria re-measurement). |
+| **v0.7.0** | 2026-04-26 | Catalog versioning + plan changes. Subscription price snapshotted at order time; renewal reads the snapshot, not the catalog. `subscription.schedule_plan_change` + `cancel_pending_plan_change` + `migrate_to_new_price`. New hero scenario. |
+| **v0.8.0** | 2026-04-26 | Self-serve portal authentication. Email + magic-link / OTP via `bss-portal-auth`. Server-side sessions, public-route allowlist, step-up auth scaffolding. |
+| **v0.9.0** | 2026-04-27 | Named tokens at the BSS perimeter. `TokenMap` + `service_identity` propagation through audit + structlog + OTel. `astream_once(service_identity=)`. |
+| **v0.10.0** | 2026-04-27 | Authenticated post-login customer self-serve writes go direct via `bss-clients` (chat stays orchestrator-mediated). Per-resource ownership policies + step-up gating. |
+| **v0.11.0** | 2026-04-27 | Signup funnel goes direct (sub-second per step vs ~85s via the orchestrator). Chat is the only orchestrator-mediated route post-v0.11. |
+| **v0.12.0** | 2026-04-30 | Chat surface + scoping. `customer_self_serve` tool profile + `*.mine` wrappers + ownership trip-wire + per-customer caps + 5-category escalation. 14-day soak. |
+| **v0.12.1** | 2026-04-30 | Step-up replay preserves POST body so changes apply on first try. |
+| **v0.13.0** | 2026-05-01 | Operator cockpit. CLI REPL canonical, browser veneer over a shared Postgres-backed `Conversation` store (`bss-cockpit` package). v0.5 staff-auth pattern retired. `OPERATOR.md` + `settings.toml` for operator-tunable persona + machine config. `operator_cockpit` tool profile + `BSS_OPERATOR_COCKPIT_API_TOKEN`. New hero scenario `operator_cockpit_handle_blocked_subscription`. |
 
 ## Near-term (post-v0.6)
 
@@ -97,19 +105,30 @@ re-run on production data shapes.
 The git tag `v0.12.0` is the platform v1.0 sits on; tagging v1.0
 without all three swaps is a doctrine violation.
 
-## Phase 12 — Authentication & RBAC
+## Phase 12 — Authentication & RBAC (staff-side retired in v0.13; customer-side concrete)
 
-The big post-portals piece. Spec exists in `CLAUDE.md` already.
+The original Phase 12 plan covered both staff and customer auth.
+v0.13 split the question:
 
-- **Service-to-service:** OAuth2 client credentials, short-lived JWTs via `bss-clients`. Replaces the v0.3 shared admin token.
-- **Human-to-system:** OAuth2 Authorization Code + PKCE through a new `services/auth` backed by Keycloak / Cognito / Entra. Replaces both portals' stub mechanisms (CSR portal stub login, self-serve portal no-auth).
-- **8 coarse roles:** csr, senior_agent, billing_analyst, provisioning_engineer, supervisor, admin, auditor, system. Permissions derived 1:1 from tool names; the policy layer reads from `auth_context.current().role`.
-- **Per-principal rate limiting** at the middleware level.
-- **Resource scoping** via `tenant_id` and `customer_segment` claims.
+- **Staff side (operator cockpit) — RETIRED.** v0.13 deletes the
+  v0.5 stub-login pattern and explicitly retires the OAuth/RBAC
+  ambition for the cockpit. The cockpit runs single-operator-by-
+  design behind a secure perimeter; `actor` from `.bss-cli/settings.toml`.
+  Multi-operator separation, if ever needed, is a multi-tenant
+  carve-out (one cockpit container per operator namespace), not a
+  login wall. DECISIONS 2026-05-01 documents the rationale.
+- **Customer side (self-serve portal) — concrete and partially
+  shipped.** v0.8 ships email + magic-link / OTP. v0.10 adds
+  step-up. v1.0 swaps email-OTP for real Singpass attestation
+  through the channel layer. No `services/auth`, no OAuth client
+  credentials JWT for service-to-service in v0.13's plan — the
+  v0.9 named-token model is the durable shape there.
 
-`auth_context.py` has been in every service since Phase 3 specifically to support this swap. Phase 12 is the change per service: the middleware swaps from token-comparison to JWT-validation; `auth_context.current()` reads claims from the JWT instead of headers; business logic stays untouched.
-
-This is the single largest post-v0.6 piece. Spec lives in `CLAUDE.md` §"Phase 12 model"; full version spec drafted only when the implementation phase begins.
+`auth_context.py` stays in every service. It carries `actor` /
+`tenant_id` / `service_identity`. The seam is preserved against a
+future need; the planned shape is no longer "Phase 12 fills these
+from a JWT" — it's "if a future deployment needs richer scoping,
+this is the place to add it".
 
 ## Future (speculative)
 
