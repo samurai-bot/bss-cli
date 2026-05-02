@@ -42,5 +42,15 @@ class Settings(BaseSettings):
     # write to BSS-core schemas (CRM, catalog, etc.) — only to portal_auth.
     bss_db_url: str = ""
 
+    # v0.15 — KYC adapter selection.
+    bss_portal_kyc_provider: str = "prebaked"
+    bss_portal_kyc_didit_api_key: str = ""
+    bss_portal_kyc_didit_workflow_id: str = ""
+    bss_portal_kyc_didit_webhook_secret: str = ""
+    # Public URL for the portal — used as the base for the Didit return_url
+    # passed to KycVerificationAdapter.initiate(). Falls back to a localhost
+    # default for dev / tests; production deployments set this via env.
+    bss_portal_public_url: str = "http://localhost:9001"
+
 
 settings = Settings()

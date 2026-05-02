@@ -21,7 +21,10 @@ from bss_models.crm import CustomerIdentity
 CUST_PREFIX = "/tmf-api/customerManagement/v4"
 KYC_PREFIX = "/crm-api/v1"
 PLAINTEXT_NRIC = "S9999999Z"
-EXPECTED_HASH = hashlib.sha256(PLAINTEXT_NRIC.encode()).hexdigest()
+# v0.15: hash is domain-separated (number | country | provider) to prevent
+# cross-provider/country collision. The test posts with country="SG" and
+# provider="myinfo".
+EXPECTED_HASH = hashlib.sha256(f"{PLAINTEXT_NRIC}|SG|myinfo".encode()).hexdigest()
 
 
 async def _create_customer(client: AsyncClient) -> str:
@@ -71,13 +74,17 @@ class TestKycRedaction:
         assert r.json()["kyc_status"] == "verified"
 
         # ── Check (a): structlog output ─────────────────────────────
+        # v0.15 doctrine: the API endpoint never logs document_number
+        # at all (raw OR redacted form). Earlier versions relied on the
+        # structlog redaction processor as a defense-in-depth marker;
+        # v0.15 amendment 2 removed the log call outright since the
+        # safer posture is "never write the value to the log pipeline
+        # in the first place." Redaction stays in place as backstop for
+        # any incidental leak through other paths.
         captured = capsys.readouterr()
         all_output = captured.out + captured.err
         assert PLAINTEXT_NRIC not in all_output, (
             f"LEAK: plaintext NRIC '{PLAINTEXT_NRIC}' found in log output"
-        )
-        assert "***REDACTED***" in all_output, (
-            "Redaction processor did not replace document_number with ***REDACTED***"
         )
 
         # ── Check (b): audit.domain_event payload ───────────────────

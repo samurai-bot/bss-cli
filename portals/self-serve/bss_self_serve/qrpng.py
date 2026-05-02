@@ -18,12 +18,18 @@ from qrcode.constants import ERROR_CORRECT_M
 
 def activation_qr_data_uri(lpa_code: str, *, box_size: int = 8, border: int = 2) -> str:
     """Return ``data:image/png;base64,...`` for embedding into ``<img src="">``."""
+    return qr_data_uri(lpa_code, box_size=box_size, border=border)
+
+
+def qr_data_uri(payload: str, *, box_size: int = 8, border: int = 2) -> str:
+    """Generic ``data:image/png;base64,...`` QR — used by activation codes
+    and v0.15 KYC cross-device handoff URLs alike."""
     qr = qrcode.QRCode(
         error_correction=ERROR_CORRECT_M,
         box_size=box_size,
         border=border,
     )
-    qr.add_data(lpa_code)
+    qr.add_data(payload)
     qr.make(fit=True)
     img = qr.make_image(fill_color="#0e1014", back_color="#ffffff")
     buf = io.BytesIO()

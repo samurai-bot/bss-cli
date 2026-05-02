@@ -11,6 +11,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.config import Settings
+from app.domain.esim_provider import select_esim_provider
 from app.logging import configure_logging
 from app.main import create_app
 from bss_middleware import TEST_TOKEN
@@ -76,6 +77,7 @@ async def client(settings: Settings, db_engine, db_session: AsyncSession):
     app.state.engine = db_engine
     app.state.mq_exchange = None
     app.state.mq_connection = None
+    app.state.esim_provider = select_esim_provider(settings.esim_provider)
 
     class _FakeSessionFactory:
         def __call__(self):

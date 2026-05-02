@@ -64,11 +64,11 @@ async def _truncate_webhook_event(db_engine):
     """Each test gets a clean integrations.webhook_event table."""
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as s:
-        await s.execute(text("TRUNCATE integrations.webhook_event"))
+        await s.execute(text("TRUNCATE integrations.webhook_event CASCADE"))
         await s.commit()
     yield
     async with factory() as s:
-        await s.execute(text("TRUNCATE integrations.webhook_event"))
+        await s.execute(text("TRUNCATE integrations.webhook_event CASCADE"))
         await s.commit()
 
 

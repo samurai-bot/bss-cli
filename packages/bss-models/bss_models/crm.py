@@ -12,10 +12,11 @@ from sqlalchemy import (
     Date,
     ForeignKey,
     Index,
+    String,
     Text,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base, TZDateTime, TenantMixin, TimestampMixin
@@ -113,12 +114,21 @@ class CustomerIdentity(Base, TenantMixin, TimestampMixin):
     )
     document_type: Mapped[str] = mapped_column(Text, nullable=False)
     document_number_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    # v0.15: PDPA-aligned partial display ("796B" for NRIC S8369796B).
+    # Nullable for back-compat with v0.14 rows; v0.15+ writes always populate.
+    document_number_last4: Mapped[str | None] = mapped_column(String(4))
     document_country: Mapped[str] = mapped_column(Text, nullable=False)
     date_of_birth: Mapped[date] = mapped_column(Date, nullable=False)
     nationality: Mapped[str | None] = mapped_column(Text)
     verified_by: Mapped[str | None] = mapped_column(Text)
     attestation_payload: Mapped[dict | None] = mapped_column(JSONB)
     verified_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+    # v0.15: FK into integrations.kyc_webhook_corroboration. Required when
+    # verified_by='didit'; null for prebaked / channel-layer attestations.
+    corroboration_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("integrations.kyc_webhook_corroboration.id"),
+    )
 
     customer: Mapped["Customer"] = relationship(back_populates="identity")
 

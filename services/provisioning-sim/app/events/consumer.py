@@ -52,6 +52,7 @@ async def setup_consumer(app) -> None:
                     task_repo=task_repo,
                     fault_repo=fault_repo,
                     exchange=exchange,
+                    esim_provider=app.state.esim_provider,
                 )
 
     await queue.consume(on_task_created)

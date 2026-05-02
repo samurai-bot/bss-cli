@@ -494,15 +494,56 @@ the route refuses without invoking the LLM.
 
 ### Deployability matrix
 
-| Concern | v0.11 | v0.12 | v1.0 |
-|---|---|---|---|
-| Customer signup (KYC) | ✅ direct + mocked attestation | ✅ unchanged | ⏳ real Singpass |
-| Card on file | ✅ mock tokenizer | ✅ unchanged | ⏳ real Stripe |
-| eSIM provisioning | ✅ provisioning-sim | ✅ unchanged | ⏳ real SM-DP+ |
-| Customer chat | _absent_ | ✅ scoped + capped + escalation | ✅ unchanged shape |
-| Chat ownership trip-wire | _absent_ | ✅ defence-in-depth | ✅ unchanged shape |
-| 14-day soak | _absent_ | ✅ frozen-clock 100×14 | ⏳ public soak with real cohort |
-| Per-principal RBAC (staff) | _absent_ | _absent_ | _retired in v0.13 — operator trust is perimeter-based; DECISIONS 2026-05-01_ |
+| Concern | v0.11 | v0.12 | v0.15 | v1.0 |
+|---|---|---|---|---|
+| Customer signup (KYC) | ✅ direct + mocked attestation | ✅ unchanged | ✅ Didit live (channel-layer) + prebaked dev path | ⏳ real Singpass |
+| Card on file | ✅ mock tokenizer | ✅ unchanged | ✅ unchanged | ⏳ real Stripe |
+| eSIM provisioning | ✅ provisioning-sim | ✅ unchanged | ✅ Protocol seam (sim only; real providers v0.16+) | ⏳ real SM-DP+ |
+| Customer chat | _absent_ | ✅ scoped + capped + escalation | ✅ unchanged shape | ✅ unchanged shape |
+| Chat ownership trip-wire | _absent_ | ✅ defence-in-depth | ✅ unchanged shape | ✅ unchanged shape |
+| 14-day soak | _absent_ | ✅ frozen-clock 100×14 | ✅ unchanged (prebaked KYC path preserved) | ⏳ public soak with real cohort |
+| Per-principal RBAC (staff) | _absent_ | _absent_ | _absent_ | _retired in v0.13 — operator trust is perimeter-based; DECISIONS 2026-05-01_ |
+
+### v0.15 KYC — Didit (channel-layer)
+
+The KYC verification flow lives in the portal (channel-layer doctrine
+per CLAUDE.md "Scope boundaries: eKYC"). BSS receives a verification
+*receipt* (last4 + hash + corroboration_id), never raw PII.
+
+```
+┌──── browser ────┐    ┌──── portal-self-serve (9001) ────────────┐    ┌── BSS-CLI ──┐
+│ /signup/step/kyc├──▶│ kyc_adapter.initiate(email, return_url)   │    │             │
+│                 │   │   → DiditKycAdapter → POST /v2/session/   │    │             │
+│  HX-Redirect ◀──┼───┤                                            │    │             │
+│       │         │   │                                            │    │             │
+│       ▼         │   │                                            │    │             │
+│ Didit hosted UI │   │                                            │    │             │
+│ (doc + liveness)│   │                                            │    │             │
+│       │         │   │                                            │    │             │
+│       ├─────────┼──▶│ POST /webhooks/didit  ──HMAC verify──▶     │    │             │
+│       │         │   │   → integrations.webhook_event             │    │             │
+│       │         │   │   → integrations.kyc_webhook_corroboration │    │             │
+│       │         │   │       (trust anchor, FK on session_id)     │    │             │
+│       ▼         │   │                                            │    │             │
+│ /signup/step/   │   │ kyc_adapter.fetch_attestation(session_id) │    │             │
+│ kyc/callback    │──▶│   → polls corroboration row (10s timeout) │    │             │
+│                 │   │   → reduces PII: last4 + hash + drop rest │    │             │
+│                 │   │   → crm.attest_kyc(corroboration_id, …)   │───▶│ check_attest│
+│                 │   │                                            │    │ ation_      │
+│                 │   │                                            │    │ signature   │
+│                 │   │                                            │    │ (verifies   │
+│                 │   │                                            │    │ corrobora-  │
+│                 │   │                                            │    │ tion row    │
+│                 │   │                                            │    │ exists,     │
+│                 │   │                                            │    │ Approved,   │
+│                 │   │                                            │    │ <30 min)    │
+└─────────────────┘    └────────────────────────────────────────────┘    └─────────────┘
+```
+
+The `prebaked` adapter loops the customer back to the callback
+without external hops — used by the v0.12 14-day soak corpus and
+hero scenarios. Selection via `BSS_PORTAL_KYC_PROVIDER`. Full
+doctrine + alternatives in DECISIONS.md (2026-05-02 entries).
 
 ### Note on billing in v0.1
 

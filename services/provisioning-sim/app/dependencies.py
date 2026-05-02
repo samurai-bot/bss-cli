@@ -9,6 +9,7 @@ from bss_telemetry import configure_telemetry
 from fastapi import Depends, FastAPI, Request
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.domain.esim_provider import select_esim_provider
 from app.events.consumer import setup_consumer
 from app.repositories.fault_repo import FaultRepository
 from app.repositories.task_repo import TaskRepository
@@ -27,6 +28,8 @@ async def lifespan(app: FastAPI):
     app.state.session_factory = async_sessionmaker(engine, expire_on_commit=False)
     app.state.mq_exchange = None
     app.state.mq_connection = None
+    app.state.esim_provider = select_esim_provider(settings.esim_provider)
+    log.info("esim_provider.selected", name=settings.esim_provider)
 
     # Set up MQ consumer (non-blocking — logs warning if MQ not configured)
     try:
@@ -63,4 +66,5 @@ async def get_provisioning_service(
         task_repo=TaskRepository(session),
         fault_repo=FaultRepository(session),
         exchange=request.app.state.mq_exchange,
+        esim_provider=request.app.state.esim_provider,
     )

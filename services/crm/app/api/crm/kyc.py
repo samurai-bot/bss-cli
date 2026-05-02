@@ -18,13 +18,15 @@ async def attest_kyc(
     body: KycAttestationRequest,
     svc: KycService = Depends(get_kyc_service),
 ) -> dict:
-    # Log the attestation attempt — structlog redaction will strip document_number
+    # v0.15 — never log document_number (raw or even stub-derived). The
+    # service derives last4 + hash if needed; only the reduced forms are
+    # safe to log.
     log.info(
         "kyc.attestation.received",
         customer_id=customer_id,
         provider=body.provider,
         document_type=body.document_type,
-        document_number=body.document_number,
+        has_corroboration=body.corroboration_id is not None,
     )
     result = await svc.attest(
         customer_id,
@@ -32,11 +34,14 @@ async def attest_kyc(
         provider_reference=body.provider_reference,
         document_type=body.document_type,
         document_number=body.document_number,
+        document_number_last4=body.document_number_last4,
+        document_number_hash=body.document_number_hash,
         document_country=body.document_country,
         date_of_birth=body.date_of_birth,
         nationality=body.nationality,
         verified_at=body.verified_at,
         attestation_payload=body.attestation_payload,
+        corroboration_id=body.corroboration_id,
     )
     return result
 

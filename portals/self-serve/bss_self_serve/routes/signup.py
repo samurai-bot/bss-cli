@@ -54,6 +54,11 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from ..clients import get_clients
 from ..error_messages import is_known, render
+from ..kyc import (
+    KycCapExhausted,
+    KycCorroborationTimeout,
+    PrebakedKycAdapter,
+)
 from ..offerings import find_plan, flatten_offerings
 from ..prompts import KYC_PREBAKED_ATTESTATION_ID, KYC_PREBAKED_SIGNATURE_TEMPLATE
 from ..security import requires_verified_email
@@ -340,20 +345,210 @@ async def signup_step_kyc(
     session: str = Query(...),
     identity: IdentityView = Depends(requires_verified_email),
 ) -> HTMLResponse:
+    """v0.15 — flow through ``app.state.kyc_adapter``.
+
+    Prebaked mode runs the full attest synchronously (same end state as
+    v0.14, just routed through the adapter). Didit mode renders a
+    cross-device handoff page (URL + QR code) with HTMX polling — the
+    customer can complete verification on the same device or scan to
+    finish on a phone, and the desktop advances the moment the
+    corroboration webhook arrives. No HX-Redirect; both devices stay
+    on their own page.
+    """
     store = request.app.state.session_store
     factory = request.app.state.db_session_factory
+    adapter = request.app.state.kyc_adapter
     sig = await _resolve(store, session, identity)
     if sig.step != "pending_kyc":
         return _render_step_fragment(request, sig)
 
+    public_url = request.app.state.settings.bss_portal_public_url.rstrip("/")
+    return_url = f"{public_url}/signup/step/kyc/callback?session={session}"
+
+    try:
+        kyc_session = await adapter.initiate(
+            email=sig.email, return_url=return_url
+        )
+    except KycCapExhausted:
+        # Hard-block, no fallback. Templated retry page; ops gets the event.
+        log.warning("portal.signup.kyc.cap_exhausted")
+        sig.step = "failed"
+        sig.step_error = "kyc.cap_exhausted"
+        await store.update(sig)
+        return _render_step_fragment(request, sig)
+
+    if isinstance(adapter, PrebakedKycAdapter):
+        # Synchronous: complete the attest in this request and advance.
+        return await _complete_kyc_attest(
+            request=request,
+            store=store,
+            factory=factory,
+            adapter=adapter,
+            sig=sig,
+            kyc_session=kyc_session,
+        )
+
+    # Real provider (Didit) — set state to pending_kyc_handoff and
+    # let the progress fragment render the URL + QR + poll inside the
+    # progress card (so the timeline + plan heading stay visible).
+    # The customer can verify on same device OR scan to phone; either
+    # way the corroboration webhook arrival is what advances the
+    # signup, NOT the post-verification redirect.
+    from ..qrpng import qr_data_uri
+
+    sig.kyc_provider_session_id = kyc_session.session_id
+    sig.kyc_verify_url = kyc_session.redirect_url
+    sig.kyc_verify_qr = qr_data_uri(kyc_session.redirect_url)
+    sig.step = "pending_kyc_handoff"
+    await store.update(sig)
+    return _render_step_fragment(request, sig)
+
+
+# ── GET /signup/step/kyc/poll — desktop poll for corroboration row ──────
+
+
+@router.get("/signup/step/kyc/poll", response_class=HTMLResponse)
+async def signup_step_kyc_poll(
+    request: Request,
+    session: str = Query(...),
+    identity: IdentityView = Depends(requires_verified_email),
+) -> HTMLResponse:
+    """Desktop polls every 3s during the cross-device KYC handoff. When
+    the corroboration row appears (HMAC-verified webhook landed), this
+    endpoint completes the attest call and returns ``HX-Redirect`` to
+    the signup progress page. Until then it returns a small "still
+    waiting" fragment that re-arms the poll.
+    """
+    store = request.app.state.session_store
+    factory = request.app.state.db_session_factory
+    adapter = request.app.state.kyc_adapter
+    sig = await _resolve(store, session, identity)
+
+    # Already advanced or failed — render the current state fragment.
+    # The fragment's natural trigger advances the chain from there.
+    if sig.step != "pending_kyc_handoff":
+        return _render_step_fragment(request, sig)
+
+    provider_session_id = getattr(sig, "kyc_provider_session_id", None) or ""
+    if not provider_session_id:
+        # Initiate hasn't populated yet; render the same fragment so the
+        # poll re-arms.
+        return _render_step_fragment(request, sig)
+
+    from sqlalchemy import select
+
+    from bss_models.integrations import KycWebhookCorroboration
+
+    factory_inner = request.app.state.db_session_factory
+    async with factory_inner() as db:
+        row = (
+            await db.execute(
+                select(KycWebhookCorroboration).where(
+                    KycWebhookCorroboration.provider == "didit",
+                    KycWebhookCorroboration.provider_session_id
+                    == provider_session_id,
+                )
+            )
+        ).scalar_one_or_none()
+
+    # Didit's first webhook for a session arrives at session-creation
+    # ("Not Started"); subsequent ones progress through "In Progress" /
+    # "In Review" before landing on a terminal state (Approved /
+    # Declined / Expired). The corroboration row is updated in place by
+    # the webhook handler. Only act on a TERMINAL status.
+    if row is None or row.decision_status in ("Not Started", "In Progress", "In Review"):
+        return _render_step_fragment(request, sig)
+
+    if row.decision_status in ("Declined", "Expired"):
+        sig.step = "failed"
+        sig.step_error = f"kyc.{row.decision_status.lower()}"
+        await store.update(sig)
+        return _render_step_fragment(request, sig)
+
+    if row.decision_status != "Approved":
+        # Unknown terminal status — keep waiting (forward-compat).
+        return _render_step_fragment(request, sig)
+
+    # Approved — complete the BSS attest. The completion advances state
+    # to pending_cof and renders the next fragment, with its own
+    # built-in trigger that fires the next step.
+    return await _complete_kyc_attest(
+        request=request,
+        store=store,
+        factory=factory,
+        adapter=adapter,
+        sig=sig,
+        kyc_session=type("_KycSession", (), {"session_id": provider_session_id})(),
+    )
+
+
+# ── GET /signup/step/kyc/callback — return path from hosted UI ──────────
+
+
+@router.get("/signup/step/kyc/callback", response_class=HTMLResponse)
+async def signup_step_kyc_callback(
+    request: Request,
+    session: str = Query(...),
+) -> HTMLResponse:
+    """Public route — the customer's browser lands here after Didit's
+    hosted UI completes. In the cross-device case the customer's PHONE
+    arrives here without the desktop's portal session cookie, so this
+    route MUST NOT require auth. It just renders a "verification
+    complete, return to your computer" confirmation. The desktop's
+    poll loop is what actually advances the signup; this page is
+    purely a friendly UX endpoint for the verifying device.
+    """
+    return templates.TemplateResponse(
+        request, "signup_kyc_confirmation.html", {"session_id": session}
+    )
+
+
+async def _complete_kyc_attest(
+    *,
+    request: Request,
+    store,
+    factory,
+    adapter,
+    sig: SignupSession,
+    kyc_session,
+    redirect_after: bool = False,
+) -> HTMLResponse:
+    """Shared finisher: fetch attestation, submit to BSS, advance signup.
+
+    Used by both the synchronous prebaked path and the Didit return-callback.
+    Honors the existing ``portal_action`` audit row contract.
+    """
+    try:
+        attestation = await adapter.fetch_attestation(
+            session_id=kyc_session.session_id
+        )
+    except KycCorroborationTimeout:
+        log.info(
+            "portal.signup.kyc.corroboration_timeout",
+            provider_session=kyc_session.session_id,
+        )
+        sig.step_error = "kyc.corroboration_timeout"
+        await store.update(sig)
+        if redirect_after:
+            return RedirectResponse(
+                url=f"/signup/{sig.plan}/progress?session={sig.session_id}",
+                status_code=303,
+            )
+        return _render_step_fragment(request, sig)
+
     clients = get_clients()
-    signature = KYC_PREBAKED_SIGNATURE_TEMPLATE.format(email=sig.email)
     try:
         await clients.crm.attest_kyc(
             sig.customer_id,
-            provider="myinfo",
-            attestation_token=signature,
-            provider_reference=KYC_PREBAKED_ATTESTATION_ID,
+            provider=attestation.provider,
+            attestation_token=KYC_PREBAKED_SIGNATURE_TEMPLATE.format(email=sig.email),
+            provider_reference=attestation.provider_reference,
+            document_type=attestation.document_type,
+            document_number_last4=attestation.document_number_last4,
+            document_number_hash=attestation.document_number_hash,
+            document_country=attestation.document_country,
+            date_of_birth=attestation.date_of_birth.isoformat(),
+            corroboration_id=str(attestation.corroboration_id) if attestation.corroboration_id else None,
         )
     except PolicyViolationFromServer as exc:
         await _record_step(
@@ -371,6 +566,11 @@ async def signup_step_kyc(
         sig.step = "failed"
         sig.step_error = exc.rule
         await store.update(sig)
+        if redirect_after:
+            return RedirectResponse(
+                url=f"/signup/{sig.plan}/progress?session={sig.session_id}",
+                status_code=303,
+            )
         return _render_step_fragment(request, sig)
 
     await _record_step(
@@ -384,6 +584,11 @@ async def signup_step_kyc(
     )
     sig.step = "pending_cof"
     await store.update(sig)
+    if redirect_after:
+        return RedirectResponse(
+            url=f"/signup/{sig.plan}/progress?session={sig.session_id}",
+            status_code=303,
+        )
     return _render_step_fragment(request, sig)
 
 

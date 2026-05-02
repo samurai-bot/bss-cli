@@ -26,6 +26,12 @@ os.environ["BSS_PORTAL_EMAIL_ADAPTER"] = "noop"
 os.environ["BSS_PORTAL_EMAIL_PROVIDER"] = "noop"
 # v0.14: force-clear public URL so magic-link tests get bare-token path.
 os.environ["BSS_PORTAL_PUBLIC_URL"] = ""
+# v0.15: force-override KYC provider to prebaked so the lifespan doesn't
+# try to construct a DiditKycAdapter against a real Didit sandbox during
+# tests. A developer-sourced .env with BSS_PORTAL_KYC_PROVIDER=didit
+# would otherwise wire a real httpx client against verification.didit.me.
+os.environ["BSS_PORTAL_KYC_PROVIDER"] = "prebaked"
+os.environ["BSS_KYC_ALLOW_PREBAKED"] = "true"
 
 import pytest
 from fastapi.testclient import TestClient

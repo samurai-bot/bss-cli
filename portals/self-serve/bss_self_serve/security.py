@@ -47,6 +47,13 @@ PUBLIC_EXACT_PATHS: Final[frozenset[str]] = frozenset({
     # v0.12 PR20 — legal pages public by design.
     "/terms",
     "/privacy",
+    # v0.15 — Didit hosted UI redirects the customer's verifying device
+    # back to this URL after liveness completes. In the cross-device flow
+    # that device is a phone with no portal session cookie. The page is
+    # a static "verification complete, return to your computer"
+    # confirmation; it performs no BSS write. The desktop's poll endpoint
+    # is what actually advances the signup.
+    "/signup/step/kyc/callback",
     # Convenience: `/` redirects to /welcome for anonymous visitors,
     # which the dashboard route does itself by raising RedirectToLogin.
 })

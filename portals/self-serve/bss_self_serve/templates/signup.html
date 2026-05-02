@@ -54,19 +54,12 @@
        it on the reuse path. #}
     <input type="hidden" name="card_pan" value="" />
   {% else %}
-  <fieldset>
-    <legend>Identity verification</legend>
-    <div class="kyc-badge">
-      <span class="kyc-badge-check">✓</span>
-      <div class="kyc-badge-body">
-        <div class="kyc-badge-title">Identity verified via Myinfo (simulated)</div>
-        <div class="kyc-badge-meta">
-          Attestation ID: <code>{{ kyc_attestation_id }}</code> · Status: valid · Expires: 2027-04-20
-        </div>
-      </div>
-      <button class="kyc-badge-edit" type="button" disabled>Edit</button>
-    </div>
-  </fieldset>
+  {# v0.15 — removed the prebaked "✓ Identity verified" badge that used
+     to render here. Identity verification is performed AFTER this form
+     submits, in a dedicated /signup/step/kyc step (Didit hosted UI or
+     prebaked, depending on BSS_PORTAL_KYC_PROVIDER). Showing a "✓
+     verified" badge here misled customers into thinking KYC was already
+     done. #}
 
   <fieldset>
     <legend>Payment</legend>

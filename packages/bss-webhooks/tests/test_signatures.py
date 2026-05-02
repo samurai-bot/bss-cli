@@ -32,10 +32,13 @@ def _stripe_sign(secret: str, body: bytes, timestamp: int) -> str:
     return f"t={timestamp},v1={h}"
 
 
-def _didit_sign(secret: str, body: bytes, timestamp: int) -> str:
-    signed = f"{timestamp}.".encode() + body
-    h = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
-    return f"{timestamp}.{h}"
+def _didit_sign(secret: str, body: bytes, timestamp: int) -> dict[str, str]:
+    """Didit Webhooks v3.0 signs body bytes alone (timestamp is sent in a
+    SEPARATE ``X-Timestamp`` header but does NOT bind into the HMAC
+    input — verified against three real sandbox deliveries on
+    2026-05-02 by reproducing the formula offline)."""
+    h = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return {"X-Signature-V2": h, "X-Timestamp": str(timestamp)}
 
 
 def _svix_sign(secret_key: bytes, msg_id: str, timestamp: int, body: bytes) -> str:
@@ -134,23 +137,52 @@ def test_didit_happy_path() -> None:
     secret = "didit-secret"
     body = b'{"session_id":"abc"}'
     ts = int(time.time())
-    headers = {"X-Signature-V2": _didit_sign(secret, body, ts)}
     verify_signature(
-        secret=secret, body=body, headers=headers, scheme="didit_hmac", now=ts
+        secret=secret, body=body,
+        headers=_didit_sign(secret, body, ts),
+        scheme="didit_hmac", now=ts,
     )
 
 
-def test_didit_missing_header_raises_missing_header() -> None:
+def test_didit_x_signature_alias_also_accepted() -> None:
+    """Didit v3.0 sends both ``X-Signature-V2`` and a ``X-Signature``
+    alias with the same hex. We accept either."""
+    secret = "didit-secret"
+    body = b'{"session_id":"abc"}'
+    ts = int(time.time())
+    h = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    verify_signature(
+        secret=secret, body=body,
+        headers={"X-Signature": h, "X-Timestamp": str(ts)},
+        scheme="didit_hmac", now=ts,
+    )
+
+
+def test_didit_missing_signature_header_raises_missing_header() -> None:
     with pytest.raises(WebhookSignatureError) as exc_info:
         verify_signature(
-            secret="x", body=b"{}", headers={}, scheme="didit_hmac",
-            now=time.time(),
+            secret="x", body=b"{}",
+            headers={"X-Timestamp": str(int(time.time()))},
+            scheme="didit_hmac", now=time.time(),
         )
     assert exc_info.value.code == "missing_header"
 
 
-def test_didit_malformed_header_no_dot_raises_malformed() -> None:
-    headers = {"X-Signature-V2": "no-dot-separator"}
+def test_didit_missing_timestamp_header_raises_missing_header() -> None:
+    with pytest.raises(WebhookSignatureError) as exc_info:
+        verify_signature(
+            secret="x", body=b"{}",
+            headers={"X-Signature-V2": "deadbeef" * 8},
+            scheme="didit_hmac", now=time.time(),
+        )
+    assert exc_info.value.code == "missing_header"
+
+
+def test_didit_non_hex_signature_raises_malformed() -> None:
+    headers = {
+        "X-Signature-V2": "not-hex-at-all",
+        "X-Timestamp": str(int(time.time())),
+    }
     with pytest.raises(WebhookSignatureError) as exc_info:
         verify_signature(
             secret="x", body=b"{}", headers=headers, scheme="didit_hmac",
@@ -163,11 +195,11 @@ def test_didit_tampered_body_raises_signature_mismatch() -> None:
     secret = "didit-secret"
     body = b'{"session_id":"abc"}'
     ts = int(time.time())
-    headers = {"X-Signature-V2": _didit_sign(secret, body, ts)}
     with pytest.raises(WebhookSignatureError) as exc_info:
         verify_signature(
-            secret=secret, body=b"tampered", headers=headers, scheme="didit_hmac",
-            now=ts,
+            secret=secret, body=b"tampered",
+            headers=_didit_sign(secret, body, ts),
+            scheme="didit_hmac", now=ts,
         )
     assert exc_info.value.code == "signature_mismatch"
 
@@ -176,11 +208,11 @@ def test_didit_replay_window_old() -> None:
     secret = "x"
     body = b"{}"
     old_ts = int(time.time()) - 600
-    headers = {"X-Signature-V2": _didit_sign(secret, body, old_ts)}
     with pytest.raises(WebhookSignatureError) as exc_info:
         verify_signature(
-            secret=secret, body=body, headers=headers, scheme="didit_hmac",
-            max_skew_seconds=300, now=time.time(),
+            secret=secret, body=body,
+            headers=_didit_sign(secret, body, old_ts),
+            scheme="didit_hmac", max_skew_seconds=300, now=time.time(),
         )
     assert exc_info.value.code == "replay_window"
 

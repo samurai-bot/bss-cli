@@ -152,12 +152,41 @@ def test_login_post_with_valid_email_redirects_to_check_email(client, seed_db):
     )
     assert resp.status_code == 303
     loc = resp.headers["location"]
-    assert loc.startswith("/auth/check-email?email=ada@example.sg")
-    assert "next=/signup/PLAN_M" in loc
+    # urlencoded form: '@' -> '%40', '/' -> '%2F'
+    assert loc.startswith("/auth/check-email?")
+    assert "email=ada%40example.sg" in loc
+    assert "next=%2Fsignup%2FPLAN_M" in loc
 
     rec = last_login_codes(_adapter(client), "ada@example.sg")
     assert "otp" in rec and len(rec["otp"]) == 6
     assert "magic_link" in rec and len(rec["magic_link"]) == 32
+
+
+def test_login_post_with_plus_addressed_email_preserves_plus(client, seed_db):
+    """Regression: ``cheekong+test001@gmail.com`` must round-trip through
+    the redirect without ``+`` being mangled to a space. Earlier
+    f-string-built redirect URLs caused FastAPI's ``Query(...)`` to
+    decode ``+`` as space (urlencoded-form convention), which produced
+    ``no_such_identity`` on every OTP submit. Fixed in v0.15 by routing
+    through ``urllib.parse.urlencode``.
+    """
+    plus_email = "ada+test001@example.sg"
+    resp = client.post(
+        "/auth/login",
+        data={"email": plus_email, "next": "/"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    loc = resp.headers["location"]
+    # '+' must be percent-encoded as %2B; raw '+' or ' ' would re-decode wrong.
+    assert "email=ada%2Btest001%40example.sg" in loc, loc
+    assert "ada+test001" not in loc.replace("%2B", "_"), loc
+
+    # Following the redirect must yield the same email back, intact.
+    follow = client.get(loc)
+    assert follow.status_code == 200
+    # The pre-filled (hidden) form input should carry the '+' restored.
+    assert "ada+test001@example.sg" in follow.text or "a**+test001@example.sg" in follow.text
 
 
 # ── /auth/check-email ────────────────────────────────────────────────────
