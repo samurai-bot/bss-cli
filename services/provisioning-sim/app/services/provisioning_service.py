@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import aio_pika
 
+from app.domain.esim_provider import EsimProviderAdapter
 from app.domain.worker import process_task
 from app.policies.base import PolicyViolation
 from app.policies.task import (
@@ -29,11 +30,13 @@ class ProvisioningService:
         task_repo: TaskRepository,
         fault_repo: FaultRepository,
         exchange: aio_pika.abc.AbstractExchange | None = None,
+        esim_provider: EsimProviderAdapter | None = None,
     ):
         self._session = session
         self._task_repo = task_repo
         self._fault_repo = fault_repo
         self._exchange = exchange
+        self._esim_provider = esim_provider
 
     async def get_task(self, task_id: str) -> ProvisioningTask | None:
         return await self._task_repo.get(task_id)
@@ -84,6 +87,7 @@ class ProvisioningService:
             task_repo=self._task_repo,
             fault_repo=self._fault_repo,
             exchange=self._exchange,
+            esim_provider=self._esim_provider,
         )
 
         # Return updated task
@@ -126,6 +130,7 @@ class ProvisioningService:
             task_repo=self._task_repo,
             fault_repo=self._fault_repo,
             exchange=self._exchange,
+            esim_provider=self._esim_provider,
         )
 
         return await self._task_repo.get(task_id)

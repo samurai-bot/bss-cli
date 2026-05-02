@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     mq_url: str = ""
     env: str = "development"
     tenant_default: str = "DEFAULT"
+    esim_provider: str = "sim"
 
     model_config = SettingsConfigDict(
         env_file=_REPO_ROOT / ".env",

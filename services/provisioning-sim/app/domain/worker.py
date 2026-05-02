@@ -19,6 +19,7 @@ from bss_clock import now as clock_now
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import auth_context
+from app.domain.esim_provider import EsimProviderAdapter
 from app.repositories.fault_repo import FaultRepository
 from app.repositories.task_repo import TaskRepository
 from bss_models.audit import DomainEvent
@@ -46,6 +47,7 @@ async def process_task(
     task_repo: TaskRepository,
     fault_repo: FaultRepository,
     exchange: aio_pika.abc.AbstractExchange | None = None,
+    esim_provider: EsimProviderAdapter | None = None,
 ) -> None:
     """Core worker — process a single provisioning task with fault injection."""
     task_id = await task_repo.next_id()
@@ -119,6 +121,31 @@ async def process_task(
             duration *= random.uniform(2.0, 5.0)
 
         await asyncio.sleep(duration)
+
+        # eSIM SM-DP+ seam (v0.15) — sim provider returns success without
+        # additional latency, preserving v0.13/v0.14 timing exactly. Real
+        # providers (v0.16+) replace the synthetic sleep above with their
+        # own HTTP latency.
+        if task_type == "ESIM_PROFILE_PREPARE" and esim_provider is not None:
+            esim_result = await esim_provider.order_profile(
+                iccid=payload.get("iccid", ""),
+                imsi=payload.get("imsi", ""),
+                msisdn=payload.get("msisdn", ""),
+            )
+            if not esim_result.success:
+                task.state = "failed"
+                task.last_error = (
+                    f"SM-DP+ provider declined profile order: {esim_result.provider_reference or 'no reference'}"
+                )
+                if task.attempts >= task.max_attempts:
+                    await _audit_and_publish(
+                        session, exchange, "provisioning.task.failed", task,
+                        service_order_id, commercial_order_id, permanent=True,
+                    )
+                    await session.commit()
+                    return
+                await session.flush()
+                continue
 
         # Success
         task.state = "completed"
