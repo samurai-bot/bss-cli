@@ -234,15 +234,25 @@ def _verify_didit_hmac(
 
     Headers as observed in real sandbox deliveries (2026-05-02):
 
-        X-Signature-V2:    <hex>   — HMAC-SHA-256(secret, f"{ts}.{body}")
-        X-Signature:       <hex>   — same as V2 (legacy alias)
-        X-Signature-Simple: <hex>  — HMAC-SHA-256(secret, body)  [no ts]
+        X-Signature-V2:    <hex>   — HMAC-SHA-256(secret, body)  [body-only]
+        X-Signature:       <hex>   — alias of V2
+        X-Signature-Simple: <hex>  — different hex; algorithm undocumented
         X-Timestamp:       <unix epoch seconds>
 
-    The timestamp is in a SEPARATE header (not embedded in the
-    signature header as v0.14's earlier guess assumed). We verify
-    against ``X-Signature-V2`` because it carries timestamp-binding
-    (replay protection).
+    Despite its name, ``X-Signature-V2`` is computed over the body
+    alone — the timestamp is NOT mixed into the signature input
+    (verified against three real deliveries by computing the formula
+    offline). Reproduction:
+
+        hmac_sha256(secret, body).hexdigest() == X-Signature-V2
+
+    The ``X-Timestamp`` header is checked separately for the replay
+    freshness window. Because the timestamp doesn't bind into the HMAC
+    input, replay protection is weaker than Stripe-style: a captured
+    webhook could be re-delivered with a refreshed timestamp. The
+    corroboration row's ``decision_body_digest`` record + the unique
+    constraint on ``(provider, provider_session_id)`` catch the same-
+    session replay at the DB level.
     """
     sig_hex = headers.get("x-signature-v2") or headers.get("x-signature")
     if not sig_hex:
@@ -253,14 +263,10 @@ def _verify_didit_hmac(
 
     timestamp = headers.get("x-timestamp")
     if not timestamp:
-        # Fall back to X-Signature-Simple (body-only) if no timestamp
-        # header — drops replay protection but accepts the delivery.
-        # Fail closed instead: timestamp is mandatory for v0.15.
         raise WebhookSignatureError(
             "missing_header", "X-Timestamp header required"
         )
 
-    # Sanity: signature must be hex digits.
     if not all(c in "0123456789abcdefABCDEF" for c in sig_hex):
         raise WebhookSignatureError(
             "malformed_header", "X-Signature-V2 must be hex"
@@ -269,8 +275,7 @@ def _verify_didit_hmac(
     _check_timestamp(timestamp, max_skew_seconds, now)
 
     key = secret.encode() if isinstance(secret, str) else secret
-    signed = f"{timestamp}.".encode() + body
-    expected_hex = hmac.new(key, signed, hashlib.sha256).hexdigest()
+    expected_hex = hmac.new(key, body, hashlib.sha256).hexdigest()
 
     if not hmac.compare_digest(sig_hex.lower(), expected_hex):
         raise WebhookSignatureError(

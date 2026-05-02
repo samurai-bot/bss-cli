@@ -33,11 +33,11 @@ def _stripe_sign(secret: str, body: bytes, timestamp: int) -> str:
 
 
 def _didit_sign(secret: str, body: bytes, timestamp: int) -> dict[str, str]:
-    """Didit Webhooks v3.0 signs body with timestamp prefix; the signature
-    hex and the timestamp travel in two SEPARATE headers (verified
-    against a real sandbox delivery 2026-05-02)."""
-    signed = f"{timestamp}.".encode() + body
-    h = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
+    """Didit Webhooks v3.0 signs body bytes alone (timestamp is sent in a
+    SEPARATE ``X-Timestamp`` header but does NOT bind into the HMAC
+    input — verified against three real sandbox deliveries on
+    2026-05-02 by reproducing the formula offline)."""
+    h = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
     return {"X-Signature-V2": h, "X-Timestamp": str(timestamp)}
 
 
@@ -150,8 +150,7 @@ def test_didit_x_signature_alias_also_accepted() -> None:
     secret = "didit-secret"
     body = b'{"session_id":"abc"}'
     ts = int(time.time())
-    signed = f"{ts}.".encode() + body
-    h = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
+    h = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
     verify_signature(
         secret=secret, body=body,
         headers={"X-Signature": h, "X-Timestamp": str(ts)},
