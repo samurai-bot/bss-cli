@@ -27,6 +27,7 @@ os.environ.setdefault(
     "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
 )
 os.environ.setdefault("BSS_PORTAL_EMAIL_ADAPTER", "noop")
+os.environ.setdefault("BSS_PORTAL_EMAIL_PROVIDER", "noop")  # v0.14 — both names handled
 os.environ.setdefault("BSS_PORTAL_DEV_INSECURE_COOKIE", "1")
 
 from bss_clock.clock import reset_for_tests as _reset_clock  # noqa: E402

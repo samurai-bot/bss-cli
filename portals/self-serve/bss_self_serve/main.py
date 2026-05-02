@@ -18,7 +18,9 @@ Per V0_4_0.md §8 / V0_8_0.md §2.2:
       engine reading ``BSS_DB_URL``. The session middleware and security
       deps both pull the factory off ``app.state``.
     * ``app.state.email_adapter`` — selected via
-      ``BSS_PORTAL_EMAIL_ADAPTER`` env (logging | noop | smtp-stub).
+      ``BSS_PORTAL_EMAIL_PROVIDER`` env (logging | noop | resend | smtp-stub).
+      ``BSS_PORTAL_EMAIL_ADAPTER`` (old name) is read as a deprecated
+      fallback until v0.16.
     * ``PortalSessionMiddleware`` is mounted on the FastAPI app so it
       runs on every request before route resolution.
 """
@@ -35,6 +37,7 @@ from bss_portal_auth import (
     select_adapter,
     validate_pepper_present,
 )
+from bss_portal_auth.email import resolve_provider_name
 from bss_portal_ui import STATIC_DIR as SHARED_STATIC_DIR
 from bss_telemetry import configure_telemetry
 from fastapi import FastAPI
@@ -67,6 +70,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Optional: if BSS_DB_URL is unset (e.g. unit-test app construction
     # without a DB), middleware fails open (logs once and passes through).
     portal_auth_settings = PortalAuthSettings()
+    # v0.14 — webhook route reads BSS_PORTAL_EMAIL_RESEND_WEBHOOK_SECRET
+    # off this; not loading per-request (env reads are doctrine-prohibited).
+    app.state.portal_auth_settings = portal_auth_settings
     if settings.bss_db_url:
         engine = create_async_engine(settings.bss_db_url, pool_size=5, max_overflow=5)
         app.state.db_engine = engine
@@ -78,12 +84,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         app.state.db_session_factory = None
         log.warning("portal.db_url.missing")
 
-    # v0.8 — email adapter selection. LoggingEmailAdapter writes to a
+    # v0.14 — email adapter selection. LoggingEmailAdapter writes to a
     # file the operator can `tail -f`; NoopEmailAdapter is for tests;
-    # 'smtp' raises at construction (reserved for v1.0).
+    # ResendEmailAdapter is the v0.14 production adapter; 'smtp' raises
+    # at construction (reserved post-v0.16).
+    #
+    # v0.14 renamed BSS_PORTAL_EMAIL_ADAPTER → BSS_PORTAL_EMAIL_PROVIDER.
+    # `resolve_provider_name` accepts either, warns on the old name,
+    # and is removed when the alias is dropped in v0.16.
+    provider_name = resolve_provider_name(
+        provider=portal_auth_settings.BSS_PORTAL_EMAIL_PROVIDER,
+        legacy_adapter=portal_auth_settings.BSS_PORTAL_EMAIL_ADAPTER,
+    )
     app.state.email_adapter = select_adapter(
-        portal_auth_settings.BSS_PORTAL_EMAIL_ADAPTER,
+        provider_name,
         portal_auth_settings.BSS_PORTAL_DEV_MAILBOX_PATH,
+        resend_api_key=portal_auth_settings.BSS_PORTAL_EMAIL_RESEND_API_KEY,
+        from_address=portal_auth_settings.BSS_PORTAL_EMAIL_FROM,
     )
 
     app.state.session_store = SessionStore(
@@ -102,7 +119,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     log.info(
         "portal.starting",
         service=settings.service_name,
-        email_adapter=portal_auth_settings.BSS_PORTAL_EMAIL_ADAPTER,
+        email_provider=provider_name,
         db_url_set=bool(settings.bss_db_url),
     )
     yield
@@ -165,6 +182,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session_api,
         signup,
         top_up,
+        webhooks,
         welcome,
     )
 
@@ -188,6 +206,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(plan_change.router)
     # v0.12 — chat surface, the only orchestrator-mediated route.
     app.include_router(chat.router)
+    # v0.14 — inbound provider webhooks (Resend; v0.15 adds Didit).
+    # Exempt from BSSApiTokenMiddleware via WEBHOOK_EXEMPT_PATHS;
+    # signature verification happens inside the route handler.
+    app.include_router(webhooks.router)
 
     return app
 
