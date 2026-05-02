@@ -21,6 +21,8 @@ Doctrine reminders:
 
 from __future__ import annotations
 
+from urllib.parse import urlencode
+
 import structlog
 from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -146,8 +148,12 @@ async def login_submit(
                 status_code=429,
             )
 
+    # URL-encode the query string. f-string interpolation would put a
+    # raw '+' in the URL, which the next route's Query(...) decodes as
+    # a space (urlencoded-form convention) — breaks Gmail '+addressing'.
+    qs = urlencode({"email": email, "next": next_path})
     return RedirectResponse(
-        url=f"/auth/check-email?email={email}&next={next_path}",
+        url=f"/auth/check-email?{qs}",
         status_code=303,
     )
 
