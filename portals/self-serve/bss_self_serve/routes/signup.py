@@ -431,20 +431,30 @@ async def signup_step_kyc_poll(
     # Already advanced — emit redirect.
     if sig.step in ("pending_cof", "pending_order", "completed"):
         resp = HTMLResponse(content="")
-        resp.headers["HX-Redirect"] = f"/signup/progress?session={session}"
+        resp.headers["HX-Redirect"] = f"/signup/{sig.plan}/progress?session={session}"
         return resp
 
     # Failed (cap, timeout, etc.) — bounce.
     if sig.step == "failed":
         resp = HTMLResponse(content="")
-        resp.headers["HX-Redirect"] = f"/signup/progress?session={session}"
+        resp.headers["HX-Redirect"] = f"/signup/{sig.plan}/progress?session={session}"
         return resp
 
     provider_session_id = getattr(sig, "kyc_provider_session_id", None) or ""
     if not provider_session_id:
-        resp = HTMLResponse(content="")
-        resp.headers["HX-Redirect"] = f"/signup/progress?session={session}"
-        return resp
+        # Customer hit poll without going through initiate first — return
+        # an idle "still waiting" fragment instead of redirecting (the
+        # initiate POST will populate kyc_provider_session_id and the
+        # next poll tick will pick it up).
+        return HTMLResponse(
+            content=(
+                '<div id="kyc-poll" hx-get="/signup/step/kyc/poll'
+                f'?session={session}" hx-trigger="every 3s" '
+                'hx-swap="outerHTML">'
+                '<p class="form-hint">Initializing verification…</p>'
+                '</div>'
+            )
+        )
 
     # Check corroboration row directly (no full poll loop here — the
     # HTMX `hx-trigger=every 3s` is the loop).
@@ -488,7 +498,7 @@ async def signup_step_kyc_poll(
         kyc_session=type("_KycSession", (), {"session_id": provider_session_id})(),
     )
     resp = HTMLResponse(content="")
-    resp.headers["HX-Redirect"] = f"/signup/progress?session={session}"
+    resp.headers["HX-Redirect"] = f"/signup/{sig.plan}/progress?session={session}"
     return resp
 
 
@@ -541,7 +551,7 @@ async def _complete_kyc_attest(
         await store.update(sig)
         if redirect_after:
             return RedirectResponse(
-                url=f"/signup/progress?session={sig.session_id}",
+                url=f"/signup/{sig.plan}/progress?session={sig.session_id}",
                 status_code=303,
             )
         return _render_step_fragment(request, sig)
@@ -578,7 +588,7 @@ async def _complete_kyc_attest(
         await store.update(sig)
         if redirect_after:
             return RedirectResponse(
-                url=f"/signup/progress?session={sig.session_id}",
+                url=f"/signup/{sig.plan}/progress?session={sig.session_id}",
                 status_code=303,
             )
         return _render_step_fragment(request, sig)
@@ -596,7 +606,7 @@ async def _complete_kyc_attest(
     await store.update(sig)
     if redirect_after:
         return RedirectResponse(
-            url=f"/signup/progress?session={sig.session_id}",
+            url=f"/signup/{sig.plan}/progress?session={sig.session_id}",
             status_code=303,
         )
     return _render_step_fragment(request, sig)

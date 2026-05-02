@@ -34,7 +34,7 @@
   {# HTMX poll — every 3s, the desktop checks for the corroborating
      verified-webhook row in integrations.kyc_webhook_corroboration.
      When it lands, the poll endpoint completes the BSS attest and
-     returns HX-Redirect to /signup/progress. The customer's phone (in
+     returns HX-Redirect to /signup/{plan}/progress. The customer's phone (in
      the cross-device case) lands on /signup/step/kyc/callback, which
      just renders a "you may return to your computer" confirmation —
      it does NOT advance the signup. The webhook is the trust anchor;
