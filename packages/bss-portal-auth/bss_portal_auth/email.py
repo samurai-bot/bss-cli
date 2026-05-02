@@ -37,6 +37,143 @@ from bss_clock import now as clock_now
 log = structlog.get_logger(__name__)
 
 
+# ── HTML email template (matches the self-serve portal's vibe) ─────────
+#
+# Dark phosphor-green theme matching ``bss-portal-ui/portal_base.css``.
+# Inline styles only — gmail/outlook/apple-mail strip <style> blocks.
+# Table-based outer layout because email clients still distrust flexbox.
+# Web-safe font stack with monospace fallback for the OTP block.
+#
+# The template is intentionally small: a header brand line, a heading,
+# one paragraph, an OTP block, an optional CTA button, and a footnote.
+# No images, no remote resources — keeps it compact and avoids
+# tracking-pixel paranoia from receiving servers.
+
+_EMAIL_BG = "#0e1014"          # body bg (matches --bg)
+_EMAIL_CARD = "#171a20"        # card bg (--bg-elev)
+_EMAIL_INSET = "#1f232b"       # OTP block bg (--bg-inset)
+_EMAIL_FG = "#d8d8d4"          # primary text (--fg)
+_EMAIL_MUTED = "#8a8f99"       # muted text (--fg-muted)
+_EMAIL_DIM = "#5a5e66"         # dim text (--fg-dim)
+_EMAIL_ACCENT = "#74d535"      # phosphor green (--accent)
+_EMAIL_ACCENT_DIM = "#4d8a22"  # accent-dim
+_EMAIL_BORDER = "#2a2e38"      # border
+
+_FONT_SANS = (
+    "-apple-system, BlinkMacSystemFont, 'Segoe UI', "
+    "Helvetica, Arial, sans-serif"
+)
+_FONT_MONO = (
+    "ui-monospace, 'SF Mono', 'JetBrains Mono', "
+    "Menlo, Consolas, 'Liberation Mono', monospace"
+)
+
+
+def _render_email(
+    *,
+    preheader: str,
+    heading: str,
+    intro: str,
+    otp: str,
+    cta_label: str | None,
+    cta_url: str | None,
+    footnote: str,
+) -> str:
+    """Build a self-serve-portal-vibed transactional HTML email.
+
+    The ``preheader`` is the hidden snippet some clients show in the
+    inbox preview. Keep it short and informative — most clients
+    truncate at ~90 chars.
+
+    ``intro`` may contain inline ``<strong>`` for emphasis on action
+    labels (step-up flow); other HTML is not sanitized — callers
+    construct the string from controlled inputs.
+
+    ``cta_label`` + ``cta_url`` are paired — pass both or neither.
+    Step-up emails skip the CTA (OTP-only) because there's no neutral
+    page to land on.
+    """
+    cta_html = ""
+    if cta_label and cta_url:
+        cta_html = (
+            f'<tr><td align="center" style="padding: 8px 0 24px 0;">'
+            f'<a href="{cta_url}" '
+            f'style="display:inline-block;'
+            f'background:{_EMAIL_ACCENT};color:#0e1014;'
+            f'font-family:{_FONT_SANS};font-weight:600;font-size:14px;'
+            f'text-decoration:none;padding:11px 24px;border-radius:6px;'
+            f'border:1px solid {_EMAIL_ACCENT_DIM};">{cta_label}</a>'
+            f'</td></tr>'
+        )
+
+    return (
+        '<!doctype html>\n'
+        '<html><head>'
+        '<meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<meta name="color-scheme" content="dark">'
+        '<meta name="supported-color-schemes" content="dark light">'
+        f'<title>{heading}</title>'
+        '</head>'
+        f'<body style="margin:0;padding:0;background:{_EMAIL_BG};'
+        f'color:{_EMAIL_FG};font-family:{_FONT_SANS};">'
+        # Hidden preheader for inbox preview.
+        f'<div style="display:none;max-height:0;overflow:hidden;'
+        f'opacity:0;color:transparent;">{preheader}</div>'
+        '<table role="presentation" width="100%" cellspacing="0" '
+        f'cellpadding="0" border="0" style="background:{_EMAIL_BG};">'
+        '<tr><td align="center" style="padding: 32px 16px;">'
+        # Card.
+        '<table role="presentation" width="100%" cellspacing="0" '
+        f'cellpadding="0" border="0" '
+        f'style="max-width:480px;background:{_EMAIL_CARD};'
+        f'border:1px solid {_EMAIL_BORDER};border-radius:8px;'
+        f'overflow:hidden;">'
+        # Header.
+        f'<tr><td style="padding:18px 24px;border-bottom:1px solid '
+        f'{_EMAIL_BORDER};font-family:{_FONT_MONO};font-size:13px;">'
+        f'<span style="color:{_EMAIL_ACCENT};font-weight:700;">▶</span>'
+        f'<span style="color:{_EMAIL_FG};font-weight:600;'
+        ' margin-left:8px;">bss-cli</span>'
+        f'<span style="color:{_EMAIL_MUTED};margin-left:8px;">'
+        ' / self-serve portal</span>'
+        '</td></tr>'
+        # Body.
+        f'<tr><td style="padding:28px 24px 12px 24px;">'
+        f'<h1 style="margin:0 0 12px 0;font-size:20px;line-height:1.3;'
+        f'color:{_EMAIL_FG};font-weight:600;">{heading}</h1>'
+        f'<p style="margin:0 0 20px 0;font-size:15px;line-height:1.5;'
+        f'color:{_EMAIL_FG};">{intro}</p>'
+        '</td></tr>'
+        # OTP block.
+        '<tr><td align="center" style="padding: 0 24px 16px 24px;">'
+        f'<div style="display:inline-block;background:{_EMAIL_INSET};'
+        f'border:1px solid {_EMAIL_BORDER};border-radius:6px;'
+        f'padding:14px 22px;font-family:{_FONT_MONO};'
+        f'font-size:26px;letter-spacing:6px;font-weight:600;'
+        f'color:{_EMAIL_ACCENT};">{otp}</div>'
+        '</td></tr>'
+        + cta_html +
+        # Footnote.
+        f'<tr><td style="padding: 12px 24px 24px 24px;">'
+        f'<p style="margin:0;font-family:{_FONT_SANS};font-size:12px;'
+        f'line-height:1.5;color:{_EMAIL_MUTED};">{footnote}</p>'
+        '</td></tr>'
+        '</table>'
+        # Outer footer.
+        f'<table role="presentation" width="100%" cellspacing="0" '
+        f'cellpadding="0" border="0" style="max-width:480px;'
+        f'margin-top:16px;">'
+        f'<tr><td align="center" style="font-family:{_FONT_MONO};'
+        f'font-size:11px;color:{_EMAIL_DIM};">'
+        '— sent by BSS-CLI · transactional only —'
+        '</td></tr>'
+        '</table>'
+        '</td></tr></table>'
+        '</body></html>'
+    )
+
+
 class EmailAdapter(Protocol):
     """Three-method delivery surface used by the auth flows."""
 
@@ -211,39 +348,54 @@ class ResendEmailAdapter:
     # ── public API (sync) ────────────────────────────────────────────
 
     def send_login(self, email: str, otp: str, magic_link: str) -> None:
-        body_html = (
-            f"<p>Your login code: <strong>{otp}</strong></p>"
-            f"<p>Or click: <a href=\"{magic_link}\">sign in</a></p>"
-            f"<p>Code expires in 15 minutes.</p>"
+        body_html = _render_email(
+            preheader=f"Your login code: {otp}. Expires in 15 minutes.",
+            heading="Sign in to BSS-CLI",
+            intro="Use the code below or click the button to sign in.",
+            otp=otp,
+            cta_label="Sign in",
+            cta_url=magic_link,
+            footnote="Code expires in 15 minutes. If you didn't request this, you can ignore this email.",
         )
         body_text = (
+            f"BSS-CLI — sign in\n"
+            f"\n"
             f"OTP: {otp}\n"
-            f"Magic link: {magic_link}\n\n"
-            f"Code expires in 15 minutes."
+            f"Magic link: {magic_link}\n"
+            f"\n"
+            f"Code expires in 15 minutes.\n"
+            f"If you didn't request this, you can ignore this email."
         )
         self._send(
             operation="send_login",
             to=email,
-            subject="Your bss-cli portal login code",
+            subject="Your BSS-CLI sign-in code",
             html=body_html,
             text=body_text,
         )
 
     def send_step_up(self, email: str, otp: str, action_label: str) -> None:
-        body_html = (
-            f"<p>Action: <strong>{action_label}</strong></p>"
-            f"<p>Confirmation code: <strong>{otp}</strong></p>"
-            f"<p>Code expires in 5 minutes.</p>"
+        body_html = _render_email(
+            preheader=f"Confirm: {action_label}. Code: {otp}. Expires in 5 minutes.",
+            heading="Confirm a sensitive action",
+            intro=f"Enter this code to confirm <strong>{action_label}</strong>.",
+            otp=otp,
+            cta_label=None,
+            cta_url=None,
+            footnote="Code expires in 5 minutes. If you didn't initiate this action, ignore this email and consider rotating your password.",
         )
         body_text = (
-            f"Action: {action_label}\n"
-            f"OTP: {otp}\n\n"
-            f"Code expires in 5 minutes."
+            f"BSS-CLI — confirm: {action_label}\n"
+            f"\n"
+            f"OTP: {otp}\n"
+            f"\n"
+            f"Code expires in 5 minutes.\n"
+            f"If you didn't initiate this action, ignore this email."
         )
         self._send(
             operation="send_step_up",
             to=email,
-            subject=f"Confirm action: {action_label}",
+            subject=f"Confirm: {action_label}",
             html=body_html,
             text=body_text,
         )
@@ -251,19 +403,27 @@ class ResendEmailAdapter:
     def send_email_change_verification(
         self, new_email: str, otp: str, magic_link: str
     ) -> None:
-        body_html = (
-            f"<p>Confirm your new email by entering this code: "
-            f"<strong>{otp}</strong></p>"
-            f"<p>Or click: <a href=\"{magic_link}\">verify</a></p>"
+        body_html = _render_email(
+            preheader=f"Verify your new email. Code: {otp}.",
+            heading="Verify your new email",
+            intro="Enter this code or click the button to confirm this email address for your BSS-CLI account.",
+            otp=otp,
+            cta_label="Verify email",
+            cta_url=magic_link,
+            footnote="If you didn't request an email change, ignore this email and your account stays unchanged.",
         )
         body_text = (
+            f"BSS-CLI — verify your new email\n"
+            f"\n"
             f"OTP: {otp}\n"
-            f"Magic link: {magic_link}"
+            f"Magic link: {magic_link}\n"
+            f"\n"
+            f"If you didn't request an email change, ignore this email."
         )
         self._send(
             operation="send_email_change",
             to=new_email,
-            subject="Verify your new email for bss-cli",
+            subject="Verify your new email for BSS-CLI",
             html=body_html,
             text=body_text,
         )
