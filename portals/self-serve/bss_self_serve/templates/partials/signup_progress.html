@@ -31,7 +31,10 @@
   ('pending_activation', 'place order'),
   ('completed',          'activate eSIM'),
 ] %}
-{% set step_order = ['pending_customer','pending_kyc','pending_cof','pending_order','pending_activation','completed'] %}
+{# v0.15: ``pending_kyc_handoff`` is a sub-state of "attest KYC" — the
+   timeline still highlights the same step. Treated as equivalent to
+   ``pending_kyc`` in the step_order index lookup below. #}
+{% set step_order = ['pending_customer','pending_kyc','pending_kyc_handoff','pending_cof','pending_order','pending_activation','completed'] %}
 {% set current_idx = step_order.index(signup.step) if signup.step in step_order else 0 %}
 {# Default the trigger flag to True so the progress page (which
    doesn't pass it explicitly) keeps auto-advancing the chain. The
@@ -71,6 +74,23 @@
     <div class="progress-note">
       {% if signup.step == 'pending_kyc' %}
         Customer record created. Recording KYC attestation…
+      {% elif signup.step == 'pending_kyc_handoff' %}
+        <strong>Verify your identity to continue.</strong>
+        Verify on this device, or scan the QR with your phone — whichever has a camera.
+        {% if signup.kyc_verify_qr %}
+          <div class="kyc-handoff-inline" style="margin: 12px 0; display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap;">
+            <img src="{{ signup.kyc_verify_qr }}" alt="Scan to continue on your phone" style="width: 180px; height: 180px;" />
+            <div style="min-width: 240px;">
+              <p style="margin: 0 0 8px;"><strong>Continue on this device:</strong></p>
+              <p style="margin: 0 0 8px;">
+                <a href="{{ signup.kyc_verify_url }}" target="_blank" rel="noopener">Open verification flow</a>
+              </p>
+              <p style="margin: 0; font-size: 0.85em; opacity: 0.8;">
+                Waiting for verification… leave this page open.
+              </p>
+            </div>
+          </div>
+        {% endif %}
       {% elif signup.step == 'pending_cof' %}
         KYC verified. Adding your card on file…
       {% elif signup.step == 'pending_order' %}
@@ -91,6 +111,16 @@
   {% if signup.step == 'pending_kyc' %}
     <div hx-post="/signup/step/kyc?session={{ session_id }}"
          hx-trigger="load"
+         hx-target="#signup-progress"
+         hx-swap="outerHTML"
+         class="progress-trigger" hidden></div>
+  {% elif signup.step == 'pending_kyc_handoff' %}
+    {# v0.15 — poll the corroboration row every 3s. The poll endpoint
+       returns this same fragment until decision_status='Approved',
+       at which point it advances to pending_cof and re-renders the
+       fragment with the next step's trigger. #}
+    <div hx-get="/signup/step/kyc/poll?session={{ session_id }}"
+         hx-trigger="load delay:3s"
          hx-target="#signup-progress"
          hx-swap="outerHTML"
          class="progress-trigger" hidden></div>

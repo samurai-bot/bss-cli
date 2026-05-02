@@ -388,24 +388,20 @@ async def signup_step_kyc(
             kyc_session=kyc_session,
         )
 
-    # Real provider (Didit) — render a handoff page with QR code +
-    # clickable link + HTMX poll. Customer can verify on same device
-    # OR scan to phone; either way the corroboration webhook arrival
-    # is what advances the signup, NOT the post-verification redirect.
-    sig.kyc_provider_session_id = kyc_session.session_id
-    await store.update(sig)
-
+    # Real provider (Didit) — set state to pending_kyc_handoff and
+    # let the progress fragment render the URL + QR + poll inside the
+    # progress card (so the timeline + plan heading stay visible).
+    # The customer can verify on same device OR scan to phone; either
+    # way the corroboration webhook arrival is what advances the
+    # signup, NOT the post-verification redirect.
     from ..qrpng import qr_data_uri
 
-    return templates.TemplateResponse(
-        request,
-        "signup_kyc_handoff.html",
-        {
-            "session_id": session,
-            "verify_url": kyc_session.redirect_url,
-            "verify_qr": qr_data_uri(kyc_session.redirect_url),
-        },
-    )
+    sig.kyc_provider_session_id = kyc_session.session_id
+    sig.kyc_verify_url = kyc_session.redirect_url
+    sig.kyc_verify_qr = qr_data_uri(kyc_session.redirect_url)
+    sig.step = "pending_kyc_handoff"
+    await store.update(sig)
+    return _render_step_fragment(request, sig)
 
 
 # ── GET /signup/step/kyc/poll — desktop poll for corroboration row ──────
@@ -428,36 +424,17 @@ async def signup_step_kyc_poll(
     adapter = request.app.state.kyc_adapter
     sig = await _resolve(store, session, identity)
 
-    # Already advanced — emit redirect.
-    if sig.step in ("pending_cof", "pending_order", "completed"):
-        resp = HTMLResponse(content="")
-        resp.headers["HX-Redirect"] = f"/signup/{sig.plan}/progress?session={session}"
-        return resp
-
-    # Failed (cap, timeout, etc.) — bounce.
-    if sig.step == "failed":
-        resp = HTMLResponse(content="")
-        resp.headers["HX-Redirect"] = f"/signup/{sig.plan}/progress?session={session}"
-        return resp
+    # Already advanced or failed — render the current state fragment.
+    # The fragment's natural trigger advances the chain from there.
+    if sig.step != "pending_kyc_handoff":
+        return _render_step_fragment(request, sig)
 
     provider_session_id = getattr(sig, "kyc_provider_session_id", None) or ""
     if not provider_session_id:
-        # Customer hit poll without going through initiate first — return
-        # an idle "still waiting" fragment instead of redirecting (the
-        # initiate POST will populate kyc_provider_session_id and the
-        # next poll tick will pick it up).
-        return HTMLResponse(
-            content=(
-                '<div id="kyc-poll" hx-get="/signup/step/kyc/poll'
-                f'?session={session}" hx-trigger="every 3s" '
-                'hx-swap="outerHTML">'
-                '<p class="form-hint">Initializing verification…</p>'
-                '</div>'
-            )
-        )
+        # Initiate hasn't populated yet; render the same fragment so the
+        # poll re-arms.
+        return _render_step_fragment(request, sig)
 
-    # Check corroboration row directly (no full poll loop here — the
-    # HTMX `hx-trigger=every 3s` is the loop).
     from sqlalchemy import select
 
     from bss_models.integrations import KycWebhookCorroboration
@@ -480,42 +457,22 @@ async def signup_step_kyc_poll(
     # Declined / Expired). The corroboration row is updated in place by
     # the webhook handler. Only act on a TERMINAL status.
     if row is None or row.decision_status in ("Not Started", "In Progress", "In Review"):
-        # Still waiting. Re-arm the poll.
-        return HTMLResponse(
-            content=(
-                '<div id="kyc-poll" hx-get="/signup/step/kyc/poll'
-                f'?session={session}" hx-trigger="every 3s" '
-                'hx-swap="outerHTML">'
-                '<p class="form-hint">Waiting for verification… '
-                'leave this page open.</p>'
-                '</div>'
-            )
-        )
+        return _render_step_fragment(request, sig)
 
     if row.decision_status in ("Declined", "Expired"):
-        # Customer failed liveness or doc check — fail the signup step.
         sig.step = "failed"
         sig.step_error = f"kyc.{row.decision_status.lower()}"
         await store.update(sig)
-        resp = HTMLResponse(content="")
-        resp.headers["HX-Redirect"] = f"/signup/{sig.plan}/progress?session={session}"
-        return resp
+        return _render_step_fragment(request, sig)
 
     if row.decision_status != "Approved":
         # Unknown terminal status — keep waiting (forward-compat).
-        return HTMLResponse(
-            content=(
-                '<div id="kyc-poll" hx-get="/signup/step/kyc/poll'
-                f'?session={session}" hx-trigger="every 3s" '
-                'hx-swap="outerHTML">'
-                '<p class="form-hint">Waiting for verification… '
-                'leave this page open.</p>'
-                '</div>'
-            )
-        )
+        return _render_step_fragment(request, sig)
 
-    # Approved — complete the BSS attest, then redirect.
-    await _complete_kyc_attest(
+    # Approved — complete the BSS attest. The completion advances state
+    # to pending_cof and renders the next fragment, with its own
+    # built-in trigger that fires the next step.
+    return await _complete_kyc_attest(
         request=request,
         store=store,
         factory=factory,
@@ -523,9 +480,6 @@ async def signup_step_kyc_poll(
         sig=sig,
         kyc_session=type("_KycSession", (), {"session_id": provider_session_id})(),
     )
-    resp = HTMLResponse(content="")
-    resp.headers["HX-Redirect"] = f"/signup/{sig.plan}/progress?session={session}"
-    return resp
 
 
 # ── GET /signup/step/kyc/callback — return path from hosted UI ──────────

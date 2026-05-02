@@ -37,6 +37,7 @@ from typing import Any, Literal
 SignupStep = Literal[
     "pending_customer",     # before POST /signup runs customer.create
     "pending_kyc",          # CUST-id known; next call is customer.attest_kyc
+    "pending_kyc_handoff",  # v0.15 — Didit hosted UI active; polling for the corroborating webhook
     "pending_cof",          # KYC done; next call is payment.add_card
     "pending_order",        # COF added; next call is com.create_order + submit
     "pending_activation",   # order placed; polling com.get_order until completed
@@ -98,6 +99,11 @@ class SignupSession:
     # at /signup/step/kyc/callback can fetch the attestation without
     # trusting query string.
     kyc_provider_session_id: str | None = None
+    # v0.15 — the Didit hosted-UI URL (and matching QR data URI) shown
+    # to the customer during pending_kyc_handoff. Populated by
+    # POST /signup/step/kyc and read by the progress fragment.
+    kyc_verify_url: str | None = None
+    kyc_verify_qr: str | None = None
 
     # v0.11 — historical shape preserved (the confirmation page renders
     # ``event_log`` if it's non-empty for back-compat with v0.10 git tag
