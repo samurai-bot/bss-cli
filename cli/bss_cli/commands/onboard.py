@@ -28,7 +28,9 @@ Doctrine reminders:
 from __future__ import annotations
 
 import os
+import shutil
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Final
 
@@ -51,6 +53,16 @@ DOMAIN_KYC: Final[str] = "kyc"          # v0.15+
 DOMAIN_PAYMENT: Final[str] = "payment"  # v0.16+
 
 ALL_DOMAINS_V014: Final[tuple[str, ...]] = (DOMAIN_EMAIL,)
+ALL_DOMAINS_V015: Final[tuple[str, ...]] = (DOMAIN_EMAIL, DOMAIN_KYC)
+
+# How many wizard-written .env.backup-* files to keep. Hand-named
+# backups (no -HHMMSS suffix) are NOT matched and never touched.
+BACKUP_RETENTION_COUNT: Final[int] = 5
+BACKUP_FILENAME_GLOB: Final[str] = ".env.backup-????-??-??-??????"
+
+DIDIT_DEFAULT_JWKS_URL: Final[str] = (
+    "https://verification.didit.me/.well-known/jwks.json"
+)
 
 
 @app.callback()
@@ -92,10 +104,7 @@ def onboard_callback(
         if d == DOMAIN_EMAIL:
             _configure_email(env)
         elif d == DOMAIN_KYC:
-            rprint(
-                "[yellow]KYC is configurable starting in v0.15. "
-                "Re-run `bss onboard --domain kyc` after that release.[/]"
-            )
+            _configure_kyc(env)
         elif d == DOMAIN_PAYMENT:
             rprint(
                 "[yellow]Payment is configurable starting in v0.16. "
@@ -105,11 +114,17 @@ def onboard_callback(
             rprint(f"[red]Unknown domain: {d!r}[/]")
             raise typer.Exit(code=2)
 
-    write_env_file(target, env)
+    backup_path = write_env_file(target, env)
     rprint(
         f"\n[green]Wrote {target}.[/] "
         "Restart services with: docker compose down && docker compose up -d"
     )
+    if backup_path is not None:
+        rprint(
+            f"[dim]Previous .env backed up to {backup_path}. "
+            f"Keeps the last {BACKUP_RETENTION_COUNT} wizard backups; "
+            "older are pruned. Hand-named backups are never touched.[/]"
+        )
 
 
 # ── per-domain prompts ──────────────────────────────────────────────
@@ -181,6 +196,132 @@ def _configure_email(env: dict[str, str]) -> None:
         rprint("  [green]✓[/] Probe send accepted by Resend.")
 
 
+def _configure_kyc(env: dict[str, str]) -> None:
+    """Didit (v0.15) prompts. Mode 1 = test (prebaked); mode 2 = production
+    (Didit). The Didit path optionally probes by creating a real sandbox
+    session and printing the redirect URL — the operator opens it manually
+    to verify end-to-end. The webhook + JWS verification round runs at
+    `make scenarios-hero --tag didit-sandbox` post-onboard, not here."""
+    current = env.get("BSS_PORTAL_KYC_PROVIDER", "")
+    rprint(f"  Current provider: [cyan]{current or '(unset; defaults to prebaked)'}[/]")
+    mode = Prompt.ask(
+        "  Mode",
+        choices=["test", "production"],
+        default="production" if current == "didit" else "test",
+    )
+
+    if mode == "test":
+        env["BSS_PORTAL_KYC_PROVIDER"] = "prebaked"
+        # Drop stale Didit creds. Same foot-gun reasoning as email mode.
+        env.pop("BSS_PORTAL_KYC_DIDIT_API_KEY", None)
+        env.pop("BSS_PORTAL_KYC_DIDIT_WORKFLOW_ID", None)
+        env.pop("BSS_PORTAL_KYC_DIDIT_WEBHOOK_SECRET", None)
+        rprint(
+            "  [green]✓[/] Mode set to [cyan]prebaked[/] — "
+            "deterministic per-customer attestation, no external calls."
+        )
+        return
+
+    # production = Didit
+    env["BSS_PORTAL_KYC_PROVIDER"] = "didit"
+
+    api_key = Prompt.ask(
+        "  Didit API key",
+        default=env.get("BSS_PORTAL_KYC_DIDIT_API_KEY", ""),
+        password=True,
+    )
+    if not api_key:
+        rprint("  [red]API key is required. Aborting.[/]")
+        raise typer.Exit(code=2)
+    env["BSS_PORTAL_KYC_DIDIT_API_KEY"] = api_key
+
+    workflow_id = Prompt.ask(
+        "  Didit workflow ID (raw UUID, e.g. 7411e1f2-119d-4eee-9b8c-6e759933c2b8)",
+        default=env.get("BSS_PORTAL_KYC_DIDIT_WORKFLOW_ID", ""),
+    )
+    # Light validation: must look like a UUID (8-4-4-4-12 hex with dashes).
+    import re
+
+    if not re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", workflow_id):
+        rprint(
+            "  [red]Workflow ID must be a raw UUID (8-4-4-4-12 hex). "
+            "Didit's dashboard returns it without a 'wf_' prefix.[/]"
+        )
+        raise typer.Exit(code=2)
+    env["BSS_PORTAL_KYC_DIDIT_WORKFLOW_ID"] = workflow_id
+
+    webhook_secret = Prompt.ask(
+        "  Didit webhook secret",
+        default=env.get("BSS_PORTAL_KYC_DIDIT_WEBHOOK_SECRET", ""),
+        password=True,
+    )
+    if not webhook_secret:
+        rprint(
+            "  [red]Webhook secret is required — it's the trust anchor "
+            "for v0.15 KYC (HMAC verifies inbound webhooks, which write "
+            "the corroboration row the BSS policy reads).[/]"
+        )
+        raise typer.Exit(code=2)
+    env["BSS_PORTAL_KYC_DIDIT_WEBHOOK_SECRET"] = webhook_secret
+
+    if Confirm.ask(
+        "  Probe Didit by creating a real sandbox session?", default=True
+    ):
+        ok = _probe_didit_session(
+            api_key=api_key, workflow_id=workflow_id
+        )
+        if not ok:
+            rprint(
+                "  [red]Probe failed. Review the error above and re-run "
+                "`bss onboard --domain kyc`.[/]"
+            )
+            raise typer.Exit(code=2)
+        rprint(
+            "  [green]✓[/] Didit accepted the sandbox session. The redirect "
+            "URL was printed above — open it to validate end-to-end. "
+            "BSS-side webhook + corroboration round runs separately."
+        )
+
+
+def _probe_didit_session(*, api_key: str, workflow_id: str) -> bool:
+    """Try a single Didit POST /v2/session/. Return ``True`` on success."""
+    try:
+        import httpx
+    except ImportError:
+        rprint("  [red]The `httpx` package isn't installed. Run `uv sync`.[/]")
+        return False
+
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            resp = client.post(
+                "https://verification.didit.me/v2/session/",
+                headers={
+                    "x-api-key": api_key,
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "workflow_id": workflow_id,
+                    "vendor_data": "bss-cli-onboard-probe",
+                },
+            )
+            if resp.status_code != 201:
+                rprint(
+                    f"  [red]Didit returned {resp.status_code}: {resp.text}[/]"
+                )
+                return False
+            body = resp.json()
+    except Exception as exc:  # noqa: BLE001
+        rprint(f"  [red]Didit probe failed: {exc}[/]")
+        return False
+
+    rprint(
+        f"    Didit accepted: session_id=[cyan]{body.get('session_id')}[/]\n"
+        f"    Open this URL to walk the hosted UI:\n"
+        f"    [cyan]{body.get('url')}[/]"
+    )
+    return True
+
+
 def _probe_resend(*, api_key: str, from_addr: str, recipient: str) -> bool:
     """Try a single Resend send. Return ``True`` on success."""
     try:
@@ -238,17 +379,32 @@ def read_env_file(path: Path) -> dict[str, str]:
     return env
 
 
-def write_env_file(path: Path, env: dict[str, str]) -> None:
+def write_env_file(path: Path, env: dict[str, str]) -> Path | None:
     """Write ``env`` back atomically, preserving comments + ordering of
     keys that already existed; new keys are appended at the end.
+
+    v0.15 — before the atomic rename, copy the existing ``.env`` to a
+    timestamped ``.env.backup-YYYY-MM-DD-HHMMSS`` (using ``shutil.copy2``
+    to preserve mtime + permissions). After the write, prune backups
+    matching ``.env.backup-????-??-??-??????`` to the most recent
+    ``BACKUP_RETENTION_COUNT``. Hand-named backups (no ``-HHMMSS``
+    suffix) are NOT matched and never touched. Returns the backup path
+    (or ``None`` if the original file did not exist).
 
     Contract: ``env`` is the COMPLETE post-state. Keys present in the
     existing file but absent from ``env`` are removed (the wizard
     explicitly pops stale credentials when switching modes; preserving
     them silently would leave a foot-gun).
     """
+    backup_path: Path | None = None
     if path.exists():
         existing_lines = path.read_text(encoding="utf-8").splitlines()
+        # v0.15 belt-and-suspenders: timestamped backup before rename.
+        # ``os.replace`` is atomic against process crashes; the backup
+        # is the recourse against logic bugs in this function.
+        timestamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")  # noqa: bss-clock
+        backup_path = path.parent / f"{path.name}.backup-{timestamp}"
+        shutil.copy2(path, backup_path)
     else:
         existing_lines = []
 
@@ -281,6 +437,34 @@ def write_env_file(path: Path, env: dict[str, str]) -> None:
     tmp.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
     os.replace(tmp, path)
 
+    # Prune older wizard-written backups to the retention count.
+    if backup_path is not None:
+        _prune_old_backups(path.parent)
+
+    return backup_path
+
+
+def _prune_old_backups(directory: Path) -> None:
+    """Keep only the ``BACKUP_RETENTION_COUNT`` most recent
+    ``.env.backup-YYYY-MM-DD-HHMMSS`` files; older ones are deleted.
+
+    The glob is timestamp-shaped so hand-named backups
+    (e.g. ``.env.backup-2026-05-02`` without ``-HHMMSS``) are never
+    matched and never deleted.
+    """
+    backups = sorted(
+        directory.glob(BACKUP_FILENAME_GLOB),
+        key=lambda p: p.name,
+        reverse=True,
+    )
+    for stale in backups[BACKUP_RETENTION_COUNT:]:
+        try:
+            stale.unlink()
+        except OSError:
+            # Permissions, race, etc. — non-fatal; the next wizard run
+            # will retry the prune.
+            pass
+
 
 def _quote_if_needed(value: str) -> str:
     """Wrap value in double quotes if it contains spaces or special chars.
@@ -302,7 +486,7 @@ def _quote_if_needed(value: str) -> str:
 
 def _domains_to_configure(domain: str | None) -> tuple[str, ...]:
     if domain is None:
-        return ALL_DOMAINS_V014
+        return ALL_DOMAINS_V015
     d = domain.lower()
     if d in (DOMAIN_EMAIL, DOMAIN_KYC, DOMAIN_PAYMENT):
         return (d,)
@@ -319,4 +503,7 @@ __all__ = [
     "app",
     "read_env_file",
     "write_env_file",
+    "_prune_old_backups",
+    "BACKUP_RETENTION_COUNT",
+    "BACKUP_FILENAME_GLOB",
 ]

@@ -135,6 +135,112 @@ def test_unknown_domain_aborts():
     assert result.exit_code == 2
 
 
+# ── v0.15: backup safeguard + kyc domain ──────────────────────────────
+
+
+def test_write_env_returns_none_when_no_existing_file(tmp_path):
+    f = tmp_path / ".env"
+    backup = write_env_file(f, {"FOO": "bar"})
+    assert backup is None
+
+
+def test_write_env_creates_timestamped_backup_before_rename(tmp_path):
+    f = tmp_path / ".env"
+    f.write_text("OLD=value\n")
+    backup = write_env_file(f, {"OLD": "newvalue", "NEW": "x"})
+    assert backup is not None
+    assert backup.exists()
+    assert backup.name.startswith(".env.backup-")
+    # Naming pattern: .env.backup-YYYY-MM-DD-HHMMSS
+    import re
+    suffix = backup.name.removeprefix(".env.backup-")
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}-\d{6}", suffix), suffix
+    # Backup carries the OLD value, the live .env carries the new.
+    assert "OLD=value" in backup.read_text()
+    assert "OLD=newvalue" in f.read_text()
+
+
+def test_prune_keeps_last_5_wizard_backups(tmp_path):
+    from bss_cli.commands.onboard import (
+        BACKUP_RETENTION_COUNT,
+        _prune_old_backups,
+    )
+
+    # Seed 7 timestamped backups + a hand-named one (no -HHMMSS suffix).
+    timestamps = [
+        "2026-04-01-100000",
+        "2026-04-01-110000",
+        "2026-04-02-100000",
+        "2026-04-03-100000",
+        "2026-04-04-100000",
+        "2026-04-05-100000",
+        "2026-04-06-100000",
+    ]
+    for ts in timestamps:
+        (tmp_path / f".env.backup-{ts}").write_text(f"# {ts}\n")
+    handnamed = tmp_path / ".env.backup-2026-05-02"
+    handnamed.write_text("# hand-edited\n")
+
+    _prune_old_backups(tmp_path)
+
+    surviving = sorted(p.name for p in tmp_path.glob(".env.backup-*"))
+    # Hand-named always survives.
+    assert ".env.backup-2026-05-02" in surviving
+    # Last 5 timestamped survive (the ones with greatest sort order).
+    expected_kept_ts = sorted(timestamps, reverse=True)[:BACKUP_RETENTION_COUNT]
+    for ts in expected_kept_ts:
+        assert f".env.backup-{ts}" in surviving
+    # Older timestamped pruned.
+    expected_dropped_ts = sorted(timestamps, reverse=True)[BACKUP_RETENTION_COUNT:]
+    for ts in expected_dropped_ts:
+        assert f".env.backup-{ts}" not in surviving
+
+
+def test_kyc_test_mode_drops_didit_creds(tmp_path):
+    from typer.testing import CliRunner
+
+    from bss_cli.commands.onboard import app
+
+    f = tmp_path / ".env"
+    f.write_text(
+        "BSS_PORTAL_KYC_PROVIDER=didit\n"
+        "BSS_PORTAL_KYC_DIDIT_API_KEY=k_test_old\n"
+        "BSS_PORTAL_KYC_DIDIT_WORKFLOW_ID=00000000-0000-0000-0000-000000000000\n"
+        "BSS_PORTAL_KYC_DIDIT_WEBHOOK_SECRET=secret_old\n"
+    )
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["--domain", "kyc", "--env-path", str(f)],
+        input="test\n",
+    )
+    assert result.exit_code == 0, result.output
+    env = read_env_file(f)
+    assert env["BSS_PORTAL_KYC_PROVIDER"] == "prebaked"
+    # Stale Didit creds removed.
+    assert "BSS_PORTAL_KYC_DIDIT_API_KEY" not in env
+    assert "BSS_PORTAL_KYC_DIDIT_WORKFLOW_ID" not in env
+    assert "BSS_PORTAL_KYC_DIDIT_WEBHOOK_SECRET" not in env
+
+
+def test_kyc_production_mode_rejects_non_uuid_workflow(tmp_path):
+    from typer.testing import CliRunner
+
+    from bss_cli.commands.onboard import app
+
+    f = tmp_path / ".env"
+    runner = CliRunner()
+    # Mode=production, then api key, then bad workflow id.
+    result = runner.invoke(
+        app,
+        ["--domain", "kyc", "--env-path", str(f)],
+        input="production\nk_test_xxx\nwf_not_a_uuid\n",
+    )
+    # Should reject the workflow id format and exit 2.
+    assert result.exit_code == 2, result.output
+    assert "Workflow ID must be a raw UUID" in result.output
+
+
 def test_email_test_mode_drops_resend_creds(tmp_path, monkeypatch):
     """If operator switches from production back to test mode, stale
     Resend creds must be removed (otherwise a mode-mix is possible)."""

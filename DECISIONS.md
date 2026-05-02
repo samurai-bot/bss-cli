@@ -2197,3 +2197,217 @@ only (sync adapter Protocol doesn't have an async session in scope).
 v0.15+ async adapters will tighten this to "every external call
 emits external_ref-enriched audit event AND a row in
 integrations.external_call."
+
+## 2026-05-02 — v0.15.0 Didit free-tier cap: hard-block, no silent fallback
+
+**Context:** Didit's free tier caps verification sessions at 500/month.
+A natural temptation when the cap hits is to fall back to the
+prebaked adapter so signups don't queue up — a helpful-feeling
+behavior that quietly degrades the trust posture for some unknown
+fraction of new customers.
+
+**Decision:** On cap exhaustion, `DiditKycAdapter.initiate` raises
+`KycCapExhausted`; the portal renders a templated "verification
+temporarily unavailable, please try again later" page; ops gets a
+high-priority `kyc.cap_exhausted` event. No fallback to prebaked,
+ever. The cap counter reads from
+`integrations.external_call WHERE provider='didit' AND operation='initiate'`
+windowed by `date_trunc('month', now())`. Approach warning at 90 %
+(`kyc.cap_warning` event); hard block at 100 %.
+
+**Alternatives:**
+- Silent fallback to prebaked. Rejected — a "best-effort prebaked
+  attestation because Didit ran out of calls" is an attestation the
+  regulator will not honor. Onboarding 50 customers with no real
+  verification to avoid 50 retry messages is the wrong trade.
+- Soft block (queue and retry next month). Rejected — the customer
+  experience of "your signup is paused for up to 4 weeks" is worse
+  than "please try again in a few minutes."
+- Auto-upgrade to a paid plan once cap hits. Rejected for v0.15;
+  the paid-plan upgrade flow involves real money and is deferred
+  to a later release. Operator-driven plan upgrade via Didit
+  dashboard is the v0.15 mitigation.
+
+**Consequences:** When the cap is approached (≥ 450), ops gets a
+warning to either upgrade the plan or accept that signups will
+break later in the month. When the cap hits, customer-facing
+signup is blocked but graceful (templated message); no silent
+trust degradation; audit log shows precisely which signups were
+turned away. The 500/month is generous for a small MVNO's first
+year — by the time it's binding, an upgrade or a self-hosted
+alternative is the right move.
+
+## 2026-05-02 — v0.15.0 KYC trust anchor is the HMAC webhook, not a JWS
+
+**Context:** The earlier draft of `phases/V0_15_0.md` assumed Didit
+returns a JWS-signed decision body that BSS could verify against
+Didit's JWKS. Track 2 was designed around `_jwks_cache.py` and a
+`check_attestation_signature` that read the JWS from
+`attestation_payload`. A 2026-05-02 sandbox probe showed Didit's
+`GET /v2/session/{id}/decision/` returns plain JSON over TLS — no
+`jws`, `jwt`, or `signature` field anywhere. The "verify on the BSS
+side" doctrine had nothing to verify against.
+
+**Decision:** Trust anchor is the **HMAC-signed webhook delivery**.
+The portal verifies the signature at `/webhooks/didit` (using the
+`didit_hmac` scheme already shipped in v0.14's `bss-webhooks`
+package) and writes a row to a new
+`integrations.kyc_webhook_corroboration` table keyed by the Didit
+`session_id`. The CRM `check_attestation_signature` policy looks up
+that row when verifying a `provider="didit"` attestation; no row,
+or stale (>30 min), or `decision_status != 'Approved'` → reject
+with `rule=kyc.attestation.uncorroborated`. No JWS, no JWKS, no
+`_jwks_cache.py`. The `BSS_PORTAL_KYC_DIDIT_JWKS_URL` env var is
+removed from the spec.
+
+**Alternatives:**
+- Keep the JWS-shaped doctrine and validate against an empty
+  `signature` field. Rejected — pretends to verify when it
+  isn't, which is worse than a clear "no JWS, use webhook"
+  decision.
+- Make the BSS server call Didit's API itself to re-fetch the
+  decision. Rejected — same TLS-only call from a different
+  server is no more authenticated than the portal's call; a
+  network-level MITM (or a malicious proxy in the DC) defeats
+  both. The HMAC webhook is the only signed-by-Didit channel.
+- Wait for Didit to ship signed payloads and ship v0.15 with a
+  stub. Rejected — the corroboration model is correct
+  regardless of whether a future Didit tier ships JWS, and
+  delaying v0.15 for an unknown roadmap item helps no one.
+
+**Consequences:**
+- Implementation simpler (no JWKS caching, no key rotation, no
+  `kid`-aware refresh).
+- Adds 10s of polling latency at the portal callback step
+  (`fetch_attestation` blocks on the corroboration row). Webhook
+  typically lands <1s after the customer's redirect; 10s timeout
+  is generous.
+- Shifts trust to the webhook path's HMAC secret. Compromise of
+  `BSS_PORTAL_KYC_DIDIT_WEBHOOK_SECRET` lets an attacker mint
+  attestations — same operational risk profile as the
+  Resend/Stripe webhook secrets, mitigated by the same rotation
+  procedure (`docs/runbooks/provider-key-rotation.md`).
+- A future provider that *does* ship JWS-signed bodies can add a
+  parallel verification path; the corroboration model
+  generalizes to "the BSS-side check verifies the signed channel
+  the provider actually has," not "everyone must do JWS."
+
+## 2026-05-02 — v0.15.0 KYC PII reduction: last4 + hash, drop everything else
+
+**Context:** A 2026-05-02 sandbox probe confirmed Didit's decision
+response carries the full raw NRIC (`S8369796B`), full name, address,
+DOB, place of birth, place-of-issue, marital status, and presigned
+S3 URLs of both the document images and the selfie video — 24KB of
+plaintext PII per verification. The earlier doctrine ("hash the
+document number inside the adapter") covered only one field; the
+others would silently flow into the BSS if not explicitly stopped.
+
+**Decision:** The `KycAttestation` dataclass that crosses the BSS
+boundary carries:
+- `provider`, `provider_reference` (Didit session_id, used for
+  webhook corroboration lookup)
+- `document_type`, `document_country`
+- `document_number_last4` (PDPA-aligned partial display, e.g.
+  `796B` — Singapore PDPC's standard masking pattern; the last 4
+  characters of the normalized document number)
+- `document_number_hash` (SHA-256, domain-separated:
+  `sha256(number | country | provider).hexdigest()` — domain
+  separation prevents cross-provider/country collision)
+- `date_of_birth` (required for age verification on signup)
+- `corroboration_id` (FK into
+  `integrations.kyc_webhook_corroboration`)
+
+What's deliberately NOT carried, and dropped inside
+`DiditKycAdapter._build_attestation` before return:
+- raw `document_number`, `personal_number`
+- `first_name`, `last_name`, `full_name`
+- `address`, `formatted_address`, `parsed_address`,
+  `place_of_birth`, `nationality`
+- `front_image`, `back_image`, `portrait_image`,
+  `front_video`, `back_video`, `reference_image`,
+  `video_url`
+- `mrz`, `extra_fields`
+- liveness `score`, `age_estimation`, `face_match_score`
+
+**Alternatives:**
+- Hash everything (full name → name_hash, address →
+  address_hash). Rejected — the BSS doesn't need to look up by
+  name or address; the hash columns would be write-only ballast.
+  Customer-identifying details on the BSS side stay in
+  `crm.customer` from the customer's own signup form, not from
+  the verification provider.
+- Store the raw payload in `integrations.external_call.redacted_payload`
+  with provider-side redaction. Rejected — the `bss_webhooks.redaction`
+  layer applies post-receipt; by the time it runs, the data has
+  already crossed into BSS code paths. The cleaner posture is "raw
+  never crosses, full stop."
+- Keep last4 only, no hash. Rejected — uniqueness checks
+  (`customer.attest_kyc.document_hash_unique_per_tenant`) need a
+  hash; last4 alone has too many collisions.
+
+**Consequences:**
+- Ops loses the "look up by name" affordance on the BSS side. To
+  trace a verification, query the Didit dashboard by
+  `provider_reference` (session_id); BSS only confirms that the
+  customer who entered the verification flow is the same
+  customer the BSS knows by `customer_id` and that the
+  attestation is fresh.
+- Dispute resolution reduces to "Didit says yes/no for this
+  session_id" + "BSS confirms the customer record was created by
+  the holder of the verified identity at the moment of
+  verification." Sufficient for IMDA-shaped MVNO compliance;
+  insufficient for a court subpoena that asks "what was on the
+  document?" — that path goes through Didit, not BSS.
+- The doctrine guard is greppable
+  (`rg '\b(first_name|address|...)\b' services/crm/...`) and
+  caught in `make doctrine-check`. Adding an oversight by mistake
+  trips CI.
+
+## 2026-05-02 — v0.15.0 eSIM provider seam ships even though no real provider does
+
+**Context:** v0.15 locks in the `EsimProviderAdapter` Protocol with
+a `SimEsimProvider` (only working impl) plus stub classes for
+`OneGlobalEsimProvider` and `EsimAccessEsimProvider`. The two real
+providers ship only when their respective NDAs and reseller
+agreements are in place — possibly v0.16, possibly later. A
+reasonable counter-argument: don't ship a Protocol with only one
+implementation; introduce the seam when the second impl arrives.
+
+**Decision:** Ship the Protocol now, with the stubs that raise
+`NotImplementedError` on first call. Operators can set
+`BSS_ESIM_PROVIDER=onbglobal` (or `=esim_access`) in advance of
+the integration and the service boots; only when the worker
+actually dispatches an `ESIM_PROFILE_PREPARE` task does the stub
+raise.
+
+**Alternatives:**
+- Don't ship the seam in v0.15; introduce when the real provider
+  lands. Rejected — the seam-introduction PR would touch
+  `worker.py`, the call sites, and the env config simultaneously
+  with the new HTTP-call code. Decoupling reduces review surface
+  and eliminates "did the seam break behavior?" from "did the new
+  HTTP-call code break behavior?".
+- Ship the seam with only `SimEsimProvider`, no stubs. Rejected
+  — operators couldn't set the env var in advance; they'd have to
+  edit code or wait for a separate release. The stub pattern
+  matches the v0.14 email adapter doctrine
+  (`select_adapter("smtp")` reserves the name without shipping
+  the impl).
+- Ship the seam with the env var as a runtime switch only (no
+  stub objects). Rejected — `select_esim_provider` would have to
+  reach for the runtime check at every dispatch, slow and
+  fragile.
+
+**Consequences:**
+- v0.13 hero scenarios pass three runs unchanged with
+  `BSS_ESIM_PROVIDER=sim` (verified). The seam is behavior-neutral
+  for the active provider.
+- The "fail-on-first-use" cliff for `=onbglobal` / `=esim_access`
+  is the one place v0.14's "fail-fast at startup on missing
+  creds" doctrine cedes to "fail-on-first-use." Spec line 122
+  documents the affordance; the stub message points at v0.16+ so
+  the operator who set the env var prematurely gets a clear
+  remediation path.
+- v0.16 (or whenever the real provider lands) is a config swap +
+  HTTP-call impl + redaction tests. The structural change ships
+  in v0.15.
