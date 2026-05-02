@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Identity verification · bss-cli{% endblock %}
+
+{% block main %}
+<section class="signup-step">
+  <h2>Identity verification</h2>
+  <p>
+    Verify your identity to continue. You can verify on this device, or
+    scan the QR code below to finish on your phone — whichever has a
+    camera.
+  </p>
+
+  <div class="kyc-handoff">
+    <div class="kyc-handoff-qr">
+      <img src="{{ verify_qr }}" alt="Scan to continue on your phone" />
+    </div>
+    <div class="kyc-handoff-actions">
+      <p><strong>Continue on this device:</strong></p>
+      <p>
+        <a class="btn btn-primary" href="{{ verify_url }}" target="_blank" rel="noopener">
+          Open verification flow
+        </a>
+      </p>
+      <p class="form-hint">
+        Or copy the link:
+        <code id="kyc-url" style="word-break:break-all">{{ verify_url }}</code>
+        <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('kyc-url').innerText)">
+          Copy
+        </button>
+      </p>
+    </div>
+  </div>
+
+  {# HTMX poll — every 3s, the desktop checks for the corroborating
+     verified-webhook row in integrations.kyc_webhook_corroboration.
+     When it lands, the poll endpoint completes the BSS attest and
+     returns HX-Redirect to /signup/progress. The customer's phone (in
+     the cross-device case) lands on /signup/step/kyc/callback, which
+     just renders a "you may return to your computer" confirmation —
+     it does NOT advance the signup. The webhook is the trust anchor;
+     the post-verification redirect is just UX. #}
+  <div id="kyc-poll"
+       hx-get="/signup/step/kyc/poll?session={{ session_id }}"
+       hx-trigger="every 3s"
+       hx-swap="outerHTML">
+    <p class="form-hint">Waiting for verification… leave this page open.</p>
+  </div>
+</section>
+{% endblock %}

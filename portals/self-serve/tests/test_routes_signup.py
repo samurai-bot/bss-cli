@@ -14,7 +14,7 @@ from __future__ import annotations
 from urllib.parse import parse_qs, urlparse
 
 
-def test_signup_form_renders_plan_details_and_kyc_badge(authed_client):  # type: ignore[no-untyped-def]
+def test_signup_form_renders_plan_details_without_misleading_kyc_badge(authed_client):  # type: ignore[no-untyped-def]
     resp = authed_client.get("/signup/PLAN_M?msisdn=90000042")
     assert resp.status_code == 200
     body = resp.text
@@ -23,9 +23,11 @@ def test_signup_form_renders_plan_details_and_kyc_badge(authed_client):  # type:
     # Chosen MSISDN threads through the form
     assert "90000042" in body
     assert "+65 9000 0042" in body  # display-formatted
-    # Pre-baked KYC attestation — no file upload
-    assert "KYC-PREBAKED-001" in body
-    assert "Myinfo" in body
+    # v0.15: the misleading "✓ Identity verified via Myinfo (simulated)"
+    # badge has been removed from the order form. KYC happens AFTER form
+    # submit at /signup/step/kyc, not before.
+    assert "KYC-PREBAKED-001" not in body
+    assert "Identity verified via Myinfo" not in body
     # Mock tokenizer test card is the default
     assert "4242424242424242" in body
 

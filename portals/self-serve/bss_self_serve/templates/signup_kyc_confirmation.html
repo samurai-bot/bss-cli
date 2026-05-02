@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Verification complete · bss-cli{% endblock %}
+
+{% block main %}
+<section class="signup-step">
+  <h2>✓ Verification complete</h2>
+  <p>
+    Your identity verification has been received. You can close this
+    page.
+  </p>
+  <p class="form-hint">
+    If you started signup on a different device (e.g. desktop), return
+    to that device — your signup is continuing automatically.
+  </p>
+  <p class="form-hint">
+    If you completed verification on this device, return to the
+    <a href="/signup/progress?session={{ session_id }}">signup page</a>.
+    (You'll need your portal session cookie — if you lost it, just log
+    back in and your in-progress signup will resume.)
+  </p>
+</section>
+{% endblock %}

@@ -348,9 +348,12 @@ async def signup_step_kyc(
     """v0.15 — flow through ``app.state.kyc_adapter``.
 
     Prebaked mode runs the full attest synchronously (same end state as
-    v0.14, just routed through the adapter). Didit mode returns an HTMX
-    redirect to the Didit hosted UI; the customer returns via
-    ``GET /signup/step/kyc/callback`` to complete the attest.
+    v0.14, just routed through the adapter). Didit mode renders a
+    cross-device handoff page (URL + QR code) with HTMX polling — the
+    customer can complete verification on the same device or scan to
+    finish on a phone, and the desktop advances the moment the
+    corroboration webhook arrives. No HX-Redirect; both devices stay
+    on their own page.
     """
     store = request.app.state.session_store
     factory = request.app.state.db_session_factory
@@ -385,57 +388,128 @@ async def signup_step_kyc(
             kyc_session=kyc_session,
         )
 
-    # Didit (or any other real provider) — redirect customer to the hosted UI.
-    response = HTMLResponse(
-        content=(
-            f'<p>Redirecting to identity verification… '
-            f'<a href="{kyc_session.redirect_url}">click here if not redirected</a>.</p>'
-        )
-    )
-    # Stash the provider session id on our signup session so the callback
-    # can locate it without trusting query string.
+    # Real provider (Didit) — render a handoff page with QR code +
+    # clickable link + HTMX poll. Customer can verify on same device
+    # OR scan to phone; either way the corroboration webhook arrival
+    # is what advances the signup, NOT the post-verification redirect.
     sig.kyc_provider_session_id = kyc_session.session_id
     await store.update(sig)
-    response.headers["HX-Redirect"] = kyc_session.redirect_url
-    return response
+
+    from ..qrpng import qr_data_uri
+
+    return templates.TemplateResponse(
+        request,
+        "signup_kyc_handoff.html",
+        {
+            "session_id": session,
+            "verify_url": kyc_session.redirect_url,
+            "verify_qr": qr_data_uri(kyc_session.redirect_url),
+        },
+    )
 
 
-# ── GET /signup/step/kyc/callback — return path from Didit hosted UI ────
+# ── GET /signup/step/kyc/poll — desktop poll for corroboration row ──────
 
 
-@router.get("/signup/step/kyc/callback", response_class=HTMLResponse)
-async def signup_step_kyc_callback(
+@router.get("/signup/step/kyc/poll", response_class=HTMLResponse)
+async def signup_step_kyc_poll(
     request: Request,
     session: str = Query(...),
     identity: IdentityView = Depends(requires_verified_email),
 ) -> HTMLResponse:
+    """Desktop polls every 3s during the cross-device KYC handoff. When
+    the corroboration row appears (HMAC-verified webhook landed), this
+    endpoint completes the attest call and returns ``HX-Redirect`` to
+    the signup progress page. Until then it returns a small "still
+    waiting" fragment that re-arms the poll.
+    """
     store = request.app.state.session_store
     factory = request.app.state.db_session_factory
     adapter = request.app.state.kyc_adapter
     sig = await _resolve(store, session, identity)
 
-    # If already advanced, idempotent ack.
+    # Already advanced — emit redirect.
     if sig.step in ("pending_cof", "pending_order", "completed"):
-        return RedirectResponse(url=f"/signup/progress?session={session}", status_code=303)
-    if sig.step != "pending_kyc":
-        return _render_step_fragment(request, sig)
+        resp = HTMLResponse(content="")
+        resp.headers["HX-Redirect"] = f"/signup/progress?session={session}"
+        return resp
+
+    # Failed (cap, timeout, etc.) — bounce.
+    if sig.step == "failed":
+        resp = HTMLResponse(content="")
+        resp.headers["HX-Redirect"] = f"/signup/progress?session={session}"
+        return resp
 
     provider_session_id = getattr(sig, "kyc_provider_session_id", None) or ""
     if not provider_session_id:
-        # Either the customer hit the callback directly (without going through
-        # initiate) or the session was reset. Bounce them back to the KYC step.
-        return RedirectResponse(
-            url=f"/signup/progress?session={session}", status_code=303
+        resp = HTMLResponse(content="")
+        resp.headers["HX-Redirect"] = f"/signup/progress?session={session}"
+        return resp
+
+    # Check corroboration row directly (no full poll loop here — the
+    # HTMX `hx-trigger=every 3s` is the loop).
+    from sqlalchemy import select
+
+    from bss_models.integrations import KycWebhookCorroboration
+
+    factory_inner = request.app.state.db_session_factory
+    async with factory_inner() as db:
+        row = (
+            await db.execute(
+                select(KycWebhookCorroboration).where(
+                    KycWebhookCorroboration.provider == "didit",
+                    KycWebhookCorroboration.provider_session_id
+                    == provider_session_id,
+                )
+            )
+        ).scalar_one_or_none()
+
+    if row is None:
+        # Still waiting. Return the same fragment HTMX swaps in; it
+        # re-arms via hx-trigger="every 3s" + hx-swap="outerHTML".
+        return HTMLResponse(
+            content=(
+                '<div id="kyc-poll" hx-get="/signup/step/kyc/poll'
+                f'?session={session}" hx-trigger="every 3s" '
+                'hx-swap="outerHTML">'
+                '<p class="form-hint">Waiting for verification… '
+                'leave this page open.</p>'
+                '</div>'
+            )
         )
 
-    return await _complete_kyc_attest(
+    # Corroboration arrived — complete the attest, then redirect.
+    await _complete_kyc_attest(
         request=request,
         store=store,
         factory=factory,
         adapter=adapter,
         sig=sig,
         kyc_session=type("_KycSession", (), {"session_id": provider_session_id})(),
-        redirect_after=True,
+    )
+    resp = HTMLResponse(content="")
+    resp.headers["HX-Redirect"] = f"/signup/progress?session={session}"
+    return resp
+
+
+# ── GET /signup/step/kyc/callback — return path from hosted UI ──────────
+
+
+@router.get("/signup/step/kyc/callback", response_class=HTMLResponse)
+async def signup_step_kyc_callback(
+    request: Request,
+    session: str = Query(...),
+) -> HTMLResponse:
+    """Public route — the customer's browser lands here after Didit's
+    hosted UI completes. In the cross-device case the customer's PHONE
+    arrives here without the desktop's portal session cookie, so this
+    route MUST NOT require auth. It just renders a "verification
+    complete, return to your computer" confirmation. The desktop's
+    poll loop is what actually advances the signup; this page is
+    purely a friendly UX endpoint for the verifying device.
+    """
+    return templates.TemplateResponse(
+        request, "signup_kyc_confirmation.html", {"session_id": session}
     )
 
 
