@@ -52,6 +52,15 @@ def _make_app(token: str = TEST_TOKEN) -> FastAPI:
         # Note: NOT in EXEMPT_PATHS — must require token.
         return {"ok": True}
 
+    @app.post("/webhooks/resend")
+    async def webhook_resend():
+        # v0.14: webhooks/* exempt from BSS token; provider-signed.
+        return {"received": True}
+
+    @app.post("/webhooks/stripe")
+    async def webhook_stripe():
+        return {"received": True}
+
     return app
 
 
@@ -98,6 +107,23 @@ async def test_root_with_correct_token_returns_200(client: AsyncClient) -> None:
 async def test_healthz_not_exempt(client: AsyncClient) -> None:
     """Only the literal three paths in EXEMPT_PATHS bypass auth."""
     r = await client.get("/healthz")
+    assert r.status_code == 401
+
+
+async def test_webhooks_resend_exempt_no_token(client: AsyncClient) -> None:
+    """v0.14: /webhooks/* exempt from BSS token (provider-signed instead)."""
+    r = await client.post("/webhooks/resend")
+    assert r.status_code == 200
+
+
+async def test_webhooks_stripe_exempt_no_token(client: AsyncClient) -> None:
+    r = await client.post("/webhooks/stripe")
+    assert r.status_code == 200
+
+
+async def test_webhooks_path_must_have_provider_segment(client: AsyncClient) -> None:
+    """``/webhooks`` (no trailing slash) is NOT exempt — must be /webhooks/<provider>."""
+    r = await client.post("/webhooks")
     assert r.status_code == 401
 
 

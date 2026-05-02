@@ -18,6 +18,7 @@ members = [
     "bss-portal-ui",
     "bss-seed",
     "bss-telemetry",
+    "bss-webhooks",
     "catalog",
     "com",
     "crm",
@@ -614,6 +615,39 @@ requires-dist = [
     { name = "opentelemetry-instrumentation-httpx", specifier = "==0.60b0" },
     { name = "opentelemetry-sdk", specifier = "==1.39.0" },
     { name = "pydantic-settings", specifier = ">=2.0" },
+    { name = "structlog", specifier = ">=24.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=0.23" },
+]
+
+[[package]]
+name = "bss-webhooks"
+version = "0.1.0"
+source = { editable = "packages/bss-webhooks" }
+dependencies = [
+    { name = "asyncpg" },
+    { name = "bss-clock" },
+    { name = "bss-models" },
+    { name = "sqlalchemy" },
+    { name = "structlog" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "asyncpg", specifier = ">=0.29" },
+    { name = "bss-clock", editable = "packages/bss-clock" },
+    { name = "bss-models", editable = "packages/bss-models" },
+    { name = "sqlalchemy", specifier = ">=2.0" },
     { name = "structlog", specifier = ">=24.0" },
 ]
 
