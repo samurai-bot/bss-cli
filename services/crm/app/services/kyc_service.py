@@ -49,41 +49,73 @@ class KycService:
         provider: str,
         provider_reference: str,
         document_type: str,
-        document_number: str,
+        document_number: str | None = None,
+        document_number_last4: str | None = None,
+        document_number_hash: str | None = None,
         document_country: str,
         date_of_birth: str,
         nationality: str | None = None,
         verified_at: str,
         attestation_payload: dict,
+        corroboration_id: str | None = None,
     ) -> dict:
         ctx = auth_context.current()
 
+        # --- Reduce raw → last4 + hash if needed ---
+        # The Didit path supplies pre-reduced fields (raw never crosses
+        # the BSS boundary). The legacy/prebaked path supplies raw
+        # ``document_number`` and the service reduces it here. This is
+        # the LAST place a raw document number is allowed to exist.
+        if document_number_last4 is None or document_number_hash is None:
+            if document_number is None:
+                from app.policies.base import PolicyViolation
+
+                raise PolicyViolation(
+                    rule="customer.attest_kyc.document_required",
+                    message=(
+                        "Either document_number (legacy) or "
+                        "(document_number_last4 + document_number_hash) "
+                        "must be supplied"
+                    ),
+                    context={"provider": provider},
+                )
+            normalized = document_number.upper().strip()
+            document_number_last4 = normalized[-4:] if len(normalized) >= 4 else normalized
+            document_number_hash = hashlib.sha256(
+                f"{normalized}|{document_country}|{provider}".encode()
+            ).hexdigest()
+        # From this point, raw document_number is dead. We do NOT pass it anywhere else.
+        document_number = None
+
         # --- Policies ---
         await kyc_policies.check_customer_exists(customer_id, self._customer_repo)
-        kyc_policies.check_attestation_signature(attestation_payload)
-
-        # Hash document number IMMEDIATELY — plaintext never stored or logged
-        document_number_hash = hashlib.sha256(document_number.encode()).hexdigest()
-        # From this point, document_number is dead. We do NOT pass it anywhere else.
-
+        await kyc_policies.check_attestation_signature(
+            provider=provider,
+            attestation_payload=attestation_payload,
+            corroboration_id=corroboration_id,
+            session=self._session,
+        )
         await kyc_policies.check_document_hash_unique(
             document_type, document_number_hash, self._kyc_repo
         )
 
         # --- Write ---
         from datetime import date as date_type
+        from uuid import UUID
 
         now = clock_now()
         identity = CustomerIdentity(
             customer_id=customer_id,
             document_type=document_type,
             document_number_hash=document_number_hash,
+            document_number_last4=document_number_last4,
             document_country=document_country,
             date_of_birth=date_type.fromisoformat(date_of_birth),
             nationality=nationality,
             verified_by=provider,
             attestation_payload=attestation_payload,
             verified_at=datetime.fromisoformat(verified_at),
+            corroboration_id=UUID(corroboration_id) if corroboration_id else None,
             tenant_id=ctx.tenant,
         )
         await self._kyc_repo.create(identity)

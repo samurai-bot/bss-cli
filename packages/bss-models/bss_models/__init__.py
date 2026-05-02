@@ -78,8 +78,8 @@ from .billing import BillingAccount, CustomerBill
 # Audit (3 tables — v0.12 added ChatUsage + ChatTranscript)
 from .audit import ChatTranscript, ChatUsage, DomainEvent
 
-# Integrations (2 tables) — v0.14
-from .integrations import ExternalCall, WebhookEvent
+# Integrations (3 tables) — v0.14 + v0.15
+from .integrations import ExternalCall, KycWebhookCorroboration, WebhookEvent
 
 # Portal Auth (4 tables) — v0.8
 from .portal_auth import (
@@ -150,9 +150,10 @@ __all__ = [
     "DomainEvent",
     "ChatUsage",
     "ChatTranscript",
-    # Integrations (v0.14)
+    # Integrations (v0.14 + v0.15)
     "ExternalCall",
     "WebhookEvent",
+    "KycWebhookCorroboration",
     # Portal Auth (v0.8 + v0.10 PortalAction + v0.10 EmailChangePending)
     "Identity",
     "LoginToken",

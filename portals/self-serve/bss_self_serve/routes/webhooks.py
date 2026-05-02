@@ -1,8 +1,12 @@
 """``/webhooks/*`` — inbound provider webhooks (v0.14+).
 
 v0.14 ships ``POST /webhooks/resend`` for Resend (Svix-signed) email
-delivery / bounce / complaint events. v0.15 will add
-``POST /webhooks/didit`` for KYC verification callbacks.
+delivery / bounce / complaint events. v0.15 adds ``POST /webhooks/didit``
+for KYC verification callbacks. The Didit webhook is the trust anchor
+for v0.15 KYC: HMAC-verified bodies write rows to
+``integrations.kyc_webhook_corroboration`` which the CRM
+``check_attestation_signature`` policy reads to authenticate the
+attestation forwarded by the portal's ``DiditKycAdapter.fetch_attestation``.
 
 Doctrine (per ``phases/V0_14_0.md`` §1.2 + §2.2):
 
@@ -38,6 +42,7 @@ log = structlog.get_logger(__name__)
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
 PROVIDER_RESEND = "resend"
+PROVIDER_DIDIT = "didit"
 
 # Resend events we explicitly map onto domain events. Unknown types
 # still persist (forensic + forward-compat) but emit no domain event.
@@ -190,6 +195,199 @@ async def webhook_resend(request: Request) -> Response:
     # emission into ``audit.domain_event`` (with the existing outbox
     # path picking it up for fan-out) lands when the email-event
     # consumers are wired in v0.15+ (suppression list, etc.).
+    return Response(
+        content='{"received":true}',
+        status_code=200,
+        media_type="application/json",
+    )
+
+
+# ── /webhooks/didit (v0.15) ─────────────────────────────────────────
+
+
+@router.post("/didit")
+async def webhook_didit(request: Request) -> Response:
+    """Receive Didit (HMAC-signed) verification webhook deliveries.
+
+    Trust anchor for v0.15 KYC: an HMAC-verified body writes a row to
+    ``integrations.kyc_webhook_corroboration`` keyed by Didit's
+    ``session_id``. The CRM policy ``check_attestation_signature`` reads
+    that row to authenticate any attestation tagged ``provider="didit"``.
+    """
+    import hashlib
+    import json as _json
+
+    body = await request.body()
+    settings = request.app.state.settings
+    secret = settings.bss_portal_kyc_didit_webhook_secret
+
+    if not secret:
+        log.warning(
+            "portal_auth.webhook.misconfigured",
+            provider=PROVIDER_DIDIT,
+            reason="webhook_secret_unset",
+        )
+        return Response(
+            content='{"code":"webhook_secret_unset"}',
+            status_code=401,
+            media_type="application/json",
+        )
+
+    headers = {k: v for k, v in request.headers.items()}
+
+    try:
+        verify_signature(
+            secret=secret,
+            body=body,
+            headers=headers,
+            scheme="didit_hmac",
+        )
+    except WebhookSignatureError as exc:
+        log.warning(
+            "portal_auth.webhook.signature_invalid",
+            provider=PROVIDER_DIDIT,
+            reason=exc.code,
+        )
+        return Response(
+            content=f'{{"code":"{exc.code}"}}',
+            status_code=401,
+            media_type="application/json",
+        )
+
+    try:
+        payload = _json.loads(body)
+    except _json.JSONDecodeError as exc:
+        log.warning(
+            "portal_auth.webhook.malformed_body",
+            provider=PROVIDER_DIDIT,
+            error=str(exc),
+        )
+        return Response(
+            content='{"code":"malformed_body"}',
+            status_code=400,
+            media_type="application/json",
+        )
+
+    # Didit's webhook body carries the verification session id at
+    # top-level. Treat the session id as the dedupe key — Didit may
+    # deliver multiple events (status.updated, data.updated) for the
+    # same session, but downstream corroboration only cares about the
+    # latest authenticated state.
+    session_id = (
+        payload.get("session_id")
+        or (payload.get("data") or {}).get("session_id")
+        or ""
+    )
+    event_type = payload.get("type") or payload.get("event") or "unknown"
+    decision_status = (
+        payload.get("status")
+        or (payload.get("data") or {}).get("status")
+        or ""
+    )
+
+    if not session_id:
+        log.warning(
+            "portal_auth.webhook.missing_session_id",
+            provider=PROVIDER_DIDIT,
+            event_type=event_type,
+        )
+        return Response(
+            content='{"code":"missing_session_id"}',
+            status_code=400,
+            media_type="application/json",
+        )
+
+    # Compose a stable event_id for the integrations.webhook_event PK.
+    # If Didit doesn't surface one, derive from session_id + event_type
+    # so retries dedupe naturally.
+    event_id = (
+        payload.get("id")
+        or headers.get("x-didit-event-id")
+        or f"{session_id}:{event_type}"
+    )
+
+    body_digest = hashlib.sha256(body).hexdigest()
+
+    session_factory = request.app.state.db_session_factory
+    if session_factory is None:
+        log.warning(
+            "portal_auth.webhook.no_db",
+            provider=PROVIDER_DIDIT,
+            event_id=event_id,
+            event_type=event_type,
+        )
+        return Response(
+            content='{"received":true,"persisted":false}',
+            status_code=200,
+            media_type="application/json",
+        )
+
+    from sqlalchemy import select
+    from sqlalchemy.exc import IntegrityError
+
+    from bss_models.integrations import KycWebhookCorroboration
+
+    store = WebhookEventStore()
+    async with session_factory() as session:
+        inserted = await store.persist(
+            session,
+            provider=PROVIDER_DIDIT,
+            event_id=event_id,
+            event_type=event_type,
+            body=payload,
+            signature_valid=True,
+        )
+        if inserted and decision_status:
+            existing = (
+                await session.execute(
+                    select(KycWebhookCorroboration).where(
+                        KycWebhookCorroboration.provider == PROVIDER_DIDIT,
+                        KycWebhookCorroboration.provider_session_id
+                        == session_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing is None:
+                row = KycWebhookCorroboration(
+                    provider=PROVIDER_DIDIT,
+                    provider_session_id=session_id,
+                    webhook_event_provider=PROVIDER_DIDIT,
+                    webhook_event_id=event_id,
+                    decision_status=decision_status,
+                    decision_body_digest=body_digest,
+                )
+                session.add(row)
+            else:
+                existing.decision_status = decision_status
+                existing.decision_body_digest = body_digest
+        try:
+            await session.commit()
+        except IntegrityError:
+            # Two concurrent webhook deliveries for the same session
+            # raced to insert. Both verified — the second is benign.
+            await session.rollback()
+
+    if not inserted:
+        log.info(
+            "portal_auth.webhook.duplicate",
+            provider=PROVIDER_DIDIT,
+            event_id=event_id,
+            event_type=event_type,
+        )
+        return Response(
+            content='{"received":true,"deduped":true}',
+            status_code=200,
+            media_type="application/json",
+        )
+
+    log.info(
+        "portal_auth.webhook.received",
+        provider=PROVIDER_DIDIT,
+        event_id=event_id,
+        event_type=event_type,
+        session_id=session_id,
+        decision_status=decision_status,
+    )
     return Response(
         content='{"received":true}',
         status_code=200,

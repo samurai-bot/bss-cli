@@ -92,6 +92,13 @@ class SignupSession:
     error: str | None = None
     done: bool = False
 
+    # v0.15 — when the portal-side KYC adapter is Didit, the customer
+    # leaves the portal to complete verification on Didit's hosted UI.
+    # We stash the provider's session id here so the callback handler
+    # at /signup/step/kyc/callback can fetch the attestation without
+    # trusting query string.
+    kyc_provider_session_id: str | None = None
+
     # v0.11 — historical shape preserved (the confirmation page renders
     # ``event_log`` if it's non-empty for back-compat with v0.10 git tag
     # replays). The direct-write chain does NOT populate this list; it

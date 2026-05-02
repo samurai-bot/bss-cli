@@ -229,11 +229,14 @@ class CRMClient(BSSClient):
         provider_reference: str | None = None,
         document_type: str = "nric",
         document_number: str | None = None,
+        document_number_last4: str | None = None,
+        document_number_hash: str | None = None,
         document_country: str = "SG",
         date_of_birth: str = "1990-01-01",
         nationality: str | None = "SG",
         verified_at: str | None = None,
         attestation_payload: dict[str, Any] | None = None,
+        corroboration_id: str | None = None,
     ) -> dict[str, Any]:
         """POST /crm-api/v1/customer/{id}/kyc-attestation.
 
@@ -260,11 +263,10 @@ class CRMClient(BSSClient):
                 digits = f"{abs(hash(customer_id)) % 10_000_000:07d}"
             document_number = f"S{digits}D"
 
-        body = {
+        body: dict[str, Any] = {
             "provider": provider,
             "provider_reference": provider_reference or f"{provider}-{attestation_token[-8:]}",
             "document_type": document_type,
-            "document_number": document_number,
             "document_country": document_country,
             "date_of_birth": date_of_birth,
             "nationality": nationality,
@@ -279,6 +281,18 @@ class CRMClient(BSSClient):
                 "signature": f"stub-sig-{attestation_token[-16:]}",
             },
         }
+        # v0.15 PII doctrine: pre-reduced last4 + hash form is preferred
+        # (Didit path); raw document_number is the legacy stub path used by
+        # prebaked + scenario callers. Both flow through the CRM API; the
+        # service prefers reduced if both are supplied.
+        if document_number is not None:
+            body["document_number"] = document_number
+        if document_number_last4 is not None:
+            body["document_number_last4"] = document_number_last4
+        if document_number_hash is not None:
+            body["document_number_hash"] = document_number_hash
+        if corroboration_id is not None:
+            body["corroboration_id"] = corroboration_id
         resp = await self._request(
             "POST",
             f"/crm-api/v1/customer/{customer_id}/kyc-attestation",

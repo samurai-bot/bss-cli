@@ -244,11 +244,28 @@ seed:
 define SCENARIOS_RUN
 	@$(ENV_SOURCE); \
 	prev=$$(grep -E '^BSS_PORTAL_EMAIL_PROVIDER=' .env | tail -1 | cut -d= -f2-); \
+	prev_kyc=$$(grep -E '^BSS_PORTAL_KYC_PROVIDER=' .env | tail -1 | cut -d= -f2-); \
+	had_allow_prebaked=$$(grep -cE '^BSS_KYC_ALLOW_PREBAKED=' .env); \
 	if [ "$$prev" != "logging" ] && [ "$$prev" != "noop" ]; then \
 		printf "▶ scenarios: flipping BSS_PORTAL_EMAIL_PROVIDER=%s → logging for portal container\n" "$$prev"; \
 		sed -i.bak 's|^BSS_PORTAL_EMAIL_PROVIDER=.*|BSS_PORTAL_EMAIL_PROVIDER=logging|' .env; \
-		docker compose up -d --force-recreate portal-self-serve >/dev/null 2>&1 || true; \
-		trap 'sed -i "s|^BSS_PORTAL_EMAIL_PROVIDER=.*|BSS_PORTAL_EMAIL_PROVIDER='"$$prev"'|" .env; rm -f .env.bak; docker compose up -d --force-recreate portal-self-serve >/dev/null 2>&1 || true; printf "▶ scenarios: restored BSS_PORTAL_EMAIL_PROVIDER=%s\n" "$$prev"' EXIT INT TERM; \
+		recreate_email=1; \
+	else \
+		recreate_email=0; \
+	fi; \
+	if [ -n "$$prev_kyc" ] && [ "$$prev_kyc" != "prebaked" ]; then \
+		printf "▶ scenarios: flipping BSS_PORTAL_KYC_PROVIDER=%s → prebaked for the run\n" "$$prev_kyc"; \
+		sed -i.bak2 's|^BSS_PORTAL_KYC_PROVIDER=.*|BSS_PORTAL_KYC_PROVIDER=prebaked|' .env; \
+		if [ $$had_allow_prebaked -eq 0 ]; then \
+			printf 'BSS_KYC_ALLOW_PREBAKED=true\n' >> .env; \
+		fi; \
+		recreate_kyc=1; \
+	else \
+		recreate_kyc=0; \
+	fi; \
+	if [ $$recreate_email -eq 1 ] || [ $$recreate_kyc -eq 1 ]; then \
+		docker compose up -d --force-recreate portal-self-serve crm >/dev/null 2>&1 || true; \
+		trap 'if [ '"$$recreate_email"' -eq 1 ]; then sed -i "s|^BSS_PORTAL_EMAIL_PROVIDER=.*|BSS_PORTAL_EMAIL_PROVIDER='"$$prev"'|" .env; rm -f .env.bak; printf "▶ scenarios: restored BSS_PORTAL_EMAIL_PROVIDER=%s\n" "'"$$prev"'"; fi; if [ '"$$recreate_kyc"' -eq 1 ]; then sed -i "s|^BSS_PORTAL_KYC_PROVIDER=.*|BSS_PORTAL_KYC_PROVIDER='"$$prev_kyc"'|" .env; rm -f .env.bak2; if [ '"$$had_allow_prebaked"' -eq 0 ]; then sed -i "/^BSS_KYC_ALLOW_PREBAKED=/d" .env; fi; printf "▶ scenarios: restored BSS_PORTAL_KYC_PROVIDER=%s\n" "'"$$prev_kyc"'"; fi; docker compose up -d --force-recreate portal-self-serve crm >/dev/null 2>&1 || true' EXIT INT TERM; \
 	fi; \
 	uv run bss scenario run-all scenarios $(1)
 endef

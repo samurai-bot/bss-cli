@@ -47,6 +47,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from .chat_session import ChatConversationStore, ChatTurnStore
 from .config import Settings
+from .kyc import select_kyc_adapter
 from .middleware import PortalSessionMiddleware
 from .security import install_redirect_handlers
 from .session import SessionStore
@@ -101,6 +102,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         portal_auth_settings.BSS_PORTAL_DEV_MAILBOX_PATH,
         resend_api_key=portal_auth_settings.BSS_PORTAL_EMAIL_RESEND_API_KEY,
         from_address=portal_auth_settings.BSS_PORTAL_EMAIL_FROM,
+    )
+
+    # v0.15 — KYC adapter selection. Prebaked is deterministic dev/scenario
+    # path; Didit is the real provider. Selection is fail-fast on missing
+    # creds. Trust anchor for Didit attestations is the HMAC-signed webhook
+    # recorded in integrations.kyc_webhook_corroboration; the adapter blocks
+    # on that row before returning.
+    app.state.kyc_adapter = select_kyc_adapter(
+        name=settings.bss_portal_kyc_provider,
+        didit_api_key=settings.bss_portal_kyc_didit_api_key,
+        didit_workflow_id=settings.bss_portal_kyc_didit_workflow_id,
+        session_factory=app.state.db_session_factory,
+    )
+    log.info(
+        "portal.kyc_adapter.selected",
+        provider=settings.bss_portal_kyc_provider,
     )
 
     app.state.session_store = SessionStore(
