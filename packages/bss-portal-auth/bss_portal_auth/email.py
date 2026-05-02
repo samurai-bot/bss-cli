@@ -69,6 +69,35 @@ _FONT_MONO = (
 )
 
 
+# Humanized labels for the v0.10 SENSITIVE_ACTION_LABELS set. Renders
+# in the step-up email subject + body so customers see "Change your
+# name" instead of "name_update". Keys must match
+# ``portals/self-serve/.../security.py:SENSITIVE_ACTION_LABELS``.
+# Unknown labels render as title-cased snake → space (graceful fallback;
+# adding an entry here is a one-line PR if a future label needs polish).
+_ACTION_LABEL_HUMAN: dict[str, str] = {
+    "vas_purchase": "VAS purchase",
+    "payment_method_add": "Add a payment method",
+    "payment_method_remove": "Remove a payment method",
+    "payment_method_set_default": "Set default payment method",
+    "subscription_terminate": "Cancel your subscription",
+    "email_change": "Change your email",
+    "phone_update": "Update your phone number",
+    "address_update": "Update your address",
+    "name_update": "Change your name",
+    "plan_change_schedule": "Schedule a plan change",
+    "plan_change_cancel": "Cancel a scheduled plan change",
+}
+
+
+def _humanize_action_label(label: str) -> str:
+    """Map ``name_update`` → ``"Change your name"``; fall back to
+    ``Title Case`` for unknown labels so the email still reads."""
+    if label in _ACTION_LABEL_HUMAN:
+        return _ACTION_LABEL_HUMAN[label]
+    return label.replace("_", " ").capitalize()
+
+
 def _render_email(
     *,
     preheader: str,
@@ -375,17 +404,27 @@ class ResendEmailAdapter:
         )
 
     def send_step_up(self, email: str, otp: str, action_label: str) -> None:
+        human = _humanize_action_label(action_label)
         body_html = _render_email(
-            preheader=f"Confirm: {action_label}. Code: {otp}. Expires in 5 minutes.",
-            heading="Confirm a sensitive action",
-            intro=f"Enter this code to confirm <strong>{action_label}</strong>.",
+            preheader=f"Confirm: {human}. Code: {otp}. Expires in 5 minutes.",
+            heading=human,
+            intro=(
+                "Use the code below to confirm this action. "
+                "We're asking because it's a change to your account or "
+                "service that we don't want to do without a second check."
+            ),
             otp=otp,
             cta_label=None,
             cta_url=None,
-            footnote="Code expires in 5 minutes. If you didn't initiate this action, ignore this email and consider rotating your password.",
+            footnote=(
+                "Code expires in 5 minutes. If you didn't initiate this "
+                "action, ignore this email — no change has been made — "
+                "and consider rotating any account credentials you've "
+                "reused elsewhere."
+            ),
         )
         body_text = (
-            f"BSS-CLI — confirm: {action_label}\n"
+            f"BSS-CLI — confirm: {human}\n"
             f"\n"
             f"OTP: {otp}\n"
             f"\n"
@@ -395,7 +434,7 @@ class ResendEmailAdapter:
         self._send(
             operation="send_step_up",
             to=email,
-            subject=f"Confirm: {action_label}",
+            subject=f"Confirm: {human}",
             html=body_html,
             text=body_text,
         )

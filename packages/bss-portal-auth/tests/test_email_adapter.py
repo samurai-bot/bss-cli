@@ -126,12 +126,26 @@ def test_resend_adapter_send_login_calls_sdk_with_correct_params(fake_resend):
 
 
 def test_resend_adapter_send_step_up_includes_action_label(fake_resend):
+    """Real SENSITIVE_ACTION_LABELS are snake_case; rendered as a
+    humanized string (``subscription_terminate`` →
+    ``"Cancel your subscription"``)."""
     a = ResendEmailAdapter(api_key="re_test", from_address="x@y")
-    a.send_step_up("ada@example.sg", "111111", "subscription.terminate")
+    a.send_step_up("ada@example.sg", "111111", "subscription_terminate")
     params = fake_resend._sent[0]
-    assert "subscription.terminate" in params["subject"]
-    assert "subscription.terminate" in params["html"]
+    assert "Cancel your subscription" in params["subject"]
+    assert "Cancel your subscription" in params["html"]
     assert "111111" in params["text"]
+    # Raw snake_case label must NOT leak — operators see the humanized form.
+    assert "subscription_terminate" not in params["subject"]
+
+
+def test_resend_adapter_send_step_up_unknown_label_falls_back(fake_resend):
+    """Unknown labels (future additions, malformed) render via title-case
+    fallback so the email still arrives readable."""
+    a = ResendEmailAdapter(api_key="re_test", from_address="x@y")
+    a.send_step_up("ada@example.sg", "222222", "future_unknown_action")
+    params = fake_resend._sent[0]
+    assert "Future unknown action" in params["subject"]
 
 
 def test_resend_adapter_send_email_change_targets_new_address(fake_resend):
