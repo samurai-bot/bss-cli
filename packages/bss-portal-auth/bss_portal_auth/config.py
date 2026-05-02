@@ -28,6 +28,16 @@ class Settings(BaseSettings):
     # docs/runbooks/portal-auth.md.
     BSS_PORTAL_TOKEN_PEPPER: str = ""
 
+    # Public-facing base URL for outbound email links (magic-link, email
+    # change verification). Required for any non-LoggingEmailAdapter:
+    # bare tokens render as `x-webdoc://` in Apple Mail and similar.
+    # Examples:
+    #   http://localhost:9001                       (local dev)
+    #   https://agentic-vm.tail3190c5.ts.net        (Tailscale Funnel)
+    #   https://portal.example.com                  (production)
+    # No trailing slash.
+    BSS_PORTAL_PUBLIC_URL: str = ""
+
     # Email provider selection (v0.14+). 'logging' (writes to dev mailbox
     # file), 'noop' (test-only), 'resend' (v0.14 production), 'smtp'
     # (reserved for v1.0+; raises NotImplementedError at startup).
