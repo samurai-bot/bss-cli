@@ -17,6 +17,7 @@ dependencies = [
     "bss-orchestrator",
     "bss-telemetry",
     "bss-middleware",
+    "bss-webhooks",
     "bss-portal-ui",
     "bss-portal-auth",
     "sqlalchemy[asyncio]>=2.0",
@@ -45,6 +46,7 @@ bss-clients = { workspace = true }
 bss-orchestrator = { workspace = true }
 bss-telemetry = { workspace = true }
 bss-middleware = { workspace = true }
+bss-webhooks = { workspace = true }
 bss-portal-ui = { workspace = true }
 bss-portal-auth = { workspace = true }
 
