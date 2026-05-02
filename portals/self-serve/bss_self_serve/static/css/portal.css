@@ -1751,3 +1751,27 @@
   text-decoration: none;
 }
 .portal-footer-links a:hover { color: var(--fg); }
+
+
+/* ─── Mobile polish (v0.14) ─────────────────────────────────────
+   Plan cards stack vertically below 720px (was a 3-column grid that
+   overflowed horizontally on 390-wide screens). Inner price + allowance
+   layout tightened so cards stay compact on a phone. */
+@media (max-width: 720px) {
+  .plan-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+    margin-top: 12px;
+  }
+  .plan-card {
+    padding: 16px;
+    gap: 12px;
+  }
+  .price-amount { font-size: 28px; }
+
+  /* MSISDN picker — same overflow problem. */
+  .msisdn-grid {
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 8px;
+  }
+}
