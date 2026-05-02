@@ -42,6 +42,12 @@ os.environ.setdefault(
     "BSS_PORTAL_TOKEN_PEPPER",
     "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
 )
+# v0.14: force-clear the public-URL setting so login-flow tests get the
+# bare-token magic-link path (matches the test's verify-by-magic-link
+# expectations). A developer-sourced .env with BSS_PORTAL_PUBLIC_URL set
+# would otherwise leak into start_email_login → magic_link becomes a
+# full URL → tests trying to use it as ``code`` fail.
+os.environ["BSS_PORTAL_PUBLIC_URL"] = ""
 
 from bss_clock.clock import reset_for_tests as _reset_clock  # noqa: E402
 from bss_portal_auth import NoopEmailAdapter  # noqa: E402

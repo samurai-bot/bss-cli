@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from bss_models import BSS_RELEASE
 from bss_portal_ui import TEMPLATE_DIR as SHARED_TEMPLATE_DIR
 from fastapi.templating import Jinja2Templates
 from jinja2 import ChoiceLoader, FileSystemLoader
@@ -25,3 +26,7 @@ templates.env.loader = ChoiceLoader(
         FileSystemLoader(str(SHARED_TEMPLATE_DIR)),
     ]
 )
+# v0.14 — every template gets ``bss_release`` for the brand-tag
+# version display. Single source from ``bss_models.BSS_RELEASE``;
+# bump there once per release.
+templates.env.globals["bss_release"] = BSS_RELEASE

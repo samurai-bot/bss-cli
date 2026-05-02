@@ -24,6 +24,8 @@ os.environ.setdefault(
 # resend value in place.
 os.environ["BSS_PORTAL_EMAIL_ADAPTER"] = "noop"
 os.environ["BSS_PORTAL_EMAIL_PROVIDER"] = "noop"
+# v0.14: force-clear public URL so magic-link tests get bare-token path.
+os.environ["BSS_PORTAL_PUBLIC_URL"] = ""
 
 import pytest
 from fastapi.testclient import TestClient

@@ -1,8 +1,16 @@
 """BSS-CLI shared models package.
 
 Imports all domain models so that ``Base.metadata`` contains every table
-when Alembic (or any other tool) loads this package.
+when Alembic (or any other tool) loads this package. Also exports the
+single source-of-truth ``BSS_RELEASE`` version string used by every
+surface (REPL banner, self-serve portal brand-tag, CSR cockpit health,
+service ``/health`` versions). One bump per release; doctrine.
 """
+
+# Single source of truth for the platform release version. Every surface
+# (REPL, CSR cockpit, self-serve portal, service /health) imports this
+# so a release bump is one line. Bump on every release tag.
+BSS_RELEASE = "0.14.0"
 
 from .base import Base, TenantMixin, TimestampMixin
 
@@ -85,6 +93,7 @@ from .portal_auth import (
 )
 
 __all__ = [
+    "BSS_RELEASE",
     "Base",
     "TenantMixin",
     "TimestampMixin",

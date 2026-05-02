@@ -82,6 +82,7 @@ def _make_prompt_session() -> PromptSession:
     )
 
 from bss_clients.errors import ClientError
+from bss_models import BSS_RELEASE
 from bss_cockpit import (
     OPERATOR_ACTOR,
     Conversation,
@@ -159,7 +160,7 @@ def _render_banner(
     tagline = Align.center(
         Text.from_markup(
             "[bold white]LLM-native Business Support System[/]   "
-            "[dim]·[/]   [magenta]operator cockpit v0.13[/]"
+            f"[dim]·[/]   [magenta]operator cockpit v{BSS_RELEASE}[/]"
         )
     )
 
