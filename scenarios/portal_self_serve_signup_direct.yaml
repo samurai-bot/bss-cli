@@ -91,8 +91,12 @@ steps:
       next: "/signup/{{ plan }}/msisdn"
     expect:
       status: 303
+      # v0.15: redirect URL now goes through ``urllib.parse.urlencode``
+      # so ``@`` → ``%40``, ``/`` → ``%2F``. The earlier
+      # f-string-built URL broke Gmail '+addressing' (raw ``+`` decoded
+      # back to space at the next route's ``Query(...)`` parser).
       headers_match:
-        location: "/auth/check-email?email={{ customer_email }}&next=/signup/{{ plan }}/msisdn"
+        location: "/auth/check-email?email=portal-demo-{{ run_id }}%40bss-cli.local&next=%2Fsignup%2F{{ plan }}%2Fmsisdn"
 
   - name: read OTP from dev mailbox
     file: "{{ dev_mailbox }}"
@@ -147,8 +151,15 @@ steps:
     expect:
       status: 200
       body_contains:
-        - "KYC-PREBAKED-001"
+        # v0.15 dropped the prebaked "✓ Identity verified via Myinfo
+        # (simulated)" badge from the order form (KYC happens AFTER
+        # form submit at /signup/step/kyc, not before). The chosen
+        # MSISDN remains the strong-shape assertion that the form
+        # rendered correctly.
         - "{{ chosen_msisdn }}"
+      body_not_contains:
+        - "KYC-PREBAKED-001"
+        - "Identity verified via Myinfo"
 
   # ── 5. Direct-write chain — five HTTP calls, one BSS write each ─────────
 
