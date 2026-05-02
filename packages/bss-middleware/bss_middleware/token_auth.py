@@ -45,6 +45,13 @@ EXEMPT_PATHS: Final[frozenset[str]] = frozenset({
     "/health/live",
 })
 
+# Per-prefix exemptions. Webhook receivers (v0.14+) authenticate via
+# provider signature (svix/stripe/didit_hmac) verified inside the
+# route handler, NOT via X-BSS-API-Token. The signing secret stays
+# with the receiving service; the BSS perimeter token would prevent
+# Resend/Stripe/Didit from ever reaching us.
+WEBHOOK_EXEMPT_PATHS: Final[tuple[str, ...]] = ("/webhooks/",)
+
 AUTH_MISSING_TOKEN: Final[str] = "AUTH_MISSING_TOKEN"
 AUTH_INVALID_TOKEN: Final[str] = "AUTH_INVALID_TOKEN"
 
@@ -106,7 +113,7 @@ class BSSApiTokenMiddleware:
             return
 
         path = scope.get("path", "")
-        if path in EXEMPT_PATHS:
+        if path in EXEMPT_PATHS or _is_webhook_path(path):
             await self.app(scope, receive, send)
             return
 
@@ -139,6 +146,15 @@ class BSSApiTokenMiddleware:
             return
         self._last_logged[key] = now
         log.info("auth.401", reason=reason, remote=remote, path=path)
+
+
+def _is_webhook_path(path: str) -> bool:
+    """``/webhooks/<provider>`` paths are exempt from BSS token auth.
+
+    Provider signature is verified inside the route handler. See
+    ``bss_webhooks.signatures.verify_signature``.
+    """
+    return any(path.startswith(prefix) for prefix in WEBHOOK_EXEMPT_PATHS)
 
 
 def _extract_header(scope: Scope, name: bytes) -> str | None:

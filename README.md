@@ -8,7 +8,7 @@ A complete reference Business Support System for a small mobile prepaid MVNO, de
 
 For engineers learning telco BSS/OSS, for a small MVNO that wants a deployable MVP, and as a substrate for agentic experiments against realistic telco operations. eSIM-only, bundled-prepaid, block-on-exhaust, card-on-file mandatory. eKYC, real-customer UI, network elements, batch CDR, and OCS protocols are intentionally out of scope.
 
-**Status:** v0.12.0 ships the platform's production-shape arc — chat scoped to the logged-in customer with rate + cost caps + automatic case escalation, validated by a 14-day soak. v1.0 swaps the three remaining mocks (Singpass for KYC, Stripe for payment, real SM-DP+ for eSIM) behind the existing seams; nothing in v0.7–v0.12 is renegotiated.
+**Status:** v0.13.0 retired the staff-side auth ambition and shipped the unified operator cockpit (REPL canonical, browser veneer over the same `Conversation` store). v0.14.0 begins the real-provider integration arc: per-domain adapter Protocols, the new `integrations` schema for forensic external-call and webhook-event logging, plus `ResendEmailAdapter` for transactional auth mail. v0.15 ships KYC (Didit) + the eSIM-provider seam; v0.16 ships Payment (Stripe Elements + webhook reconciliation). Nothing in v0.7–v0.13 is renegotiated by this arc.
 
 ## Screenshots
 

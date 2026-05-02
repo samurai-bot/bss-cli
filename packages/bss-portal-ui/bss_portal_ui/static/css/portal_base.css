@@ -126,7 +126,9 @@ body { display: flex; flex-direction: column; }
 /* v0.11+ — narrow-viewport polish. The portal is desktop-first by
    doctrine but signup is increasingly opened on phones (real-portal
    feedback 2026-04-27). Below 720px: collapse the 2-col grid (agent
-   log drops below main), squeeze padding, let plan cards stack. */
+   log drops below main), squeeze padding, let plan cards stack.
+   v0.14: also tighten header so the brand-tag + nav don't wrap into
+   four visual rows on a 390-wide screen. */
 @media (max-width: 720px) {
   .portal-layout {
     grid-template-columns: 1fr;
@@ -139,6 +141,35 @@ body { display: flex; flex-direction: column; }
   }
   .portal-layout--single-column .portal-main {
     max-width: none;
+  }
+
+  /* Header: shrink and reflow rather than wrap awkwardly. */
+  .portal-header {
+    padding: 10px 14px;
+    flex-wrap: wrap;
+    row-gap: 4px;
+    font-size: 12px;
+  }
+  .brand { gap: 6px; flex-wrap: wrap; }
+  .brand-tag {
+    font-size: 11px;
+    /* On phones the version + path tag is noise — keep ``/ self-serve``,
+       drop the ``v0.14.0`` suffix to save a line. */
+    white-space: nowrap;
+  }
+  .portal-header nav {
+    gap: 2px;
+    flex-wrap: wrap;
+  }
+  .portal-header nav a, .portal-header nav .nav-actor {
+    padding: 3px 6px;
+    font-size: 12px;
+  }
+
+  /* Footer too — same cramped width. */
+  .portal-footer {
+    padding: 10px 14px;
+    font-size: 11px;
   }
 }
 

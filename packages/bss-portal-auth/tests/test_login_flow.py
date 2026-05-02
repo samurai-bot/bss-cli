@@ -58,7 +58,17 @@ async def test_start_email_login_handed_codes_to_adapter(db_session, email_adapt
     )
     rec = email_adapter.records[("ada@example.sg", "login")]
     assert len(rec["otp"]) == 6 and rec["otp"].isdigit()
-    assert len(rec["magic_link"]) == 32
+    # v0.14: magic_link is the bare token when BSS_PORTAL_PUBLIC_URL is
+    # unset (NoopEmailAdapter test default), or a full URL otherwise.
+    # Either way, the token portion is 32 chars.
+    magic_link = rec["magic_link"]
+    if magic_link.startswith("http"):
+        # Full URL — extract the ``token=`` query param.
+        from urllib.parse import parse_qs, urlparse
+        token = parse_qs(urlparse(magic_link).query)["token"][0]
+        assert len(token) == 32
+    else:
+        assert len(magic_link) == 32
 
 
 @pytest.mark.asyncio

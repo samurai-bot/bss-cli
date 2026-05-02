@@ -16,9 +16,11 @@ build/
 # uv
 .uv/
 
-# Env
+# Env — never commit any local copy.
 .env
 .env.local
+.env.bak
+.env.backup-*
 *.env.local
 
 # IDE

@@ -56,6 +56,9 @@ PUBLIC_PATH_PREFIXES: Final[tuple[str, ...]] = (
     "/static/",
     "/portal-ui/static/",
     "/plans/",  # /plans/{id} detail page if/when added
+    # v0.14 — inbound provider webhooks. Auth is provider signature
+    # (Svix/HMAC) inside the route handler, not session cookies.
+    "/webhooks/",
 )
 
 

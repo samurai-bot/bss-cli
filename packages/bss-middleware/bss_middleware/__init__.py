@@ -31,6 +31,7 @@ from .token_auth import (
     BSSApiTokenMiddleware,
     EXEMPT_PATHS,
     SCOPE_SERVICE_IDENTITY,
+    WEBHOOK_EXEMPT_PATHS,
 )
 
 
@@ -64,6 +65,7 @@ __all__ = [
     "TEST_TOKEN",
     "TokenMap",
     "TokenMapInvalid",
+    "WEBHOOK_EXEMPT_PATHS",
     "api_token",
     "load_token_map_from_env",
     "validate_api_token_present",

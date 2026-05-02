@@ -59,7 +59,7 @@ python-check:
 
 test:
 	@failed=0; \
-	for dir in packages/bss-clients packages/bss-admin packages/bss-clock packages/bss-events packages/bss-telemetry packages/bss-middleware packages/bss-portal-ui packages/bss-portal-auth packages/bss-cockpit services/catalog services/crm services/payment services/subscription services/com services/som services/provisioning-sim services/mediation services/rating orchestrator cli portals/self-serve portals/csr scenarios/soak; do \
+	for dir in packages/bss-clients packages/bss-admin packages/bss-clock packages/bss-events packages/bss-telemetry packages/bss-middleware packages/bss-webhooks packages/bss-portal-ui packages/bss-portal-auth packages/bss-cockpit services/catalog services/crm services/payment services/subscription services/com services/som services/provisioning-sim services/mediation services/rating orchestrator cli portals/self-serve portals/csr scenarios/soak; do \
 		printf "\n══ $$dir ══\n"; \
 		PYTHONPATH=$$dir/tests:$$dir:$$PYTHONPATH uv run pytest $$dir/tests/ -v -m "not integration" || failed=1; \
 	done; \
@@ -234,11 +234,30 @@ migrate:
 seed:
 	@$(ENV_SOURCE); uv run --package bss-seed python -m bss_seed.main
 
+# Hero / general scenarios drive auth flows by reading OTPs from the
+# dev-mailbox file that LoggingEmailAdapter writes. v0.14 added the
+# Resend provider — when an operator has BSS_PORTAL_EMAIL_PROVIDER=resend
+# in .env (real outbound mail), the LoggingEmailAdapter never runs and
+# the mailbox file stays empty, so capture_regex fails. Both targets
+# below temporarily flip the portal to logging mode for the duration of
+# the run, then restore the operator's setting on exit (or trap).
+define SCENARIOS_RUN
+	@$(ENV_SOURCE); \
+	prev=$$(grep -E '^BSS_PORTAL_EMAIL_PROVIDER=' .env | tail -1 | cut -d= -f2-); \
+	if [ "$$prev" != "logging" ] && [ "$$prev" != "noop" ]; then \
+		printf "▶ scenarios: flipping BSS_PORTAL_EMAIL_PROVIDER=%s → logging for portal container\n" "$$prev"; \
+		sed -i.bak 's|^BSS_PORTAL_EMAIL_PROVIDER=.*|BSS_PORTAL_EMAIL_PROVIDER=logging|' .env; \
+		docker compose up -d --force-recreate portal-self-serve >/dev/null 2>&1 || true; \
+		trap 'sed -i "s|^BSS_PORTAL_EMAIL_PROVIDER=.*|BSS_PORTAL_EMAIL_PROVIDER='"$$prev"'|" .env; rm -f .env.bak; docker compose up -d --force-recreate portal-self-serve >/dev/null 2>&1 || true; printf "▶ scenarios: restored BSS_PORTAL_EMAIL_PROVIDER=%s\n" "$$prev"' EXIT INT TERM; \
+	fi; \
+	uv run bss scenario run-all scenarios $(1)
+endef
+
 scenarios:
-	@$(ENV_SOURCE); uv run bss scenario run-all scenarios
+	$(call SCENARIOS_RUN,)
 
 scenarios-hero:
-	@$(ENV_SOURCE); uv run bss scenario run-all scenarios --tag hero
+	$(call SCENARIOS_RUN,--tag hero)
 
 reset-db:
 	@$(ENV_SOURCE); \

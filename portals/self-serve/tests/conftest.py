@@ -18,7 +18,14 @@ os.environ.setdefault(
     "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
 )
 # Tests use the in-memory NoopEmailAdapter — no file I/O on /tmp.
-os.environ.setdefault("BSS_PORTAL_EMAIL_ADAPTER", "noop")
+# v0.14: force-override (not setdefault) so a developer-sourced .env
+# with BSS_PORTAL_EMAIL_PROVIDER=resend doesn't accidentally make the
+# test suite hit the real Resend API. setdefault would leave the
+# resend value in place.
+os.environ["BSS_PORTAL_EMAIL_ADAPTER"] = "noop"
+os.environ["BSS_PORTAL_EMAIL_PROVIDER"] = "noop"
+# v0.14: force-clear public URL so magic-link tests get bare-token path.
+os.environ["BSS_PORTAL_PUBLIC_URL"] = ""
 
 import pytest
 from fastapi.testclient import TestClient

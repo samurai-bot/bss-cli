@@ -1,8 +1,16 @@
 """BSS-CLI shared models package.
 
 Imports all domain models so that ``Base.metadata`` contains every table
-when Alembic (or any other tool) loads this package.
+when Alembic (or any other tool) loads this package. Also exports the
+single source-of-truth ``BSS_RELEASE`` version string used by every
+surface (REPL banner, self-serve portal brand-tag, CSR cockpit health,
+service ``/health`` versions). One bump per release; doctrine.
 """
+
+# Single source of truth for the platform release version. Every surface
+# (REPL, CSR cockpit, self-serve portal, service /health) imports this
+# so a release bump is one line. Bump on every release tag.
+BSS_RELEASE = "0.14.0"
 
 from .base import Base, TenantMixin, TimestampMixin
 
@@ -70,6 +78,9 @@ from .billing import BillingAccount, CustomerBill
 # Audit (3 tables — v0.12 added ChatUsage + ChatTranscript)
 from .audit import ChatTranscript, ChatUsage, DomainEvent
 
+# Integrations (2 tables) — v0.14
+from .integrations import ExternalCall, WebhookEvent
+
 # Portal Auth (4 tables) — v0.8
 from .portal_auth import (
     EmailChangePending,
@@ -82,6 +93,7 @@ from .portal_auth import (
 )
 
 __all__ = [
+    "BSS_RELEASE",
     "Base",
     "TenantMixin",
     "TimestampMixin",
@@ -138,6 +150,9 @@ __all__ = [
     "DomainEvent",
     "ChatUsage",
     "ChatTranscript",
+    # Integrations (v0.14)
+    "ExternalCall",
+    "WebhookEvent",
     # Portal Auth (v0.8 + v0.10 PortalAction + v0.10 EmailChangePending)
     "Identity",
     "LoginToken",

@@ -52,7 +52,9 @@ from .commands import (
     catalog as catalog_cmd,
     clock as clock_cmd,
     customer as customer_cmd,
+    external_calls as external_calls_cmd,
     inventory as inventory_cmd,
+    onboard as onboard_cmd,
     order as order_cmd,
     payment as payment_cmd,
     prov as prov_cmd,
@@ -86,6 +88,8 @@ app.add_typer(clock_cmd.app, name="clock")
 app.add_typer(trace_cmd.app, name="trace")
 app.add_typer(admin_cmd.app, name="admin")
 app.add_typer(scenario_cmd.app, name="scenario")
+app.add_typer(onboard_cmd.app, name="onboard")
+app.add_typer(external_calls_cmd.app, name="external-calls")
 
 
 # `bss ask "..."` is a top-level command, not a subgroup.

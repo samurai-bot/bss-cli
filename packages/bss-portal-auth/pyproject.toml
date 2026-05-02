@@ -8,6 +8,7 @@ dependencies = [
     "asyncpg>=0.29",
     "structlog>=24.0",
     "pydantic-settings>=2.0",
+    "resend>=2.0",
     "bss-clock",
     "bss-models",
 ]

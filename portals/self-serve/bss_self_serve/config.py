@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from bss_models import BSS_RELEASE
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -17,7 +18,7 @@ class Settings(BaseSettings):
     )
 
     service_name: str = "portal-self-serve"
-    version: str = "0.4.0"
+    version: str = BSS_RELEASE
     log_level: str = "INFO"
 
     # Upstream BSS service endpoints. v0.4–v0.9: reads only (signup

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import secrets
 from datetime import timedelta
+from urllib.parse import quote
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -105,6 +106,26 @@ async def _record_attempt(
     await db.flush()
 
 
+# ── magic-link URL builder ───────────────────────────────────────────────
+
+
+def _build_magic_link_url(public_url: str, *, email: str, token: str) -> str:
+    """Build the ``/auth/verify`` URL for the magic-link click-through.
+
+    If ``public_url`` is empty, returns the bare token — preserves the
+    v0.8 LoggingEmailAdapter behavior where operators read tokens out
+    of the dev mailbox file and paste them manually. Production
+    deployments using ResendEmailAdapter (or future SmtpEmailAdapter)
+    must set ``BSS_PORTAL_PUBLIC_URL`` so real mail clients can render
+    a clickable link instead of mangling the bare token (Apple Mail
+    rewrites bare tokens as ``x-webdoc://...``).
+    """
+    if not public_url:
+        return token
+    base = public_url.rstrip("/")
+    return f"{base}/auth/verify?email={quote(email)}&token={quote(token)}"
+
+
 # ── start_email_login ────────────────────────────────────────────────────
 
 
@@ -175,10 +196,20 @@ async def start_email_login(
     )
     await db.flush()
 
+    # Build the click-through URL. v0.14: bare-token magic-link broke
+    # in real mail clients (Apple Mail rendered as ``x-webdoc://...``);
+    # ResendEmailAdapter exposes the bug because it embeds the value
+    # in HTML href. The base URL must be set for any
+    # non-Logging/Noop adapter; LoggingEmailAdapter falls back to the
+    # bare token (operators paste manually anyway).
+    magic_link_url = _build_magic_link_url(
+        settings.BSS_PORTAL_PUBLIC_URL, email=email, token=magic
+    )
+
     # Hand off plaintext to the email adapter — never written anywhere
     # else, never logged. The adapter is responsible for getting it to
-    # the customer (file in dev, SMTP in prod).
-    email_adapter.send_login(email, otp, magic)
+    # the customer (file in dev, real SMTP/Resend in prod).
+    email_adapter.send_login(email, otp, magic_link_url)
 
     return LoginChallenge(identity_id=identity.id, expires_at=expires)
 
