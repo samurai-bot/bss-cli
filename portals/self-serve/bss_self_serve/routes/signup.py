@@ -474,9 +474,13 @@ async def signup_step_kyc_poll(
             )
         ).scalar_one_or_none()
 
-    if row is None:
-        # Still waiting. Return the same fragment HTMX swaps in; it
-        # re-arms via hx-trigger="every 3s" + hx-swap="outerHTML".
+    # Didit's first webhook for a session arrives at session-creation
+    # ("Not Started"); subsequent ones progress through "In Progress" /
+    # "In Review" before landing on a terminal state (Approved /
+    # Declined / Expired). The corroboration row is updated in place by
+    # the webhook handler. Only act on a TERMINAL status.
+    if row is None or row.decision_status in ("Not Started", "In Progress", "In Review"):
+        # Still waiting. Re-arm the poll.
         return HTMLResponse(
             content=(
                 '<div id="kyc-poll" hx-get="/signup/step/kyc/poll'
@@ -488,7 +492,29 @@ async def signup_step_kyc_poll(
             )
         )
 
-    # Corroboration arrived — complete the attest, then redirect.
+    if row.decision_status in ("Declined", "Expired"):
+        # Customer failed liveness or doc check — fail the signup step.
+        sig.step = "failed"
+        sig.step_error = f"kyc.{row.decision_status.lower()}"
+        await store.update(sig)
+        resp = HTMLResponse(content="")
+        resp.headers["HX-Redirect"] = f"/signup/{sig.plan}/progress?session={session}"
+        return resp
+
+    if row.decision_status != "Approved":
+        # Unknown terminal status — keep waiting (forward-compat).
+        return HTMLResponse(
+            content=(
+                '<div id="kyc-poll" hx-get="/signup/step/kyc/poll'
+                f'?session={session}" hx-trigger="every 3s" '
+                'hx-swap="outerHTML">'
+                '<p class="form-hint">Waiting for verification… '
+                'leave this page open.</p>'
+                '</div>'
+            )
+        )
+
+    # Approved — complete the BSS attest, then redirect.
     await _complete_kyc_attest(
         request=request,
         store=store,

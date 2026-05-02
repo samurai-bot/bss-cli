@@ -278,7 +278,15 @@ async def webhook_didit(request: Request) -> Response:
         or (payload.get("data") or {}).get("session_id")
         or ""
     )
-    event_type = payload.get("type") or payload.get("event") or "unknown"
+    # Didit Webhooks v3.0 names the discriminator "webhook_type"
+    # ("status.updated", "data.updated", …). Older drafts of this
+    # handler read "type" / "event" — both wrong.
+    event_type = (
+        payload.get("webhook_type")
+        or payload.get("type")
+        or payload.get("event")
+        or "unknown"
+    )
     decision_status = (
         payload.get("status")
         or (payload.get("data") or {}).get("status")
@@ -297,13 +305,17 @@ async def webhook_didit(request: Request) -> Response:
             media_type="application/json",
         )
 
-    # Compose a stable event_id for the integrations.webhook_event PK.
-    # If Didit doesn't surface one, derive from session_id + event_type
-    # so retries dedupe naturally.
+    # Didit's body carries a per-event ``event_id`` (UUID at top level).
+    # Multiple webhooks for the same session (status.updated → data.updated
+    # → status.updated as state advances) each have a distinct event_id,
+    # so the ``(provider, event_id)`` PK on integrations.webhook_event
+    # dedupes Didit's automatic retries while admitting the multi-event
+    # progression we need to land the final 'Approved' decision.
     event_id = (
-        payload.get("id")
+        payload.get("event_id")
+        or payload.get("id")
         or headers.get("x-didit-event-id")
-        or f"{session_id}:{event_type}"
+        or f"{session_id}:{event_type}:{payload.get('timestamp', '')}"
     )
 
     body_digest = hashlib.sha256(body).hexdigest()
@@ -337,7 +349,13 @@ async def webhook_didit(request: Request) -> Response:
             body=payload,
             signature_valid=True,
         )
-        if inserted and decision_status:
+        # Update / insert the corroboration row regardless of whether
+        # this specific (provider, event_id) was a fresh insert into
+        # webhook_event. Different webhooks for the same session (Not
+        # Started → In Progress → Approved) all carry the same
+        # session_id; we want the LATEST decision_status to land in
+        # the corroboration row so the BSS policy sees the final state.
+        if decision_status:
             existing = (
                 await session.execute(
                     select(KycWebhookCorroboration).where(
