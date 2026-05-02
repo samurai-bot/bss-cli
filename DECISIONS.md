@@ -2075,3 +2075,125 @@ mirror this for the propose-detection side; drift between the two
 is a doctrine bug to catch by code review (no greppable test, since
 the lists serve different purposes — one filters tools, the other
 detects propose intent).
+
+
+## 2026-05-02 — v0.14.0 Per-domain adapter Protocols, no broker container
+
+**Context:** v0.14 begins replacing simulated externals (mock card
+tokenizer, logging email, prebaked KYC, simulator-backed eSIM) with
+real providers. The integration architecture had to land before
+ResendEmailAdapter shipped because v0.15 (Didit) and v0.16 (Stripe)
+inherit it.
+
+**Decision:** Per-domain adapter Protocols, no `bss-providers`
+mega-package, no integration-broker container. Each domain's
+adapter lives where its consumer lives — `EmailAdapter` in
+`packages/bss-portal-auth` (existing), future `KycVerificationAdapter`
+in `portals/self-serve/.../kyc/` (v0.15), future `TokenizerAdapter`
+in `services/payment/app/domain/` (v0.16). One small new package,
+`packages/bss-webhooks/`, owns only genuinely cross-cutting concerns:
+HMAC signature verification (svix/stripe/didit_hmac), idempotency
+keys, persistence stores for the new `integrations` schema, and
+per-provider redaction.
+
+**Why:** The four domains have fundamentally different shapes —
+sync charge (payment) vs fire-and-forget side effect (email) vs
+async order with eventual consistency (eSIM) vs signed-attestation
+receipt (KYC). A unified `Provider.execute()` API forces lowest-
+common-denominator and erases information the consumer needs. The
+existing `EmailAdapter` Protocol pattern at
+`packages/bss-portal-auth/bss_portal_auth/email.py:32-39` is the
+gold standard already shipped — replicate it per domain rather than
+reinvent.
+
+**Alternatives rejected:**
+
+- **Single `bss-providers` package** with all Protocols. Forces a
+  shared API surface that doesn't match any domain's natural shape.
+- **`services/integration-broker/` container** wrapping every SDK
+  behind one HTTP API. Adds ~200MB container, ~5-15ms hop on every
+  call, and becomes the single point of failure that has to know
+  every provider's quirks. Service mesh without a service mesh.
+
+**Consequences:** Adding a new provider means a new adapter file in
+the consumer's package, an entry in `select_*()`, and tests. No
+package-level coordination. The shared `bss-webhooks` substrate
+is built v0.14-complete (all three signature schemes, even though
+only svix has a v0.14 consumer) so v0.16 isn't touching shared
+HMAC code under payment-scope pressure.
+
+## 2026-05-02 — v0.14.0 BSS_<DOMAIN>_PROVIDER env naming convention
+
+**Context:** v0.8 shipped `BSS_PORTAL_EMAIL_ADAPTER` for the
+LoggingEmailAdapter / NoopEmailAdapter / SmtpEmailAdapter selector.
+v0.14 needed to name three new envs (Resend) consistently with
+future v0.15 (Didit) and v0.16 (Stripe) prompts so a future provider
+addition doesn't rename existing vars.
+
+**Decision:** `BSS_<DOMAIN>_PROVIDER=<name>` selects the adapter;
+secrets land at `BSS_<DOMAIN>_<NAME>_<KEY>`. Examples:
+
+* `BSS_PORTAL_EMAIL_PROVIDER=resend` →
+  `BSS_PORTAL_EMAIL_RESEND_API_KEY`,
+  `BSS_PORTAL_EMAIL_RESEND_WEBHOOK_SECRET`,
+  `BSS_PORTAL_EMAIL_FROM`.
+* (v0.15 anticipated) `BSS_PORTAL_KYC_PROVIDER=didit` →
+  `BSS_PORTAL_KYC_DIDIT_API_KEY`, etc.
+* (v0.16 anticipated) `BSS_PAYMENT_PROVIDER=stripe` →
+  `BSS_PAYMENT_STRIPE_API_KEY`, etc.
+
+The double segment lets a future `BSS_PAYMENT_PROVIDER=adyen` add
+`BSS_PAYMENT_ADYEN_API_KEY` without renaming the Stripe vars.
+
+**Backwards compat:** `BSS_PORTAL_EMAIL_ADAPTER` (v0.8 name) is read
+as a fallback by `bss_portal_auth.email.resolve_provider_name`,
+emitting a `DeprecationWarning` on use. Removed in v0.16.
+
+**Alternatives rejected:**
+
+- **Keep `BSS_PORTAL_EMAIL_ADAPTER` and don't rename.** Rejected:
+  "adapter" is a Python pattern name, not a deployment concept.
+  Operators reading `.env` see "provider" and know it means a real
+  external service.
+- **Use `BSS_RESEND_API_KEY` (no domain prefix).** Rejected:
+  ambiguous when two domains use the same provider (e.g. if Resend
+  ever ships a different surface for marketing campaigns).
+
+**Consequences:** Every adapter selector in v0.14+ follows the
+pattern. `bss onboard` prompts and writes the long names. The grep
+guard `rg 'os\.environ.*BSS_.*_PROVIDER'` catches per-request env
+reads (forbidden — load once at startup).
+
+## 2026-05-02 — v0.14.0 external_ref envelope on audit.domain_event
+
+**Context:** The forensic question "this customer signed up but their
+welcome email never arrived — what happened?" requires joining the
+BSS-side domain event (e.g. `portal_auth.identity.created`) with
+the provider call (Resend `msg_*`) with the inbound webhook
+(`email.delivered` / `email.bounced`). v0.14 didn't want to add a
+foreign-key column to `audit.domain_event` because that table is
+hot, append-only, and pre-existing rows shouldn't backfill.
+
+**Decision:** `audit.domain_event.payload` JSONB gains an optional
+`external_ref` envelope — `{provider, operation, id,
+idempotency_key}` — on rows that originated from a provider call.
+Forensic join: `audit.domain_event.payload->'external_ref'->>'id'
+↔ integrations.external_call.provider_call_id`. No schema change.
+
+**Alternatives rejected:**
+
+- **New columns on `audit.domain_event`.** Rejected: requires a
+  migration on a large hot table; pre-v0.14 rows have no value to
+  backfill.
+- **Separate `audit.domain_event_external_ref` join table.** Rejected:
+  one extra row per provider-mediated event doubles write volume on
+  the hot path for negligible query benefit. JSONB query path is
+  fast enough.
+
+**Consequences:** Adapter callers who write to `audit.domain_event`
+include `external_ref` in the payload when applicable. v0.14 doesn't
+mandate this on all sites; the Resend adapter records to structlog
+only (sync adapter Protocol doesn't have an async session in scope).
+v0.15+ async adapters will tighten this to "every external call
+emits external_ref-enriched audit event AND a row in
+integrations.external_call."
