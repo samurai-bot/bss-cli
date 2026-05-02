@@ -230,21 +230,40 @@ def _verify_didit_hmac(
     max_skew_seconds: int,
     now: float | None,
 ) -> None:
-    sig_header = headers.get("x-signature-v2")
-    if not sig_header:
+    """Verify Didit Webhooks v3.0 signature.
+
+    Headers as observed in real sandbox deliveries (2026-05-02):
+
+        X-Signature-V2:    <hex>   — HMAC-SHA-256(secret, f"{ts}.{body}")
+        X-Signature:       <hex>   — same as V2 (legacy alias)
+        X-Signature-Simple: <hex>  — HMAC-SHA-256(secret, body)  [no ts]
+        X-Timestamp:       <unix epoch seconds>
+
+    The timestamp is in a SEPARATE header (not embedded in the
+    signature header as v0.14's earlier guess assumed). We verify
+    against ``X-Signature-V2`` because it carries timestamp-binding
+    (replay protection).
+    """
+    sig_hex = headers.get("x-signature-v2") or headers.get("x-signature")
+    if not sig_hex:
         raise WebhookSignatureError(
-            "missing_header", "X-Signature-V2 header required"
+            "missing_header",
+            "X-Signature-V2 (or X-Signature) header required",
         )
 
-    if "." not in sig_header:
+    timestamp = headers.get("x-timestamp")
+    if not timestamp:
+        # Fall back to X-Signature-Simple (body-only) if no timestamp
+        # header — drops replay protection but accepts the delivery.
+        # Fail closed instead: timestamp is mandatory for v0.15.
         raise WebhookSignatureError(
-            "malformed_header", "X-Signature-V2 must be '<timestamp>.<hex>'"
+            "missing_header", "X-Timestamp header required"
         )
 
-    timestamp, _, signature_hex = sig_header.partition(".")
-    if not (timestamp and signature_hex):
+    # Sanity: signature must be hex digits.
+    if not all(c in "0123456789abcdefABCDEF" for c in sig_hex):
         raise WebhookSignatureError(
-            "malformed_header", "X-Signature-V2 has empty timestamp or hex"
+            "malformed_header", "X-Signature-V2 must be hex"
         )
 
     _check_timestamp(timestamp, max_skew_seconds, now)
@@ -253,7 +272,7 @@ def _verify_didit_hmac(
     signed = f"{timestamp}.".encode() + body
     expected_hex = hmac.new(key, signed, hashlib.sha256).hexdigest()
 
-    if not hmac.compare_digest(signature_hex, expected_hex):
+    if not hmac.compare_digest(sig_hex.lower(), expected_hex):
         raise WebhookSignatureError(
             "signature_mismatch", "didit_hmac signature did not match"
         )
