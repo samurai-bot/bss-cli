@@ -104,6 +104,28 @@ class KycService:
         from uuid import UUID
 
         now = clock_now()
+        # v0.15 — when ``BSS_KYC_ALLOW_DOC_REUSE=true`` (sandbox affordance),
+        # the policy doesn't reject duplicate document hashes; the service
+        # re-links the existing identity row to the new customer instead
+        # of inserting (the DB unique index would reject the insert
+        # otherwise). Real production keeps the flag false, the policy
+        # enforces uniqueness, and this branch never runs.
+        existing = await self._kyc_repo.find_by_document_hash(
+            tenant_id=ctx.tenant,
+            document_type=document_type,
+            document_number_hash=document_number_hash,
+        )
+        if existing is not None:
+            log.info(
+                "kyc.document_hash_relink",
+                old_customer_id=existing.customer_id,
+                new_customer_id=customer_id,
+            )
+            # Drop the old row and create a new one for the new
+            # customer. CustomerIdentity has customer_id as PK so an
+            # in-place customer_id update would violate FK ordering.
+            await self._kyc_repo.delete(existing)
+            await self._session.flush()
         identity = CustomerIdentity(
             customer_id=customer_id,
             document_type=document_type,

@@ -46,6 +46,25 @@ def _allow_prebaked() -> bool:
     return env != "production"
 
 
+def _allow_doc_reuse() -> bool:
+    """``BSS_KYC_ALLOW_DOC_REUSE`` is a sandbox-testing affordance.
+
+    Real Didit / Singpass / Onfido production return per-person
+    document numbers that are globally unique by definition — so the
+    ``customer.attest_kyc.document_hash_unique_per_tenant`` policy is
+    a real invariant in production. But Didit sandbox returns a
+    STABLE test document number for every verification: every test
+    signup hashes to the same value, every second-and-later attempt
+    trips the policy. Setting this flag to ``true`` in dev /
+    sandbox lets the same document hash re-link to the latest
+    customer (the prior row's ``customer_id`` is overwritten in
+    place). Defaults false, even outside production — opting in is
+    explicit, like ``BSS_KYC_ALLOW_PREBAKED``.
+    """
+    raw = os.environ.get("BSS_KYC_ALLOW_DOC_REUSE", "")
+    return raw.lower() in ("1", "true", "yes") if raw else False
+
+
 @policy("customer.attest_kyc.customer_exists")
 async def check_customer_exists(
     customer_id: str, repo: CustomerRepository
@@ -155,6 +174,10 @@ async def check_attestation_signature(
 async def check_document_hash_unique(
     document_type: str, document_number_hash: str, kyc_repo: KycRepository
 ) -> None:
+    if _allow_doc_reuse():
+        # Sandbox affordance — caller (service layer) re-links instead
+        # of inserting on duplicate. See ``_allow_doc_reuse`` docstring.
+        return
     ctx = auth_context.current()
     existing = await kyc_repo.find_by_document_hash(
         tenant_id=ctx.tenant,

@@ -176,3 +176,44 @@ async def test_legacy_provider_without_signature_rejects(
             corroboration_id=None,
             session=db_session,
         )
+
+
+# ── BSS_KYC_ALLOW_DOC_REUSE ─────────────────────────────────────────
+
+
+async def test_doc_hash_unique_check_skipped_when_reuse_allowed(
+    db_session, monkeypatch
+):
+    """Sandbox affordance: the flag bypasses the uniqueness check so
+    repeated sandbox-doc signups can re-link to the latest customer."""
+    from app.policies.kyc import check_document_hash_unique
+    from app.repositories.kyc_repo import KycRepository
+
+    monkeypatch.setenv("BSS_KYC_ALLOW_DOC_REUSE", "true")
+    # Call doesn't even need to hit the repo when the flag is on.
+    repo = KycRepository(db_session)
+    # Should not raise even if hypothetically a duplicate existed.
+    await check_document_hash_unique(
+        document_type="nric",
+        document_number_hash="a" * 64,
+        kyc_repo=repo,
+    )
+
+
+async def test_doc_hash_unique_check_enforces_when_reuse_disabled(
+    db_session, monkeypatch
+):
+    """Default behaviour: reuse flag absent → uniqueness still enforced."""
+    from app.policies.kyc import check_document_hash_unique
+    from app.repositories.kyc_repo import KycRepository
+
+    monkeypatch.delenv("BSS_KYC_ALLOW_DOC_REUSE", raising=False)
+    repo = KycRepository(db_session)
+    # Without a duplicate row in DB, it should pass cleanly. The
+    # blocking-on-duplicate path is exercised by the existing
+    # service-level test (it inserts a row first).
+    await check_document_hash_unique(
+        document_type="nric",
+        document_number_hash="b" * 64,
+        kyc_repo=repo,
+    )

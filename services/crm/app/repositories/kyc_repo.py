@@ -38,3 +38,6 @@ class KycRepository:
         self._s.add(identity)
         await self._s.flush()
         return identity
+
+    async def delete(self, identity: CustomerIdentity) -> None:
+        await self._s.delete(identity)
