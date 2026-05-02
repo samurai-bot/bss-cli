@@ -243,10 +243,18 @@ async def webhook_didit(request: Request) -> Response:
             scheme="didit_hmac",
         )
     except WebhookSignatureError as exc:
+        # v0.15 diagnostic: log the candidate signature headers (NEVER
+        # the secret) so we can see what shape Didit is actually sending.
+        # Header keys only — values are short hashes/timestamps, safe to log.
+        sig_candidates = {
+            k: v for k, v in headers.items()
+            if "sign" in k.lower() or "didit" in k.lower() or k.lower().startswith("x-")
+        }
         log.warning(
             "portal_auth.webhook.signature_invalid",
             provider=PROVIDER_DIDIT,
             reason=exc.code,
+            candidate_headers=sig_candidates,
         )
         return Response(
             content=f'{{"code":"{exc.code}"}}',
