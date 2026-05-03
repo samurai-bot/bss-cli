@@ -189,6 +189,29 @@ class PaymentClient(BSSClient):
         )
         return resp.json()
 
+    # ── v0.16 ensure_customer ────────────────────────────────────────────
+
+    async def ensure_customer(
+        self, *, customer_id: str, email: str
+    ) -> dict[str, Any]:
+        """POST /admin-api/v1/payment-customer/ensure.
+
+        Mint (or return cached) provider-side customer ref for a BSS
+        customer. Stripe path returns ``{customer_external_ref: cus_*,
+        provider: "stripe"}``; mock returns ``cus_mock_<id>``.
+
+        Used by the portal's Stripe Checkout init route — must run
+        BEFORE creating the CheckoutSession so the resulting pm_* gets
+        attached to a customer that PaymentService.charge can later
+        debit off-session.
+        """
+        resp = await self._request(
+            "POST",
+            "/admin-api/v1/payment-customer/ensure",
+            json={"customer_id": customer_id, "email": email},
+        )
+        return resp.json()
+
     # ── v0.16 cutover ────────────────────────────────────────────────────
 
     async def cutover_invalidate_mock_tokens(

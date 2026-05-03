@@ -1,49 +1,41 @@
-"""v0.16 stripe-mode signup tests — Track 2.
+"""v0.16 Track 2 (redo) — stripe-mode signup tests for Stripe Checkout flow.
 
-Verifies that flipping ``BSS_PAYMENT_PROVIDER=stripe`` mode-switches:
+The original Track 2 used Stripe.js + Elements iframe; that flow failed
+in real browsers (Safari ITP, HTMX swap script-execution issues). The
+redo uses Stripe Checkout — full-page redirect to a Stripe-hosted card
+form. These tests cover the new flow:
 
-1. The initial /signup form (drops the card-number input; renders a
-   "you'll add your card on the next page" hint instead).
-2. The /signup/{plan} POST (accepts empty card_pan; doesn't reject as
-   policy.payment.method.invalid_card the way mock-mode does).
-3. The /signup/step/cof/mount endpoint (pivots state to
-   pending_cof_elements).
-4. The /signup/step/cof endpoint (accepts payment_method_id from form
-   instead of running the local mock tokenizer; passes
-   tokenization_provider='stripe' to the BSS payment service).
-
-The post-login add-card flow at /payment-methods/add gets its own
-template-routing test in test_pci_scope (which proves the production-
-stripe deployment never carries a card_number input).
+1. Initial /signup form drops the card-number input (PCI doctrine).
+2. POST /signup accepts empty card_pan in stripe mode.
+3. POST /signup/step/cof/checkout-init mints a CheckoutSession + 303
+   redirects to session.url. ensure_customer is called with the right
+   bss_customer_id; create_payment_method is NOT called yet.
+4. GET /signup/step/cof/checkout-return retrieves the session, extracts
+   the pm_*, calls create_payment_method (token_provider='stripe'),
+   advances state to pending_order.
 """
 
 from __future__ import annotations
 
-import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from bss_self_serve.session import SignupSession
+import pytest
 
 
 def _make_stripe_app(authed_client):
-    """Flip the live test app into stripe mode for one test.
-
-    The authed_client fixture set payment_provider='mock' on app.state
-    at lifespan startup. This helper toggles it (and stamps the
-    publishable key) for a single test, then restores at teardown.
-    """
     app = authed_client.app
     prev = (
         getattr(app.state, "payment_provider", "mock"),
-        getattr(app.state, "payment_stripe_publishable_key", ""),
+        getattr(app.state, "payment_stripe_api_key", ""),
     )
     app.state.payment_provider = "stripe"
-    app.state.payment_stripe_publishable_key = "pk_test_fake_for_unit_tests"
+    app.state.payment_stripe_api_key = "sk_test_fake_for_unit_tests"
     return prev
 
 
 def _restore_app(authed_client, prev):
     app = authed_client.app
-    app.state.payment_provider, app.state.payment_stripe_publishable_key = prev
+    app.state.payment_provider, app.state.payment_stripe_api_key = prev
 
 
 def test_signup_form_in_stripe_mode_omits_card_number_input(authed_client):
@@ -52,14 +44,9 @@ def test_signup_form_in_stripe_mode_omits_card_number_input(authed_client):
         resp = authed_client.get("/signup/PLAN_M?msisdn=90000042")
         assert resp.status_code == 200
         body = resp.text
-        # Stripe-mode form does NOT render the mock card-number input.
         assert 'name="card_number"' not in body
         assert "4242424242424242" not in body
-        # AND it tells the customer the card step happens next.
         assert "secure Stripe form" in body or "next page" in body
-        # The hidden card_pan field is still there to satisfy the POST
-        # /signup form contract (route reads card_pan="" + skips the
-        # not-empty check in stripe mode).
         assert 'name="card_pan"' in body
     finally:
         _restore_app(authed_client, prev)
@@ -68,8 +55,6 @@ def test_signup_form_in_stripe_mode_omits_card_number_input(authed_client):
 def test_signup_post_in_stripe_mode_accepts_empty_card_pan(
     authed_client, fake_clients
 ):
-    """Mock mode 422s on empty card_pan; stripe mode allows it
-    because the card is collected at the COF step via Elements."""
     prev = _make_stripe_app(authed_client)
     try:
         resp = authed_client.post(
@@ -79,12 +64,10 @@ def test_signup_post_in_stripe_mode_accepts_empty_card_pan(
                 "name": "Stripe Test",
                 "phone": "90000042",
                 "msisdn": "90000042",
-                "card_pan": "",  # empty — would 422 in mock mode
+                "card_pan": "",
             },
             follow_redirects=False,
         )
-        # Either 303 to /progress (success) or 422 with a different
-        # reason (still not the missing-card-pan rule).
         if resp.status_code == 422:
             assert "policy.payment.method.invalid_card" not in resp.text
         else:
@@ -94,17 +77,16 @@ def test_signup_post_in_stripe_mode_accepts_empty_card_pan(
         _restore_app(authed_client, prev)
 
 
-def test_cof_mount_pivots_state_to_pending_cof_elements(authed_client):
-    """POST /signup/step/cof/mount transitions a pending_cof signup into
-    pending_cof_elements without writing anything to the payment service.
-
-    The pivot is server-side so the timeline label stays consistent and
-    the Elements iframe is rendered with the publishable key from
-    app.state, not the form.
+def test_checkout_init_creates_session_and_redirects(
+    authed_client, fake_clients
+):
+    """POST /signup/step/cof/checkout-init must:
+    - Call PaymentClient.ensure_customer with the BSS customer_id
+    - Call stripe.checkout.Session.create with mode='setup', customer=cus_*
+    - 303 redirect to the session.url
     """
     prev = _make_stripe_app(authed_client)
     try:
-        # Plant a pending_cof signup in the in-memory store.
         store = authed_client.app.state.session_store
         identity_id = authed_client.app.state.test_identity_id
         import asyncio
@@ -113,41 +95,69 @@ def test_cof_mount_pivots_state_to_pending_cof_elements(authed_client):
             sig = await store.create(
                 plan="PLAN_M",
                 name="Stripe Test",
-                email="stripetest@example.com",
+                email="checkout-init@example.com",
                 phone="90000042",
                 msisdn="90000042",
                 card_pan="",
                 identity_id=identity_id,
             )
-            sig.customer_id = "CUST-STRIPE-TEST"
+            sig.customer_id = "CUST-CHECKOUT-INIT"
             sig.step = "pending_cof"
             await store.update(sig)
             return sig.session_id
 
         sid = asyncio.run(_do())
 
-        resp = authed_client.post(f"/signup/step/cof/mount?session={sid}")
-        assert resp.status_code == 200, resp.text
-        # Body should now render the Elements iframe.
-        assert "stripe-card-element" in resp.text
-        assert "pk_test_fake_for_unit_tests" in resp.text
+        # Stub bss-clients PaymentClient.ensure_customer
+        ensure_args: dict = {}
+        async def _fake_ensure(**kwargs):
+            ensure_args.update(kwargs)
+            return {
+                "customer_external_ref": "cus_test_fake_001",
+                "provider": "stripe",
+            }
+        fake_clients.payment.ensure_customer = _fake_ensure
 
-        async def _read_state() -> str:
-            sig = await store.get(sid)
-            return sig.step
+        # Stub stripe.checkout.Session.create
+        cs_create_args: dict = {}
+        def _fake_cs_create(**kwargs):
+            cs_create_args.update(kwargs)
+            return {"id": "cs_test_fake_001", "url": "https://checkout.stripe.com/c/pay/cs_test_fake_001"}
 
-        assert asyncio.run(_read_state()) == "pending_cof_elements"
+        with patch("stripe.checkout.Session.create", side_effect=_fake_cs_create):
+            resp = authed_client.post(
+                f"/signup/step/cof/checkout-init?session={sid}",
+                follow_redirects=False,
+            )
+
+        assert resp.status_code == 303, resp.text
+        assert resp.headers["location"] == "https://checkout.stripe.com/c/pay/cs_test_fake_001"
+
+        # ensure_customer was called with the right BSS customer
+        assert ensure_args["customer_id"] == "CUST-CHECKOUT-INIT"
+
+        # CheckoutSession was created in the right shape
+        assert cs_create_args["mode"] == "setup"
+        assert cs_create_args["customer"] == "cus_test_fake_001"
+        assert cs_create_args["payment_method_types"] == ["card"]
+        assert "checkout-return" in cs_create_args["success_url"]
+        assert "{CHECKOUT_SESSION_ID}" in cs_create_args["success_url"]
+        # Metadata carries the signup session for return-trip verification
+        assert cs_create_args["metadata"]["bss_signup_session"] == sid
+        assert cs_create_args["metadata"]["bss_customer_id"] == "CUST-CHECKOUT-INIT"
     finally:
         _restore_app(authed_client, prev)
 
 
-def test_cof_post_with_payment_method_id_calls_payment_service_with_stripe_provider(
+def test_checkout_return_registers_pm_and_advances_state(
     authed_client, fake_clients
 ):
-    """The stripe path on POST /signup/step/cof passes
-    tokenization_provider='stripe' (instead of 'sandbox') to the BSS
-    payment service, so the service's StripeTokenizerAdapter does the
-    ensure_customer + attach round-trips."""
+    """GET /signup/step/cof/checkout-return must:
+    - Retrieve the CheckoutSession from Stripe with expand=setup_intent
+    - Extract setup_intent.payment_method (the pm_*)
+    - Call PaymentClient.create_payment_method(token_provider='stripe', card_token=pm_*)
+    - Advance state to pending_order
+    """
     prev = _make_stripe_app(authed_client)
     try:
         store = authed_client.app.state.session_store
@@ -158,79 +168,136 @@ def test_cof_post_with_payment_method_id_calls_payment_service_with_stripe_provi
             sig = await store.create(
                 plan="PLAN_M",
                 name="Stripe Test",
-                email="stripetest@example.com",
+                email="checkout-return@example.com",
                 phone="90000042",
                 msisdn="90000042",
                 card_pan="",
                 identity_id=identity_id,
             )
-            sig.customer_id = "CUST-STRIPE-TEST"
+            sig.customer_id = "CUST-CHECKOUT-RETURN"
+            sig.step = "pending_cof_elements"  # checkout in flight
+            await store.update(sig)
+            return sig.session_id
+
+        sid = asyncio.run(_do())
+
+        # Stub stripe.checkout.Session.retrieve to return a session with
+        # the right metadata + an embedded setup_intent.payment_method
+        def _fake_cs_retrieve(cs_id, **kwargs):
+            return {
+                "id": cs_id,
+                "metadata": {
+                    "bss_signup_session": sid,
+                    "bss_customer_id": "CUST-CHECKOUT-RETURN",
+                },
+                "setup_intent": {
+                    "id": "seti_test_fake_001",
+                    "payment_method": "pm_test_fake_card_visa",
+                    "status": "succeeded",
+                },
+            }
+
+        # Stub create_payment_method to return a fake PM-* id
+        create_pm_args: dict = {}
+        async def _fake_create_pm(**kwargs):
+            create_pm_args.update(kwargs)
+            return {"id": "PM-CHECKOUT-RETURN-001"}
+        fake_clients.payment.create_payment_method = _fake_create_pm
+
+        with patch(
+            "stripe.checkout.Session.retrieve", side_effect=_fake_cs_retrieve
+        ):
+            resp = authed_client.get(
+                f"/signup/step/cof/checkout-return?session={sid}&cs_id=cs_test_fake_001",
+                follow_redirects=False,
+            )
+
+        assert resp.status_code == 303, resp.text
+        assert "/signup/PLAN_M/progress" in resp.headers["location"]
+
+        # PaymentClient.create_payment_method was called with stripe path
+        assert create_pm_args["tokenization_provider"] == "stripe"
+        assert create_pm_args["card_token"] == "pm_test_fake_card_visa"
+        assert create_pm_args["customer_id"] == "CUST-CHECKOUT-RETURN"
+
+        # State advanced to pending_order
+        async def _read() -> str:
+            sig = await store.get(sid)
+            return sig.step
+
+        assert asyncio.run(_read()) == "pending_order"
+    finally:
+        _restore_app(authed_client, prev)
+
+
+def test_checkout_return_rejects_metadata_mismatch(
+    authed_client, fake_clients
+):
+    """If the CheckoutSession's metadata.bss_signup_session doesn't match
+    the URL-provided session, refuse to process — defence against a
+    customer pasting someone else's cs_id.
+    """
+    prev = _make_stripe_app(authed_client)
+    try:
+        store = authed_client.app.state.session_store
+        identity_id = authed_client.app.state.test_identity_id
+        import asyncio
+
+        async def _do() -> str:
+            sig = await store.create(
+                plan="PLAN_M",
+                name="Stripe Test",
+                email="cs-mismatch@example.com",
+                phone="90000042",
+                msisdn="90000042",
+                card_pan="",
+                identity_id=identity_id,
+            )
+            sig.customer_id = "CUST-MISMATCH"
             sig.step = "pending_cof_elements"
             await store.update(sig)
             return sig.session_id
 
         sid = asyncio.run(_do())
 
-        # Stub the bss-clients PaymentClient to capture the call args.
-        captured: dict = {}
-        async def _fake_create_pm(**kwargs):
-            captured.update(kwargs)
-            return {"id": "PM-STRIPE-001"}
-        fake_clients.payment.create_payment_method = _fake_create_pm
+        def _fake_cs_retrieve(cs_id, **kwargs):
+            return {
+                "id": cs_id,
+                "metadata": {
+                    "bss_signup_session": "DIFFERENT-SESSION-XXX",
+                    "bss_customer_id": "CUST-MISMATCH",
+                },
+                "setup_intent": {
+                    "id": "seti_xxx",
+                    "payment_method": "pm_xxx",
+                    "status": "succeeded",
+                },
+            }
 
-        resp = authed_client.post(
-            f"/signup/step/cof?session={sid}",
-            data={"payment_method_id": "pm_test_card_visa"},
-        )
-        assert resp.status_code == 200, resp.text
+        # create_payment_method MUST NOT be called.
+        called = {"n": 0}
+        async def _no_call(**kwargs):
+            called["n"] += 1
+            raise AssertionError("create_payment_method should NOT be called on metadata mismatch")
+        fake_clients.payment.create_payment_method = _no_call
 
-        assert captured.get("tokenization_provider") == "stripe"
-        assert captured.get("card_token") == "pm_test_card_visa"
-        assert captured.get("customer_id") == "CUST-STRIPE-TEST"
-    finally:
-        _restore_app(authed_client, prev)
-
-
-def test_cof_post_with_empty_payment_method_id_pivots_to_elements(
-    authed_client,
-):
-    """A poll-style POST /signup/step/cof in stripe mode without a
-    pm_id pivots state to pending_cof_elements + re-renders the
-    iframe — never calls the payment service."""
-    prev = _make_stripe_app(authed_client)
-    try:
-        store = authed_client.app.state.session_store
-        identity_id = authed_client.app.state.test_identity_id
-        import asyncio
-
-        async def _do() -> str:
-            sig = await store.create(
-                plan="PLAN_M",
-                name="Stripe Test",
-                email="stripetest@example.com",
-                phone="90000042",
-                msisdn="90000042",
-                card_pan="",
-                identity_id=identity_id,
+        with patch(
+            "stripe.checkout.Session.retrieve", side_effect=_fake_cs_retrieve
+        ):
+            resp = authed_client.get(
+                f"/signup/step/cof/checkout-return?session={sid}&cs_id=cs_xxx",
+                follow_redirects=False,
             )
-            sig.customer_id = "CUST-STRIPE-TEST"
-            sig.step = "pending_cof"
-            await store.update(sig)
-            return sig.session_id
 
-        sid = asyncio.run(_do())
+        # Redirects back to progress (failed state) — does not call BSS
+        assert resp.status_code == 303
+        assert called["n"] == 0
 
-        resp = authed_client.post(
-            f"/signup/step/cof?session={sid}",
-            data={"payment_method_id": ""},
-        )
-        assert resp.status_code == 200
-        assert "stripe-card-element" in resp.text
-
-        async def _read() -> str:
+        async def _read():
             sig = await store.get(sid)
-            return sig.step
-
-        assert asyncio.run(_read()) == "pending_cof_elements"
+            return sig.step, sig.step_error
+        step, err = asyncio.run(_read())
+        assert step == "failed"
+        assert err == "policy.payment.checkout.metadata_mismatch"
     finally:
         _restore_app(authed_client, prev)

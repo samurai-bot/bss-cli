@@ -97,79 +97,38 @@
       {% elif signup.step == 'pending_cof' %}
         {% if payment_provider == 'stripe' %}
           <strong>Add a payment method to continue.</strong>
-          <p style="margin: 0 0 8px;">Card details go directly from your browser to Stripe — they never touch our servers.</p>
+          <p style="margin: 0 0 8px;">
+            You'll be redirected to a secure Stripe-hosted card form.
+            Card details go directly to Stripe — they never touch our
+            servers.
+          </p>
+          <form method="post" action="/signup/step/cof/checkout-init?session={{ session_id }}">
+            <button type="submit"
+                    style="margin-top: 8px; padding: 10px 20px; background: #635bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 1em;">
+              Continue to Stripe →
+            </button>
+          </form>
         {% else %}
           KYC verified. Adding your card on file…
         {% endif %}
       {% elif signup.step == 'pending_cof_elements' %}
-        {# v0.16 — Stripe Elements is mounted; customer is entering
-           card details. The Stripe.js callback will POST the resulting
-           pm_* id to /signup/step/cof, which advances state to
-           pending_order and re-renders this fragment with the next
-           trigger. We poll every 3s in case the JS fails to mount. #}
-        <strong>Enter your card details below.</strong>
-        <div id="stripe-elements-mount" style="margin: 16px 0; padding: 16px; border: 1px solid #ddd; border-radius: 6px; background: #fff;">
-          <form id="stripe-payment-form">
-            <div id="stripe-card-element" style="padding: 12px; border: 1px solid #ccc; border-radius: 4px; background: #fff;"></div>
-            <div id="stripe-card-errors" role="alert" style="color: #c00; margin-top: 8px; font-size: 0.9em;"></div>
-            <button type="submit" id="stripe-submit-btn" style="margin-top: 12px; padding: 10px 20px; background: #635bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 1em;">
-              Save card &amp; continue
-            </button>
-          </form>
-        </div>
-        <script src="https://js.stripe.com/v3/" defer></script>
-        <script>
-          (function () {
-            // Stripe.js may not be loaded yet (defer). Wait until it is,
-            // then mount Elements once and bind the submit handler.
-            function mountWhenReady() {
-              if (typeof window.Stripe === 'undefined') {
-                setTimeout(mountWhenReady, 50);
-                return;
-              }
-              if (window._bssStripeMounted) return;
-              window._bssStripeMounted = true;
-              var stripe = Stripe({{ stripe_publishable_key | tojson }});
-              var elements = stripe.elements();
-              var card = elements.create('card');
-              card.mount('#stripe-card-element');
-              card.on('change', function (event) {
-                var displayError = document.getElementById('stripe-card-errors');
-                displayError.textContent = event.error ? event.error.message : '';
-              });
-              var form = document.getElementById('stripe-payment-form');
-              form.addEventListener('submit', function (event) {
-                event.preventDefault();
-                document.getElementById('stripe-submit-btn').disabled = true;
-                stripe.createPaymentMethod({
-                  type: 'card',
-                  card: card,
-                }).then(function (result) {
-                  if (result.error) {
-                    document.getElementById('stripe-card-errors').textContent = result.error.message;
-                    document.getElementById('stripe-submit-btn').disabled = false;
-                  } else {
-                    // Submit pm_id to the portal via HTMX-style POST. We
-                    // do this with fetch so we can swap #signup-progress
-                    // ourselves on the response.
-                    var formData = new FormData();
-                    formData.append('payment_method_id', result.paymentMethod.id);
-                    fetch('/signup/step/cof?session={{ session_id }}', {
-                      method: 'POST',
-                      body: formData,
-                      credentials: 'same-origin',
-                    }).then(function (resp) {
-                      return resp.text();
-                    }).then(function (html) {
-                      document.getElementById('signup-progress').outerHTML = html;
-                    });
-                  }
-                });
-              });
-            }
-            mountWhenReady();
-          })();
-        </script>
+        {# v0.16 — repurposed: "Stripe Checkout in flight". The customer
+           was redirected to Stripe's hosted form by /checkout-init;
+           we're waiting for Stripe to redirect them back to
+           /checkout-return. If they navigated back via the cancel-URL
+           or Back button, this step renders a "resume" CTA so they can
+           retry without restarting the whole signup. #}
+        <strong>Waiting for you to finish the card form on Stripe.</strong>
+        <p style="margin: 0 0 8px;">
+          If the Stripe page didn't open or you came back without
+          completing it, you can retry the redirect:
+        </p>
+        <form method="post" action="/signup/step/cof/checkout-init?session={{ session_id }}">
+          <button type="submit"
+                  style="margin-top: 8px; padding: 10px 20px; background: #635bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 1em;">
+            Open the Stripe card form again
+          </button>
+        </form>
       {% elif signup.step == 'pending_order' %}
         Card on file. Placing the order for {{ plan_id }}…
       {% elif signup.step == 'pending_activation' %}
@@ -203,17 +162,14 @@
          class="progress-trigger" hidden></div>
   {% elif signup.step == 'pending_cof' %}
     {% if payment_provider == 'stripe' %}
-      {# v0.16 stripe mode — pending_cof immediately pivots to
-         pending_cof_elements (mounts the iframe). The pivot fires
-         server-side via the same POST endpoint; the route detects
-         empty payment_method_id + stripe mode and just transitions
-         the state. No card data is submitted yet — the customer's
-         actual card entry happens inside the iframe. #}
-      <div hx-post="/signup/step/cof/mount?session={{ session_id }}"
-           hx-trigger="load"
-           hx-target="#signup-progress"
-           hx-swap="outerHTML"
-           class="progress-trigger" hidden></div>
+      {# v0.16 stripe mode — Stripe Checkout flow. The customer clicks
+         the "Continue to Stripe →" button rendered above; the form
+         POSTs to /signup/step/cof/checkout-init which 303-redirects
+         the browser to Stripe's hosted card form. NO HTMX auto-trigger
+         here — the customer's explicit click is the trigger (per the
+         "no pre-step UI" doctrine, and because a server-side redirect
+         would yank the customer mid-page-load).
+      #}
     {% else %}
       <div hx-post="/signup/step/cof?session={{ session_id }}"
            hx-trigger="load"
@@ -222,17 +178,12 @@
            class="progress-trigger" hidden></div>
     {% endif %}
   {% elif signup.step == 'pending_cof_elements' %}
-    {# v0.16 — Elements is mounted; the customer is entering their card.
-       The Stripe.js submit handler POSTs the resulting pm_* id directly
-       (see the inline script above). Until then we poll every 5s so a
-       JS-disabled / stuck client doesn't sit forever; the poll endpoint
-       returns this same fragment, the JS doesn't re-mount (guard via
-       `window._bssStripeMounted`). #}
-    <div hx-get="/signup/step/cof/poll?session={{ session_id }}"
-         hx-trigger="load delay:5s"
-         hx-target="#signup-progress"
-         hx-swap="outerHTML"
-         class="progress-trigger" hidden></div>
+    {# v0.16 — "Stripe Checkout in flight" sub-state. The customer was
+       redirected to Stripe; we're waiting for them to come back via
+       /checkout-return (which advances state to pending_order). If
+       they hit Back / hit cancel-URL, the body above renders a "retry"
+       button. NO auto-poll here — Stripe's redirect is what advances
+       the state, not our polling. #}
   {% elif signup.step == 'pending_order' %}
     <div hx-post="/signup/step/order?session={{ session_id }}"
          hx-trigger="load"

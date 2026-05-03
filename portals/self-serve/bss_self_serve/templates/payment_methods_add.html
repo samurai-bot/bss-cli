@@ -1,72 +1,30 @@
 {% extends "base.html" %}
 {% block title %}Add a card · bss-cli self-serve{% endblock %}
 
-{# v0.16 — Stripe-Elements-only template. The mock-mode form lives in
-   payment_methods_add_mock.html so this file's source carries NO PAN
-   input bytes — the PCI scope guard's grep stays satisfied for any
-   production-stripe deployment.
+{# v0.16 Track 2 redo — Stripe Checkout (full-page redirect), not Elements.
+   This template's source carries NO PAN input bytes — the PCI scope guard's
+   grep stays satisfied for any production-stripe deployment.
 #}
 
 {% block main %}
 <section class="cof-add">
   <h1 class="page-title">Add a card</h1>
   <p class="page-subtitle">
-    Card details go directly from your browser to Stripe — they never
-    touch our servers.
+    You'll be redirected to a secure Stripe-hosted card form. Card
+    details go directly to Stripe — they never touch our servers.
   </p>
 
   {% if error %}
     <p class="form-error" role="alert">{{ error }}</p>
   {% endif %}
 
-  <form id="stripe-payment-form" method="post" action="/payment-methods/add" class="cof-form">
-    <input type="hidden" name="payment_method_id" id="pm-id-field" value="" />
-    <div id="stripe-card-element" style="padding: 12px; border: 1px solid #ccc; border-radius: 4px; background: #fff; margin-bottom: 8px;"></div>
-    <div id="stripe-card-errors" role="alert" style="color: #c00; margin-bottom: 12px; font-size: 0.9em;"></div>
+  <form method="post" action="/payment-methods/add/checkout-init">
     <div class="dashboard-actions">
-      <button type="submit" id="stripe-submit-btn" class="welcome-cta welcome-cta--primary">
-        Save card
+      <button type="submit" class="welcome-cta welcome-cta--primary">
+        Continue to Stripe →
       </button>
       <a class="welcome-cta" href="/payment-methods">Cancel</a>
     </div>
   </form>
-
-  <script src="https://js.stripe.com/v3/" defer></script>
-  <script>
-    (function () {
-      function mountWhenReady() {
-        if (typeof window.Stripe === 'undefined') {
-          setTimeout(mountWhenReady, 50);
-          return;
-        }
-        var stripe = Stripe({{ stripe_publishable_key | tojson }});
-        var elements = stripe.elements();
-        var card = elements.create('card');
-        card.mount('#stripe-card-element');
-        card.on('change', function (event) {
-          document.getElementById('stripe-card-errors').textContent =
-            event.error ? event.error.message : '';
-        });
-        document.getElementById('stripe-payment-form')
-          .addEventListener('submit', function (event) {
-            event.preventDefault();
-            document.getElementById('stripe-submit-btn').disabled = true;
-            stripe.createPaymentMethod({ type: 'card', card: card })
-              .then(function (result) {
-                if (result.error) {
-                  document.getElementById('stripe-card-errors').textContent =
-                    result.error.message;
-                  document.getElementById('stripe-submit-btn').disabled = false;
-                } else {
-                  document.getElementById('pm-id-field').value =
-                    result.paymentMethod.id;
-                  event.target.submit();
-                }
-              });
-          });
-      }
-      mountWhenReady();
-    })();
-  </script>
 </section>
 {% endblock %}

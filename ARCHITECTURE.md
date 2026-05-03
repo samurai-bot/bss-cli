@@ -549,31 +549,47 @@ doctrine + alternatives in DECISIONS.md (2026-05-02 entries).
 
 The payment provider seam lives in the payment service itself
 (`services/payment/app/domain/`), not the channel layer — payment is
-a back-office concern, not a customer-input concern. The portal's
-Stripe Elements flow (Track 2) only carries the customer's card data
-from the browser directly to Stripe; BSS sees only the resulting
-`pm_*` id.
+a back-office concern, not a customer-input concern. The portal uses
+**Stripe Checkout** (full-page redirect to Stripe-hosted card form);
+the customer's PAN goes directly to Stripe's domain — BSS only ever
+sees the resulting `pm_*` id (DECISIONS 2026-05-03 — Checkout over
+Elements, browser compatibility).
 
 ```
 ┌──── browser ────┐    ┌──── portal-self-serve ─────────┐    ┌── payment service (8003) ──────┐    ┌── Stripe ──┐
 │                 │    │                                 │    │                                 │    │            │
-│ /signup/step/cof│    │ render Stripe.js + Elements     │    │                                 │    │            │
-│   ──Elements──▶ │    │   (mode = stripe; PCI SAQ A)    │    │                                 │    │            │
-│                 │◀───┤                                 │    │                                 │    │            │
-│  Card data ────────────── direct browser → Stripe ──────────────────────────────────────────────▶│ tokenize  │
-│                 │    │                                 │    │                                 │    │  ↓ pm_*    │
-│  ◀─── pm_* ───────────────────────────────────────────────────────────────────────────────────── │            │
+│ /signup/step/cof│    │ render "Continue to Stripe →"   │    │                                 │    │            │
+│ pending_cof step│◀───┤   button (no Stripe.js)         │    │                                 │    │            │
 │                 │    │                                 │    │                                 │    │            │
-│ POST /signup/   │    │  pm_* + customer_id             │    │  POST /tmf-api/.../paymentMethod│    │            │
-│  step/cof?…  ──▶│    │  ──bss-clients──────────────────▶  PaymentMethodService.register     │    │            │
-│                 │    │                                 │    │   (token_provider='stripe')     │    │            │
-│                 │    │                                 │    │                                 │    │            │
-│                 │    │                                 │    │  StripeTokenizerAdapter         │    │            │
+│ click button ──▶│    │ POST /signup/step/cof/checkout-init                                    │    │            │
+│                 │    │   ensure cus_* via bss-clients ─────▶ POST /admin-api/.../ensure       │    │            │
+│                 │    │   ◀───── cus_* ──────────────────────│  StripeTokenizerAdapter         │    │            │
 │                 │    │                                 │    │  .ensure_customer ─────────────▶│ Customer.  │
 │                 │    │                                 │    │  ◀───── cus_* ──────────────────│  create   │
 │                 │    │                                 │    │  (cached in payment.customer)   │    │            │
-│                 │    │                                 │    │  .attach_payment_method ───────▶│ PaymentMet │
-│                 │    │                                 │    │                                 │ hod.attach │
+│                 │    │   stripe.checkout.Session.create ──────────────────────────────────────────▶│ Checkout │
+│                 │    │     (mode=setup, customer=cus_*)│    │                                 │ Session    │
+│                 │    │   ◀──── session.url (cs_*) ────────────────────────────────────────────────│  .create  │
+│                 │    │                                 │    │                                 │    │            │
+│ ◀── 303 redirect to checkout.stripe.com/c/pay/cs_* ────┤    │                                 │    │            │
+│                 │    │                                 │    │                                 │    │            │
+│ Customer enters card on Stripe-hosted page             │    │                                 │    │            │
+│ (Stripe's domain, no iframe, no JS we control)         │    │                                 │    │            │
+│                 │    │                                 │    │                                 │    │            │
+│ ◀── 303 redirect back to portal: ──────────────────────────────────────────────────────────────────│            │
+│   /signup/step/cof/checkout-return?cs_id=cs_*          │    │                                 │    │            │
+│                 │    │                                 │    │                                 │    │            │
+│ GET checkout-   │    │ stripe.checkout.Session.retrieve                                        │    │            │
+│   return ──────▶│    │   (expand=setup_intent) ─────────────────────────────────────────────────▶│ retrieve  │
+│                 │    │ ◀──── setup_intent.payment_method (pm_*) ──────────────────────────────────│            │
+│                 │    │                                 │    │                                 │    │            │
+│                 │    │ POST /tmf-api/.../paymentMethod │    │ PaymentMethodService.register   │    │            │
+│                 │    │   (pm_*, token_provider=stripe) ───▶                                    │    │            │
+│                 │    │                                 │    │ (cus_* already attached at      │    │            │
+│                 │    │                                 │    │  Checkout time, so no extra     │    │            │
+│                 │    │                                 │    │  attach call needed)            │    │            │
+│                 │    │                                 │    │                                 │    │            │
+│ ◀── 303 to /signup/PLAN_M/progress (state=pending_order)    │                                 │    │            │
 │                 │    │                                 │    │                                 │    │            │
 │                 │    │                                 │    │  --- at renewal time ---        │    │            │
 │                 │    │                                 │    │  PaymentService.charge          │    │            │

@@ -2182,6 +2182,7 @@ dependencies = [
     { name = "python-multipart" },
     { name = "qrcode" },
     { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "stripe" },
     { name = "structlog" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -2211,6 +2212,7 @@ requires-dist = [
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "qrcode", specifier = ">=7.4" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
+    { name = "stripe", specifier = ">=10.0" },
     { name = "structlog", specifier = ">=24.4" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
 ]

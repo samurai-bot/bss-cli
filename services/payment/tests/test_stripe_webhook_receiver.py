@@ -199,12 +199,24 @@ class TestEventRouting:
         )
         assert resp.status_code == 200, resp.content
 
+        # Scope to JUST-emitted events; fixture is deterministic so
+        # prior manual-smoke runs may have committed identical-payload
+        # events.
+        from datetime import datetime, timedelta, timezone
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=10)
+        pi_id = fx["body_parsed"]["data"]["object"]["payment_intent"]
         result = await db_session.execute(
-            select(DomainEvent).where(DomainEvent.event_type == "payment.refunded")
+            select(DomainEvent).where(
+                DomainEvent.event_type == "payment.refunded",
+                DomainEvent.occurred_at >= cutoff,
+            )
         )
         events = result.scalars().all()
-        assert len(events) == 1
-        ev = events[0]
+        ours = [
+            e for e in events if e.payload.get("provider_call_id") == pi_id
+        ]
+        assert len(ours) == 1
+        ev = ours[0]
         # Motto #1: amount is recorded, NOT auto-applied to a balance.
         assert "amount_refunded_minor" in ev.payload
         assert "provider_call_id" in ev.payload
@@ -232,15 +244,19 @@ class TestEventRouting:
         )
         assert resp.status_code == 200, resp.content
 
+        # Find OUR event by occurred_at (just-emitted, within the test's
+        # narrow window). The fixture's stripe_dispute_id is deterministic
+        # so prior manual-smoke runs may have committed events with the
+        # same id; counting by id over-counts.
+        from datetime import datetime, timedelta, timezone
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=10)
         result = await db_session.execute(
             select(DomainEvent).where(
-                DomainEvent.event_type == "payment.dispute_opened"
+                DomainEvent.event_type == "payment.dispute_opened",
+                DomainEvent.occurred_at >= cutoff,
             )
         )
         events = result.scalars().all()
-        # Filter to the dispute we just created (other tests in the
-        # same suite may also emit payment.dispute_opened; we want
-        # exactly one for THIS dispute id).
         dispute_id = fx["body_parsed"]["data"]["object"]["id"]
         ours = [
             e for e in events if e.payload.get("stripe_dispute_id") == dispute_id

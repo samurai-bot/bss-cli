@@ -50,7 +50,7 @@ def _add_template(payment_provider: str) -> str:
 import structlog
 from bss_clients import PolicyViolationFromServer
 from bss_portal_auth import IdentityView, record_portal_action
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from ..clients import get_clients
@@ -168,35 +168,34 @@ async def add_method_form(
             "error": None,
             "fields": {},
             "payment_provider": payment_provider,
-            "stripe_publishable_key": getattr(
-                request.app.state, "payment_stripe_publishable_key", ""
-            ),
         },
     )
 
 
-# ── POST /payment-methods/add ────────────────────────────────────────────
+# ── POST /payment-methods/add (mock-mode card-form submit) ──────────────
+#
+# v0.16 Track 2 redo — this route now ONLY handles the mock-mode form
+# submission. Stripe-mode add-card goes through a separate two-leg
+# flow: POST /payment-methods/add/checkout-init → 303 to Stripe →
+# GET /payment-methods/add/checkout-return → register pm_*.
 
 
 @router.post("/payment-methods/add")
 async def add_method(
     request: Request,
-    # v0.16 — both mock and stripe paths use the same Form fields,
-    # all optional. Mock requires card_number/exp_*/cvv/holder_name;
-    # stripe requires only payment_method_id (the pm_* from Stripe.js).
-    # The route detects mode from app.state and validates accordingly.
     card_number: str = Form(default=""),
     exp_month: int | None = Form(default=None),
     exp_year: int | None = Form(default=None),
     cvv: str = Form(default=""),  # noqa: ARG001 — Stripe-shaped seam
     holder_name: str = Form(default=""),  # noqa: ARG001 — surfaced in v1.0
     postal_code: str | None = Form(default=None),  # noqa: ARG001 — surfaced in v1.0
-    payment_method_id: str = Form(default=""),  # v0.16 stripe path
     customer_id: str = Depends(requires_linked_customer),
     _step_up: None = Depends(requires_step_up("payment_method_add")),
 ) -> Response:
-    """Add a card on file. Mock path tokenizes locally; stripe path
-    accepts a pm_* id from Stripe Elements.
+    """Add a card on file (mock-mode only).
+
+    Stripe-mode is served by /payment-methods/add/checkout-init →
+    Stripe Checkout → /payment-methods/add/checkout-return.
     """
     clients = get_clients()
     factory = request.app.state.db_session_factory
@@ -204,76 +203,12 @@ async def add_method(
     payment_provider = getattr(request.app.state, "payment_provider", "mock")
 
     if payment_provider == "stripe":
-        if not payment_method_id.startswith("pm_"):
-            return templates.TemplateResponse(
-                request,
-                _add_template(payment_provider),
-                {
-                    "error": "Card details didn't reach Stripe — please try again.",
-                    "fields": {},
-                    "payment_provider": payment_provider,
-                    "stripe_publishable_key": getattr(
-                        request.app.state, "payment_stripe_publishable_key", ""
-                    ),
-                },
-                status_code=422,
-            )
-        try:
-            await clients.payment.create_payment_method(
-                customer_id=customer_id,
-                card_token=payment_method_id,
-                last4="",
-                brand="",
-                tokenization_provider="stripe",
-            )
-        except PolicyViolationFromServer as exc:
-            async with factory() as db:
-                await record_portal_action(
-                    db,
-                    customer_id=customer_id,
-                    identity_id=iid,
-                    action="payment_method_add",
-                    route="/payment-methods/add",
-                    method="POST",
-                    success=False,
-                    error_rule=exc.rule,
-                    step_up_consumed=True,
-                    ip=_client_ip(request),
-                    user_agent=_client_ua(request),
-                )
-                await db.commit()
-            if not is_known(exc.rule):
-                log.info(
-                    "portal.payment_methods.unknown_policy_rule", rule=exc.rule
-                )
-            return templates.TemplateResponse(
-                request,
-                _add_template(payment_provider),
-                {
-                    "error": render(exc.rule),
-                    "fields": {},
-                    "payment_provider": payment_provider,
-                    "stripe_publishable_key": getattr(
-                        request.app.state, "payment_stripe_publishable_key", ""
-                    ),
-                },
-                status_code=422,
-            )
-        async with factory() as db:
-            await record_portal_action(
-                db,
-                customer_id=customer_id,
-                identity_id=iid,
-                action="payment_method_add",
-                route="/payment-methods/add",
-                method="POST",
-                success=True,
-                step_up_consumed=True,
-                ip=_client_ip(request),
-                user_agent=_client_ua(request),
-            )
-            await db.commit()
-        return RedirectResponse("/payment-methods", status_code=303)
+        # Wrong route for stripe-mode — bounce to the Checkout-init
+        # entry point. Browsers that submit the bare form here (no
+        # mock fields) land here cleanly.
+        return RedirectResponse(
+            url="/payment-methods/add/checkout-init", status_code=303
+        )
 
     # Mock path — preserves the v0.10 server-side tokenize behavior.
     if (
@@ -295,7 +230,6 @@ async def add_method(
                 "error": "Please fill in every field with a valid value.",
                 "fields": {"exp_month": exp_month, "exp_year": exp_year},
                 "payment_provider": payment_provider,
-                "stripe_publishable_key": "",
             },
             status_code=422,
         )
@@ -325,7 +259,6 @@ async def add_method(
                 "error": "That card number doesn't look right. Check the digits.",
                 "fields": {"exp_month": exp_month, "exp_year": exp_year},
                 "payment_provider": payment_provider,
-                "stripe_publishable_key": "",
             },
             status_code=422,
         )
@@ -364,7 +297,6 @@ async def add_method(
                 "error": render(exc.rule),
                 "fields": {"exp_month": exp_month, "exp_year": exp_year},
                 "payment_provider": payment_provider,
-                "stripe_publishable_key": "",
             },
             status_code=422,
         )
@@ -385,6 +317,200 @@ async def add_method(
         await db.commit()
 
     return RedirectResponse(url="/payment-methods?flash=added", status_code=303)
+
+
+# ── v0.16 Stripe Checkout: init + return ────────────────────────────────
+
+
+@router.post("/payment-methods/add/checkout-init")
+async def add_method_checkout_init(
+    request: Request,
+    customer_id: str = Depends(requires_linked_customer),
+    _step_up: None = Depends(requires_step_up("payment_method_add")),
+) -> Response:
+    """Mint a Stripe CheckoutSession + 303 redirect to Stripe.
+
+    Same shape as the signup flow's checkout-init: ensure cus_*, create
+    session in mode=setup, send the customer to Stripe's hosted form.
+    """
+    import asyncio
+
+    import stripe
+
+    settings = request.app.state.settings
+    api_key = getattr(request.app.state, "payment_stripe_api_key", "")
+    public_url = settings.bss_portal_public_url.rstrip("/")
+    if not api_key:
+        return templates.TemplateResponse(
+            request,
+            _add_template("stripe"),
+            {
+                "error": "Payment is misconfigured (Stripe key missing). "
+                "Please contact support.",
+                "fields": {},
+                "payment_provider": "stripe",
+            },
+            status_code=503,
+        )
+
+    clients = get_clients()
+    iid = _identity_id(request)
+    factory = request.app.state.db_session_factory
+
+    # Look up the customer's email to seed Stripe's customer record.
+    # We have the customer_id via the verified-session dep; the email
+    # lives on portal_auth.identity (already validated by login).
+    email = ""
+    if iid:
+        try:
+            from sqlalchemy import select
+
+            from bss_portal_auth.models import Identity
+
+            async with factory() as db:
+                row = (
+                    await db.execute(
+                        select(Identity).where(Identity.id == iid)
+                    )
+                ).scalar_one_or_none()
+                if row:
+                    email = row.email
+        except Exception:  # noqa: BLE001 — best-effort lookup
+            email = ""
+
+    try:
+        ensure_resp = await clients.payment.ensure_customer(
+            customer_id=customer_id,
+            email=email or f"{customer_id}@bss-cli.local",
+        )
+        cus_id = ensure_resp["customer_external_ref"]
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "portal.payment_methods.ensure_customer_failed", error=str(exc)
+        )
+        return templates.TemplateResponse(
+            request,
+            _add_template("stripe"),
+            {
+                "error": "Couldn't reach the payment service. Please try again.",
+                "fields": {},
+                "payment_provider": "stripe",
+            },
+            status_code=503,
+        )
+
+    return_url = (
+        f"{public_url}/payment-methods/add/checkout-return"
+        f"?cs_id={{CHECKOUT_SESSION_ID}}"
+    )
+    cancel_url = f"{public_url}/payment-methods"
+    try:
+        cs = await asyncio.to_thread(
+            stripe.checkout.Session.create,
+            api_key=api_key,
+            mode="setup",
+            payment_method_types=["card"],
+            customer=cus_id,
+            success_url=return_url,
+            cancel_url=cancel_url,
+            metadata={"bss_customer_id": customer_id, "bss_action": "add_pm"},
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "portal.payment_methods.checkout_session_create_failed",
+            customer_id=customer_id,
+            error=str(exc),
+        )
+        return templates.TemplateResponse(
+            request,
+            _add_template("stripe"),
+            {
+                "error": "Couldn't reach Stripe. Please try again.",
+                "fields": {},
+                "payment_provider": "stripe",
+            },
+            status_code=503,
+        )
+
+    cs_url = cs.get("url") if isinstance(cs, dict) else cs.url
+    return RedirectResponse(url=cs_url, status_code=303)
+
+
+@router.get("/payment-methods/add/checkout-return")
+async def add_method_checkout_return(
+    request: Request,
+    cs_id: str = Query(...),
+    customer_id: str = Depends(requires_linked_customer),
+) -> Response:
+    """Stripe redirects the customer back here after Checkout.
+
+    Retrieves the session, extracts pm_*, registers via bss-clients,
+    redirects to /payment-methods.
+    """
+    import asyncio
+
+    import stripe
+
+    api_key = getattr(request.app.state, "payment_stripe_api_key", "")
+    if not api_key or not cs_id.startswith("cs_"):
+        return RedirectResponse("/payment-methods?flash=error", status_code=303)
+
+    try:
+        cs = await asyncio.to_thread(
+            stripe.checkout.Session.retrieve,
+            cs_id,
+            api_key=api_key,
+            expand=["setup_intent"],
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "portal.payment_methods.checkout_session_retrieve_failed",
+            cs_id=cs_id,
+            error=str(exc),
+        )
+        return RedirectResponse("/payment-methods?flash=error", status_code=303)
+
+    cs_dict = cs.to_dict() if hasattr(cs, "to_dict") else dict(cs)
+    meta = cs_dict.get("metadata") or {}
+    if meta.get("bss_customer_id") != customer_id:
+        log.warning(
+            "portal.payment_methods.checkout_metadata_mismatch",
+            cs_id=cs_id,
+            session_customer=customer_id,
+            cs_customer=meta.get("bss_customer_id"),
+        )
+        return RedirectResponse("/payment-methods?flash=error", status_code=303)
+
+    si = cs_dict.get("setup_intent") or {}
+    if isinstance(si, str):
+        si_obj = await asyncio.to_thread(
+            stripe.SetupIntent.retrieve, si, api_key=api_key
+        )
+        si = si_obj.to_dict() if hasattr(si_obj, "to_dict") else dict(si_obj)
+    pm_id = si.get("payment_method") if isinstance(si, dict) else None
+    if not pm_id or not str(pm_id).startswith("pm_"):
+        return RedirectResponse("/payment-methods?flash=error", status_code=303)
+
+    clients = get_clients()
+    try:
+        await clients.payment.create_payment_method(
+            customer_id=customer_id,
+            card_token=pm_id,
+            last4="",
+            brand="",
+            tokenization_provider="stripe",
+        )
+    except PolicyViolationFromServer as exc:
+        if not is_known(exc.rule):
+            log.info(
+                "portal.payment_methods.unknown_policy_rule", rule=exc.rule
+            )
+        return RedirectResponse(
+            f"/payment-methods?flash=error&rule={exc.rule}",
+            status_code=303,
+        )
+
+    return RedirectResponse("/payment-methods?flash=added", status_code=303)
 
 
 # ── POST /payment-methods/<pm_id>/remove ─────────────────────────────────

@@ -43,6 +43,7 @@ Doctrine (V0_11_0.md + CLAUDE.md ``(v0.11+ / chat only)``):
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from uuid import uuid4
 
@@ -346,6 +347,17 @@ async def signup_progress(
             "session_id": session,
             "plan_id": plan_id,
             "signup": sig,
+            # v0.16 — drives the {% if payment_provider == 'stripe' %}
+            # block in progress.html that pre-loads Stripe.js eagerly,
+            # so window.Stripe is defined before any HTMX-injected
+            # Elements-mount fragment runs. Same field also flows into
+            # the included signup_progress.html partial via _render_step_fragment.
+            "payment_provider": getattr(
+                request.app.state, "payment_provider", "mock"
+            ),
+            "stripe_publishable_key": getattr(
+                request.app.state, "payment_stripe_publishable_key", ""
+            ),
         },
     )
 
@@ -632,6 +644,13 @@ async def signup_step_cof(
     factory = request.app.state.db_session_factory
     sig = await _resolve(store, session, identity)
 
+    # v0.16: detect whether this is an HTMX-AJAX call or a plain
+    # browser navigation (form submit when JS failed to intercept).
+    # HTMX sets HX-Request: true on every fetch; if it's missing
+    # AND the user is hitting this from a real browser, redirect
+    # back to the progress page so they don't see a bare partial.
+    is_htmx = request.headers.get("HX-Request", "").lower() == "true"
+
     # Stripe mode: the customer's pm_* id is the only thing on the form.
     # The state may be `pending_cof` (immediate fetch from Elements
     # success) or `pending_cof_elements` (after the mount endpoint had
@@ -639,14 +658,27 @@ async def signup_step_cof(
     payment_provider = getattr(request.app.state, "payment_provider", "mock")
     if payment_provider == "stripe":
         if sig.step not in ("pending_cof", "pending_cof_elements"):
+            if not is_htmx:
+                return RedirectResponse(
+                    url=f"/signup/{sig.plan}/progress?session={sig.session_id}",
+                    status_code=303,
+                )
             return _render_step_fragment(request, sig)
         form = await request.form()
         pm_id = (form.get("payment_method_id") or "").strip()
         if not pm_id:
             # No pm_* yet — render the Elements iframe again. Polling
-            # path lands here too.
+            # path lands here too. If this came from a non-HTMX form
+            # submit (Safari ITP blocked the JS, browser POSTed the
+            # bare form), redirect back to the progress page so the
+            # customer sees the full styled page, not a bare partial.
             sig.step = "pending_cof_elements"
             await store.update(sig)
+            if not is_htmx:
+                return RedirectResponse(
+                    url=f"/signup/{sig.plan}/progress?session={sig.session_id}",
+                    status_code=303,
+                )
             return _render_step_fragment(request, sig)
         return await _signup_step_cof_stripe(
             request,
@@ -797,57 +829,269 @@ async def _signup_step_cof_stripe(
     return _render_step_fragment(request, sig)
 
 
-# ── POST /signup/step/cof/mount — v0.16 Stripe Elements pivot ─────────
+# ── v0.16 Stripe Checkout (replaces the Elements iframe path) ────────
+#
+# Spec amendment: Track 2 originally specified Stripe.js + Elements
+# (DECISIONS 2026-05-03 PCI scope entry). In manual smoke testing the
+# Elements iframe failed to render reliably across browsers (Safari ITP,
+# strict cross-origin storage, HTMX swap script-execution issues). The
+# pragmatic answer: switch to Stripe Checkout — full-page redirect to
+# a Stripe-hosted card form. No iframe, no Stripe.js in the browser,
+# no client-side state. Works in every browser.
+#
+# Two routes: init (POST → redirect to Stripe) and return (GET ← Stripe
+# redirects back to here with the cs_id; we retrieve + register the pm_*).
 
 
-@router.post("/signup/step/cof/mount", response_class=HTMLResponse)
-async def signup_step_cof_mount(
+@router.post("/signup/step/cof/checkout-init")
+async def signup_step_cof_checkout_init(
     request: Request,
     session: str = Query(...),
     identity: IdentityView = Depends(requires_verified_email),
-) -> HTMLResponse:
-    """v0.16 — pivots state from pending_cof → pending_cof_elements.
+) -> Response:
+    """Mint a Stripe CheckoutSession + 303 redirect to Stripe's hosted form.
 
-    Auto-fired by the progress fragment in stripe mode. The pivot is
-    server-side (not pure client-side) so the timeline label updates
-    consistently and the Elements iframe is rendered with the
-    publishable key from app.state, not the form.
-
-    No card data is submitted yet — the customer's actual card entry
-    happens inside the iframe; the iframe's submit handler POSTs to
-    /signup/step/cof with the resulting pm_id.
+    Flow:
+      1. Look up the BSS customer's email via portal_auth.identity.
+      2. Call payment-service ensure_customer to mint/cache the cus_*.
+      3. Call stripe.checkout.Session.create(mode="setup", ...) with
+         that customer attached, success/cancel URLs pointing back here.
+      4. 303 redirect to session.url — the customer's browser navigates
+         to the Stripe-hosted card form.
     """
+    import stripe
+
     store = request.app.state.session_store
+    factory = request.app.state.db_session_factory
     sig = await _resolve(store, session, identity)
-    if sig.step != "pending_cof":
-        # Already advanced (or rolled back) — render whatever's current.
+    if sig.step not in ("pending_cof", "pending_cof_elements"):
+        return RedirectResponse(
+            url=f"/signup/{sig.plan}/progress?session={sig.session_id}",
+            status_code=303,
+        )
+
+    settings = request.app.state.settings
+    api_key = getattr(request.app.state, "payment_stripe_api_key", "")
+    public_url = settings.bss_portal_public_url.rstrip("/")
+    if not api_key:
+        sig.step = "failed"
+        sig.step_error = "policy.payment.checkout.stripe_unconfigured"
+        await store.update(sig)
         return _render_step_fragment(request, sig)
-    sig.step = "pending_cof_elements"
+
+    # Step 1+2: ensure the cus_* exists (cached after first call).
+    clients = get_clients()
+    try:
+        ensure_resp = await clients.payment.ensure_customer(
+            customer_id=sig.customer_id,
+            email=identity.email,
+        )
+        cus_id = ensure_resp["customer_external_ref"]
+    except PolicyViolationFromServer as exc:
+        sig.step = "failed"
+        sig.step_error = exc.rule
+        await store.update(sig)
+        return _render_step_fragment(request, sig)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("portal.signup.ensure_customer_failed", error=str(exc))
+        sig.step = "failed"
+        sig.step_error = "policy.payment.checkout.ensure_customer_failed"
+        await store.update(sig)
+        return _render_step_fragment(request, sig)
+
+    # Step 3: create the Stripe CheckoutSession.
+    return_url = (
+        f"{public_url}/signup/step/cof/checkout-return"
+        f"?session={sig.session_id}"
+        # Stripe's {CHECKOUT_SESSION_ID} placeholder is filled by Stripe
+        # at redirect time, so we know which session to retrieve.
+        f"&cs_id={{CHECKOUT_SESSION_ID}}"
+    )
+    cancel_url = f"{public_url}/signup/{sig.plan}/progress?session={sig.session_id}"
+    try:
+        cs = await asyncio.to_thread(
+            stripe.checkout.Session.create,
+            api_key=api_key,
+            mode="setup",
+            payment_method_types=["card"],
+            customer=cus_id,
+            success_url=return_url,
+            cancel_url=cancel_url,
+            metadata={
+                "bss_customer_id": sig.customer_id,
+                "bss_signup_session": sig.session_id,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "portal.signup.checkout_session_create_failed",
+            customer_id=sig.customer_id,
+            error=str(exc),
+        )
+        sig.step = "failed"
+        sig.step_error = "policy.payment.checkout.session_create_failed"
+        await store.update(sig)
+        return _render_step_fragment(request, sig)
+
+    cs_url = cs.get("url") if isinstance(cs, dict) else cs.url
+    sig.step = "pending_cof_elements"  # repurposed: "checkout in flight"
     await store.update(sig)
-    return _render_step_fragment(request, sig)
+    log.info(
+        "portal.signup.checkout_redirect",
+        signup_session=sig.session_id,
+        customer_id=sig.customer_id,
+    )
+    return RedirectResponse(url=cs_url, status_code=303)
 
 
-# ── GET /signup/step/cof/poll — v0.16 Elements heartbeat ──────────────
-
-
-@router.get("/signup/step/cof/poll", response_class=HTMLResponse)
-async def signup_step_cof_poll(
+@router.get("/signup/step/cof/checkout-return")
+async def signup_step_cof_checkout_return(
     request: Request,
     session: str = Query(...),
+    cs_id: str = Query(...),
     identity: IdentityView = Depends(requires_verified_email),
-) -> HTMLResponse:
-    """v0.16 — keeps the Elements iframe rendered while waiting for
-    customer to enter their card.
+) -> Response:
+    """Stripe redirects the customer back here after completing Checkout.
 
-    The Stripe.js submit handler does the actual pm_id submission via
-    fetch (not HTMX); this poll fragment exists so a JS-disabled or
-    stuck client doesn't sit forever on a frozen iframe. Returns the
-    same fragment which keeps the iframe mounted (the JS guards via
-    `window._bssStripeMounted` to avoid double-mount).
+    Retrieves the CheckoutSession, extracts the resulting pm_*, and
+    registers it via bss-clients (which calls PaymentMethodService.register_method
+    → token_provider='stripe' → cus_* attach is a no-op since Checkout
+    pre-attached). Then advances state to pending_order.
     """
+    import stripe
+
     store = request.app.state.session_store
+    factory = request.app.state.db_session_factory
     sig = await _resolve(store, session, identity)
-    return _render_step_fragment(request, sig)
+
+    if sig.step not in ("pending_cof", "pending_cof_elements"):
+        # Already advanced — bounce back to progress.
+        return RedirectResponse(
+            url=f"/signup/{sig.plan}/progress?session={sig.session_id}",
+            status_code=303,
+        )
+
+    api_key = getattr(request.app.state, "payment_stripe_api_key", "")
+    if not api_key or not cs_id.startswith("cs_"):
+        sig.step = "failed"
+        sig.step_error = "policy.payment.checkout.bad_return"
+        await store.update(sig)
+        return RedirectResponse(
+            url=f"/signup/{sig.plan}/progress?session={sig.session_id}",
+            status_code=303,
+        )
+
+    try:
+        cs = await asyncio.to_thread(
+            stripe.checkout.Session.retrieve,
+            cs_id,
+            api_key=api_key,
+            expand=["setup_intent"],
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "portal.signup.checkout_session_retrieve_failed",
+            cs_id=cs_id,
+            error=str(exc),
+        )
+        sig.step = "failed"
+        sig.step_error = "policy.payment.checkout.retrieve_failed"
+        await store.update(sig)
+        return RedirectResponse(
+            url=f"/signup/{sig.plan}/progress?session={sig.session_id}",
+            status_code=303,
+        )
+
+    # Defence in depth: refuse if metadata doesn't match this signup.
+    cs_dict = cs.to_dict() if hasattr(cs, "to_dict") else dict(cs)
+    meta = cs_dict.get("metadata") or {}
+    if meta.get("bss_signup_session") != sig.session_id:
+        log.warning(
+            "portal.signup.checkout_session_metadata_mismatch",
+            cs_id=cs_id,
+            signup_session=sig.session_id,
+            cs_signup_session=meta.get("bss_signup_session"),
+        )
+        sig.step = "failed"
+        sig.step_error = "policy.payment.checkout.metadata_mismatch"
+        await store.update(sig)
+        return RedirectResponse(
+            url=f"/signup/{sig.plan}/progress?session={sig.session_id}",
+            status_code=303,
+        )
+
+    # Extract the pm_* — for mode="setup", lives at setup_intent.payment_method.
+    si = cs_dict.get("setup_intent") or {}
+    if isinstance(si, str):
+        # Not expanded (shouldn't happen since we passed expand=); refetch.
+        si_obj = await asyncio.to_thread(
+            stripe.SetupIntent.retrieve, si, api_key=api_key
+        )
+        si = si_obj.to_dict() if hasattr(si_obj, "to_dict") else dict(si_obj)
+    pm_id = si.get("payment_method") if isinstance(si, dict) else None
+    if not pm_id or not str(pm_id).startswith("pm_"):
+        log.warning(
+            "portal.signup.checkout_no_pm",
+            cs_id=cs_id,
+            setup_intent_status=si.get("status") if isinstance(si, dict) else None,
+        )
+        sig.step = "failed"
+        sig.step_error = "policy.payment.checkout.no_payment_method"
+        await store.update(sig)
+        return RedirectResponse(
+            url=f"/signup/{sig.plan}/progress?session={sig.session_id}",
+            status_code=303,
+        )
+
+    # Register via the existing stripe-mode payment-method flow.
+    clients = get_clients()
+    try:
+        method = await clients.payment.create_payment_method(
+            customer_id=sig.customer_id,
+            card_token=pm_id,
+            last4="",
+            brand="",
+            tokenization_provider="stripe",
+        )
+    except PolicyViolationFromServer as exc:
+        await _record_step(
+            factory,
+            sig,
+            customer_id=sig.customer_id,
+            action="signup_add_card",
+            route="/signup/step/cof/checkout-return",
+            success=False,
+            error_rule=exc.rule,
+            request=request,
+        )
+        if not is_known(exc.rule):
+            log.info("portal.signup.unknown_policy_rule", rule=exc.rule)
+        sig.step = "failed"
+        sig.step_error = exc.rule
+        await store.update(sig)
+        return RedirectResponse(
+            url=f"/signup/{sig.plan}/progress?session={sig.session_id}",
+            status_code=303,
+        )
+
+    sig.payment_method_id = (
+        method.get("id") if isinstance(method, dict) else None
+    )
+    await _record_step(
+        factory,
+        sig,
+        customer_id=sig.customer_id,
+        action="signup_add_card",
+        route="/signup/step/cof/checkout-return",
+        success=True,
+        request=request,
+    )
+    sig.step = "pending_order"
+    await store.update(sig)
+    return RedirectResponse(
+        url=f"/signup/{sig.plan}/progress?session={sig.session_id}",
+        status_code=303,
+    )
 
 
 # ── POST /signup/step/order — step 4 ────────────────────────────────────
