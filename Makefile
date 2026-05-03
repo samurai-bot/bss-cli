@@ -215,6 +215,21 @@ doctrine-check: check-clock
 		exit 1; \
 	fi; \
 	echo "✓ astream_once stays in chat route only (signup + post-login are direct)"
+	@# v0.16+ — Stripe sandbox fixtures must never carry real card numbers,
+	@# customer ids, payment method ids, payment intent ids, charge ids,
+	@# event ids, or live API keys. Spec: phases/V0_16_0.md line 61.
+	@# Track 0's redactor remaps every real id to a 12-char placeholder
+	@# (e.g. `pi_FX_PI001`) so this 14+-char regex stays empty.
+	@hits=$$(grep -rnE 'sk_live_|pi_[0-9A-Za-z]{14}|pm_[0-9A-Za-z]{14}|cus_[0-9A-Za-z]{14}|cn_[0-9A-Za-z]{14}|evt_[0-9A-Za-z]{14}' \
+		services/payment/tests/fixtures/ 2>/dev/null \
+		| grep -v 'README\.md' \
+		|| true); \
+	if [ -n "$$hits" ]; then \
+		echo "✗ stripe sandbox fixture contains a real id or live key:"; \
+		echo "$$hits"; \
+		exit 1; \
+	fi; \
+	echo "✓ stripe sandbox fixtures redacted (no real ids or live keys)"
 
 fmt:
 	uv run ruff format .
