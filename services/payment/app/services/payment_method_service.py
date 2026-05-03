@@ -104,17 +104,40 @@ class PaymentMethodService:
                 payment_method_id=provider_token,
                 customer_id=cus_external_ref,
             )
-            # Sane defaults so the row's NOT NULL exp_month/exp_year
-            # constraints don't trip when the portal sent 0/0 (stripe
-            # mode); the authoritative card metadata stays in Stripe.
-            if not exp_month:
-                exp_month = 12
-            if not exp_year:
-                exp_year = 2099
-            if not last4:
-                last4 = "stripe"  # surfaces in `bss list-methods`; readers know stripe-side is canonical
-            if not brand:
-                brand = "card"
+            # v0.16 Track 2 redo — fetch the real card details from
+            # Stripe so the BSS row carries the actual last4/brand
+            # (instead of the bss-clients placeholder "0000"/"card").
+            # The portal sends empty strings; we fetch authoritative
+            # values from Stripe's PaymentMethod object here. Best-
+            # effort: if Stripe is briefly unreachable, fall back to
+            # safe defaults so the row still lands.
+            try:
+                card_details = (
+                    await self._tokenizer.retrieve_payment_method_card(
+                        provider_token
+                    )
+                )
+                last4 = card_details.get("last4") or last4 or "stripe"
+                brand = card_details.get("brand") or brand or "card"
+                exp_month = (
+                    card_details.get("exp_month") or exp_month or 12
+                )
+                exp_year = card_details.get("exp_year") or exp_year or 2099
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "payment_method.stripe_card_details_fetch_failed",
+                    payment_method_id=provider_token,
+                    error=str(exc),
+                )
+                # Fall back to placeholders so the row still lands.
+                if not exp_month:
+                    exp_month = 12
+                if not exp_year:
+                    exp_year = 2099
+                if not last4:
+                    last4 = "stripe"
+                if not brand:
+                    brand = "card"
 
         pm = PaymentMethod(
             id=pm_id,

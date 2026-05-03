@@ -302,6 +302,33 @@ class StripeTokenizerAdapter:
             provider_call_id=payment_method_id,
         )
 
+    # ── retrieve_payment_method (v0.16 — for last4/brand fetch) ──────
+
+    async def retrieve_payment_method_card(
+        self, payment_method_id: str
+    ) -> dict[str, str | int | None]:
+        """Fetch card details (last4 / brand / exp) for a pm_*.
+
+        Used by PaymentMethodService.register_method when the portal
+        sent placeholder values (Track 2 redo: portal sends pm_id only,
+        the canonical card metadata stays in Stripe). Returns a dict
+        with keys: last4, brand, exp_month, exp_year. Raises
+        stripe.StripeError on transport failure.
+        """
+        pm = await asyncio.to_thread(
+            stripe.PaymentMethod.retrieve,
+            payment_method_id,
+            api_key=self._cfg.api_key,
+        )
+        pm_dict = pm.to_dict() if hasattr(pm, "to_dict") else dict(pm)
+        card = pm_dict.get("card") or {}
+        return {
+            "last4": card.get("last4") or "",
+            "brand": card.get("brand") or "card",
+            "exp_month": card.get("exp_month"),
+            "exp_year": card.get("exp_year"),
+        }
+
     # ── ensure_customer ───────────────────────────────────────────────
 
     async def ensure_customer(
