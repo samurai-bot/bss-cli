@@ -25,6 +25,10 @@ class UsageCreateRequest(BaseModel):
     unit: str
     source: str | None = None
     raw_cdr_ref: str | None = None
+    # v0.17 — channel/network adapter sets True when the underlying CDR
+    # was produced on a visited (roaming) network. Default False so
+    # every existing scenario YAML and rating fixture posts unchanged.
+    roaming_indicator: bool = False
 
 
 class UsageResponse(BaseModel):
@@ -42,6 +46,7 @@ class UsageResponse(BaseModel):
     raw_cdr_ref: str | None = None
     processed: bool = False
     processing_error: str | None = None
+    roaming_indicator: bool = False
     at_type: str = "Usage"
 
 
@@ -59,4 +64,5 @@ def to_usage_response(evt: UsageEvent) -> UsageResponse:
         raw_cdr_ref=evt.raw_cdr_ref,
         processed=evt.processed,
         processing_error=evt.processing_error,
+        roaming_indicator=evt.roaming_indicator,
     )

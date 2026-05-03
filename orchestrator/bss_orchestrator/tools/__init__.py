@@ -22,6 +22,7 @@ from . import (  # noqa: F401  (imports for side-effect: @register population)
     ops,
     order,
     payment,
+    port_request,
     provisioning,
     som,
     subscription,

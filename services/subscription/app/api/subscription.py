@@ -100,10 +100,16 @@ async def renew_subscription(
 
 
 class TerminateRequest(BaseModel):
-    """Optional body for /terminate. Empty body still works (back-compat)."""
+    """Optional body for /terminate. Empty body still works (back-compat).
+
+    v0.17 — ``release_inventory`` defaults True. Set False from the MNP
+    port-out flow, where the donor MSISDN has already been flipped to
+    terminal ``ported_out`` upstream.
+    """
 
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
     reason: str | None = None
+    release_inventory: bool = True
 
 
 @router.post("/subscription/{sub_id}/terminate", response_model=SubscriptionResponse)
@@ -113,7 +119,10 @@ async def terminate_subscription(
     svc: SubscriptionService = Depends(get_subscription_service),
 ) -> SubscriptionResponse:
     reason = (body.reason if body is not None else None) or "customer_requested"
-    sub = await svc.terminate(sub_id, reason=reason)
+    release_inventory = body.release_inventory if body is not None else True
+    sub = await svc.terminate(
+        sub_id, reason=reason, release_inventory=release_inventory
+    )
     return to_subscription_response(sub)
 
 

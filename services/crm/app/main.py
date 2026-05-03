@@ -6,7 +6,7 @@ from bss_middleware import BSSApiTokenMiddleware
 from fastapi import FastAPI
 
 from app.api import admin, health
-from app.api.crm import agent, case, chat_transcript, kyc
+from app.api.crm import agent, case, chat_transcript, kyc, port_request
 from app.api.inventory import esim, msisdn
 from app.api.tmf import customer, interaction, ticket
 from app.config import Settings
@@ -63,6 +63,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # Custom CRM — Chat transcripts (v0.12)
     app.include_router(chat_transcript.router, prefix="/crm-api/v1")
+
+    # Custom CRM — Port requests (v0.17 MNP, operator-only)
+    app.include_router(port_request.router, prefix="/crm-api/v1")
 
     # Inventory — MSISDN
     app.include_router(msisdn.router, prefix="/inventory-api/v1")

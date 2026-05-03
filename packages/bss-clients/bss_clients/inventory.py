@@ -81,6 +81,17 @@ class InventoryClient(BSSClient):
         )
         return resp.json()
 
+    async def add_msisdn_range(
+        self, prefix: str, count: int
+    ) -> dict[str, Any]:
+        """POST /inventory-api/v1/msisdn/add-range — v0.17 operator-only."""
+        resp = await self._request(
+            "POST",
+            "/inventory-api/v1/msisdn/add-range",
+            json={"prefix": prefix, "count": count},
+        )
+        return resp.json()
+
     # ── eSIM ────────────────────────────────────────────────────────
 
     async def list_esims(

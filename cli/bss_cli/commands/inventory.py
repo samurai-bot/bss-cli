@@ -1,8 +1,10 @@
-"""`bss inventory ...` — MSISDN + eSIM pool browsing.
+"""`bss inventory ...` — MSISDN + eSIM pool browsing + replenishment.
 
 Inventory is hosted inside the CRM service (port 8002) under
-``/inventory-api/v1/``. These commands are read-only — reservation and
-assignment happen as side effects of order activation in SOM.
+``/inventory-api/v1/``. List/show commands are read-only — reservation
+and assignment happen as side effects of order activation in SOM. The
+v0.17 ``msisdn add-range`` command is operator-only (no customer
+self-serve path) and writes directly via ``InventoryClient``.
 """
 
 from __future__ import annotations
@@ -71,6 +73,26 @@ def msisdn_show(msisdn: Annotated[str, typer.Argument(help="MSISDN, e.g. +658123
 
     async def _do() -> None:
         rprint(await get_clients().inventory.get_msisdn(msisdn))
+
+    _run_safely(_do())
+
+
+@msisdn_app.command("add-range")
+def msisdn_add_range(
+    prefix: Annotated[str, typer.Argument(help="Numeric prefix, 4–7 digits, e.g. 9100")],
+    count: Annotated[int, typer.Argument(help="Numbers to add (1..10000)")],
+) -> None:
+    """v0.17 — bulk-extend the MSISDN pool by ``count`` numbers starting
+    at ``{prefix}{0:04d}``. Idempotent on overlap (existing rows are
+    preserved). Operator-only.
+    """
+
+    async def _do() -> None:
+        out = await get_clients().inventory.add_msisdn_range(prefix, count)
+        rprint(
+            f"[green]inserted[/] {out.get('inserted')} / [dim]skipped[/] "
+            f"{out.get('skipped')}  ({out.get('first')} … {out.get('last')})"
+        )
 
     _run_safely(_do())
 

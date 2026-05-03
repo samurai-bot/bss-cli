@@ -137,6 +137,7 @@ _SLASH_HELP = (
     "[cyan]/reset[/]  "
     "[cyan]/focus[/] CUST  "
     "[cyan]/360[/]  "
+    "[cyan]/ports[/]  "
     "[cyan]/confirm[/]  "
     "[cyan]/config edit[/]  "
     "[cyan]/operator edit[/]  "
@@ -361,6 +362,7 @@ async def _cmd_help() -> None:
         "[cyan]/focus[/] CUST    pin a customer for the system prompt\n"
         "[cyan]/focus clear[/]   unset focus\n"
         "[cyan]/360[/] [CUST]    customer 360 (uses focus if no arg)\n"
+        "[cyan]/ports[/]         MNP queue: list / approve PORT-NNN / reject PORT-NNN <reason>\n"
         "[cyan]/confirm[/]       flip next turn allow_destructive=True\n"
         "[cyan]/config edit[/]   open settings.toml in $EDITOR; reload\n"
         "[cyan]/operator edit[/] open OPERATOR.md in $EDITOR; reload\n"
@@ -438,6 +440,81 @@ async def _cmd_360(
     # Persist as a tool turn so the browser surface (or a `--session`
     # resume) can see what the operator pulled up.
     await conv.append_tool_turn("customer.360", card)
+
+
+async def _cmd_ports(conv: Conversation, arg: str) -> None:
+    """v0.17 — operator MNP queue. ``/ports``, ``/ports list``,
+    ``/ports approve PORT-NNN``, ``/ports reject PORT-NNN <reason>``.
+
+    Operator-only by spec — no customer-self-serve equivalent.
+    """
+    clients = get_clients()
+    parts = arg.strip().split(maxsplit=2)
+    sub = parts[0].lower() if parts else "list"
+
+    if sub in ("", "list"):
+        try:
+            rows = await clients.crm.list_port_requests(limit=50)
+        except ClientError as exc:
+            rprint(f"[red]port_request.list failed:[/] {exc}")
+            return
+        if not rows:
+            rprint("[dim]no port requests[/]")
+            return
+        table = Table(title=f"port requests ({len(rows)})")
+        table.add_column("id")
+        table.add_column("dir")
+        table.add_column("state")
+        table.add_column("donor MSISDN")
+        table.add_column("carrier")
+        table.add_column("target sub")
+        table.add_column("port date")
+        for r in rows:
+            table.add_row(
+                r.get("id", "?"),
+                r.get("direction", "?"),
+                r.get("state", "?"),
+                r.get("donorMsisdn", "?"),
+                r.get("donorCarrier", "?"),
+                r.get("targetSubscriptionId") or "—",
+                r.get("requestedPortDate", "?"),
+            )
+        rprint(table)
+        await conv.append_tool_turn("port_request.list", str(table))
+        return
+
+    if sub == "approve":
+        if len(parts) < 2:
+            rprint("[yellow]/ports approve PORT-NNN[/]")
+            return
+        port_id = parts[1]
+        try:
+            out = await clients.crm.approve_port_request(port_id)
+        except ClientError as exc:
+            rprint(f"[red]approve failed:[/] {exc}")
+            return
+        rprint(f"[green]approved[/] {out.get('id')}  state={out.get('state')}")
+        await conv.append_tool_turn("port_request.approve", json.dumps(out))
+        return
+
+    if sub == "reject":
+        if len(parts) < 3:
+            rprint("[yellow]/ports reject PORT-NNN <reason>[/]")
+            return
+        port_id = parts[1]
+        reason = parts[2]
+        try:
+            out = await clients.crm.reject_port_request(port_id, reason=reason)
+        except ClientError as exc:
+            rprint(f"[red]reject failed:[/] {exc}")
+            return
+        rprint(f"[yellow]rejected[/] {out.get('id')}  reason={reason!r}")
+        await conv.append_tool_turn("port_request.reject", json.dumps(out))
+        return
+
+    rprint(
+        "[yellow]/ports[, list, approve PORT-NNN, reject PORT-NNN <reason>][/]"
+    )
 
 
 async def _open_in_editor(path: Path) -> None:
@@ -679,6 +756,9 @@ async def _handle_slash(
         return "continue", None
     if cmd == "/360":
         await _cmd_360(conv, arg)
+        return "continue", None
+    if cmd == "/ports":
+        await _cmd_ports(conv, arg)
         return "continue", None
     if cmd == "/confirm":
         # Explicit confirmation flow: the next turn will consume any

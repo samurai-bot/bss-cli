@@ -63,6 +63,12 @@ def is_exhausted(
 
     Unlimited (-1 total) never exhausts.
     If no balance matches primary_type, returns True (no data = exhausted).
+
+    v0.17 doctrine: ``data_roaming`` is *additive*, never primary. Roaming
+    exhaustion blocks roaming usage (enforced by
+    ``subscription.usage_rated.roaming_balance_required`` policy) but
+    must NOT exhaust the subscription itself, so callers must keep the
+    default ``primary_type="data"``.
     """
     for b in balances:
         if b.allowance_type == primary_type:

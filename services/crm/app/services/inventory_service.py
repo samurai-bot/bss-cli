@@ -1,10 +1,13 @@
 """Inventory service — MSISDN + eSIM pool management."""
 
+import os
+
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import auth_context
 from app.domain import esim_state
+from app.events import publisher
 from app.policies.base import PolicyViolation
 from app.policies import inventory as inv_policies
 from app.repositories.esim_repo import EsimRepository
@@ -12,6 +15,20 @@ from app.repositories.msisdn_repo import MsisdnRepository
 from bss_models.inventory import EsimProfile, MsisdnPool
 
 log = structlog.get_logger()
+
+
+def _low_watermark_threshold() -> int:
+    """Configured floor below which the pool emits ``inventory.msisdn.pool_low``.
+
+    Read at every check so an ops-side `.env` bump takes effect on next
+    reservation without a service restart — the value is non-secret and
+    safe to re-evaluate cheaply.
+    """
+    raw = os.environ.get("BSS_INVENTORY_MSISDN_POOL_LOW_THRESHOLD", "50")
+    try:
+        return int(raw)
+    except ValueError:
+        return 50
 
 
 class InventoryService:
@@ -53,6 +70,7 @@ class InventoryService:
                 context={"msisdn": msisdn},
             )
         await self._session.commit()
+        await self._maybe_emit_pool_low(ctx.tenant)
         return result
 
     async def reserve_next_msisdn(self, preference: str | None = None) -> MsisdnPool:
@@ -69,7 +87,81 @@ class InventoryService:
                 context={"preference": preference},
             )
         await self._session.commit()
+        await self._maybe_emit_pool_low(ctx.tenant)
         return result
+
+    async def add_msisdn_range(
+        self, *, prefix: str, count: int
+    ) -> dict[str, str | int]:
+        """v0.17 — bulk-extend the pool by a contiguous range.
+
+        Operator-only via cockpit/REPL. Policies bound the inputs; the
+        repo's ``ON CONFLICT DO NOTHING`` makes overlapping calls
+        idempotent (prior rows — including ``ported_out`` ones — are
+        preserved). Emits ``inventory.msisdn.range_added`` for cockpit
+        observability.
+        """
+        inv_policies.check_sane_prefix(prefix, count)
+        ctx = auth_context.current()
+        inserted, skipped = await self._msisdn_repo.add_range(
+            prefix, count, ctx.tenant
+        )
+        first = f"{prefix}{0:04d}"
+        last = f"{prefix}{count - 1:04d}"
+        await publisher.publish(
+            self._session,
+            event_type="inventory.msisdn.range_added",
+            aggregate_type="msisdn_pool",
+            aggregate_id=prefix,
+            payload={
+                "prefix": prefix,
+                "count": count,
+                "inserted": inserted,
+                "skipped": skipped,
+                "first": first,
+                "last": last,
+            },
+        )
+        await self._session.commit()
+        log.info(
+            "inventory.msisdn.range_added",
+            prefix=prefix,
+            count=count,
+            inserted=inserted,
+            skipped=skipped,
+        )
+        return {
+            "prefix": prefix,
+            "count": count,
+            "inserted": inserted,
+            "skipped": skipped,
+            "first": first,
+            "last": last,
+        }
+
+    async def _maybe_emit_pool_low(self, tenant: str) -> None:
+        """Post-commit fire-and-forget: emit pool-low if available count
+        crossed the threshold. Errors swallowed — this is an
+        observability nudge, not a transactional invariant."""
+        try:
+            available = await self._msisdn_repo.count_available(tenant)
+            threshold = _low_watermark_threshold()
+            if available <= threshold:
+                await publisher.publish(
+                    self._session,
+                    event_type="inventory.msisdn.pool_low",
+                    aggregate_type="msisdn_pool",
+                    aggregate_id="DEFAULT",
+                    payload={"available": available, "threshold": threshold},
+                )
+                await self._session.commit()
+                log.warning(
+                    "inventory.msisdn.pool_low",
+                    available=available,
+                    threshold=threshold,
+                )
+        except Exception:
+            log.exception("inventory.msisdn.pool_low.emit_failed")
 
     async def assign_msisdn(self, msisdn: str, subscription_id: str | None = None) -> MsisdnPool:
         row = await self._msisdn_repo.get(msisdn)

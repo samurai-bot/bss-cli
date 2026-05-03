@@ -186,6 +186,14 @@ TOOL_PROFILES: dict[str, set[str]] = {
         "payment.add_card",
         "payment.remove_method",
         "payment.charge",
+        # Inventory ops (v0.17)
+        "inventory.msisdn.add_range",
+        # Port-request ops (v0.17 MNP — operator-only by spec)
+        "port_request.list",
+        "port_request.get",
+        "port_request.create",
+        "port_request.approve",
+        "port_request.reject",
         # Provisioning ops
         "provisioning.resolve_stuck",
         "provisioning.retry_failed",

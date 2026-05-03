@@ -44,6 +44,11 @@ ALLOWANCE_LABEL = {
     "data": "Data",
     "voice": "Voice",
     "sms": "SMS",
+    # v0.17 — additive roaming bucket; rendered only when the offering
+    # carries a non-zero quota OR the customer has topped up via
+    # VAS_ROAMING_1GB. The filter sits in `_line_view` so the template
+    # stays a flat for-loop over `bars`.
+    "data_roaming": "Roaming",
 }
 
 
@@ -137,6 +142,19 @@ async def _line_view(
     """Compose the per-line dict the line_card template consumes."""
     state = sub.get("state", "")
     has_pending = sub.get("pendingOfferingId") is not None
+    # v0.17 — hide the Roaming bar when the plan includes no roaming
+    # AND the customer has not topped up. Plans with explicit zero
+    # roaming (e.g. PLAN_S/BA_S_ROAM=0) materialize the BundleBalance
+    # row but render with total=0/remaining=0 — those should NOT show
+    # up as a stranded "Roaming 0/0" bar.
+    bars = [_bar_for(b) for b in balances]
+    bars = [
+        b
+        for b in bars
+        if b.get("label") != "Roaming"
+        or b.get("total", 0) > 0
+        or b.get("remaining", 0) > 0
+    ]
     return {
         "id": sub["id"],
         "msisdn": sub.get("msisdn", ""),
@@ -151,7 +169,7 @@ async def _line_view(
         "pending_offering_id": sub.get("pendingOfferingId"),
         "pending_effective_at": sub.get("pendingEffectiveAt"),
         "cta_branch": _cta_for(state, has_pending),
-        "bars": [_bar_for(b) for b in balances],
+        "bars": bars,
     }
 
 

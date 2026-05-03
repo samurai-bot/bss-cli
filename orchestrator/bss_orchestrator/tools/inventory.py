@@ -69,6 +69,30 @@ async def inventory_esim_list_available(limit: int = 20) -> list[dict[str, Any]]
     return await get_clients().inventory.list_esims(state="available", limit=limit)
 
 
+@register("inventory.msisdn.add_range")
+async def inventory_msisdn_add_range(
+    prefix: str, count: int
+) -> dict[str, Any]:
+    """v0.17 — bulk-extend the MSISDN pool by ``count`` numbers starting
+    at ``{prefix}{0:04d}``.
+
+    Operator-only: registered in the ``operator_cockpit`` profile, NOT
+    in ``customer_self_serve``. Idempotent on overlap (existing rows
+    are preserved).
+
+    Args:
+        prefix: 4–7 digit numeric prefix, e.g. ``"9100"``.
+        count:  Numbers to add (1..10000).
+
+    Returns:
+        ``{prefix, count, inserted, skipped, first, last}``.
+
+    Raises:
+        PolicyViolation: bad prefix or count outside bounds.
+    """
+    return await get_clients().inventory.add_msisdn_range(prefix, count)
+
+
 @register("inventory.esim.get_activation")
 async def inventory_esim_get_activation(iccid: Iccid) -> dict[str, Any]:
     """Return the LPA activation-code record for an eSIM. Callers typically

@@ -94,3 +94,86 @@ class MsisdnRepository:
                 row.assigned_to_subscription_id = None
             await self._s.flush()
         return row
+
+    async def add_range(
+        self, prefix: str, count: int, tenant_id: str
+    ) -> tuple[int, int]:
+        """Bulk-insert ``count`` MSISDNs starting at ``{prefix}{0:04d}``.
+
+        Uses ``ON CONFLICT (msisdn) DO NOTHING`` so partially-overlapping
+        ranges are safe to re-run without duplicate failures, and so a
+        port-in-seeded number inside the prefix's footprint is not
+        overwritten. Returns ``(inserted, skipped)``.
+
+        v0.17 doctrine: terminal ``ported_out`` rows inside the prefix
+        are skipped (not re-issued) — the ON CONFLICT path handles this
+        naturally because the row already exists.
+        """
+        rows = [
+            {
+                "msisdn": f"{prefix}{i:04d}",
+                "status": "available",
+                "tenant_id": tenant_id,
+            }
+            for i in range(count)
+        ]
+        result = await self._s.execute(
+            text(
+                """
+                INSERT INTO inventory.msisdn_pool
+                    (msisdn, status, tenant_id)
+                SELECT msisdn, status, tenant_id FROM jsonb_to_recordset(
+                    CAST(:rows AS jsonb)
+                ) AS x(msisdn text, status text, tenant_id text)
+                ON CONFLICT (msisdn) DO NOTHING
+                RETURNING msisdn
+                """
+            ),
+            {"rows": _to_jsonb(rows)},
+        )
+        inserted = len(result.scalars().all())
+        await self._s.flush()
+        return inserted, count - inserted
+
+    async def count_available(self, tenant_id: str) -> int:
+        result = await self._s.execute(
+            text(
+                """
+                SELECT COUNT(*) FROM inventory.msisdn_pool
+                WHERE status = 'available' AND tenant_id = :t
+                """
+            ),
+            {"t": tenant_id},
+        )
+        return int(result.scalar_one())
+
+    async def mark_ported_out(
+        self, msisdn: str, *, subscription_id: str | None = None
+    ) -> MsisdnPool | None:
+        """Set terminal ``ported_out`` status with far-future quarantine.
+
+        v0.17 doctrine: this status is NEVER reversed; the donor
+        carrier owns the number now. Reserve-next predicate
+        (``status='available'``) skips it by construction.
+        """
+        await self._s.execute(
+            text(
+                """
+                UPDATE inventory.msisdn_pool
+                SET status = 'ported_out',
+                    quarantine_until = '9999-12-31'::timestamptz,
+                    assigned_to_subscription_id = COALESCE(:sub, assigned_to_subscription_id),
+                    updated_at = :now
+                WHERE msisdn = :m
+                """
+            ),
+            {"m": msisdn, "sub": subscription_id, "now": clock_now()},
+        )
+        await self._s.flush()
+        return await self.get(msisdn)
+
+
+def _to_jsonb(rows: list[dict]) -> str:
+    import json
+
+    return json.dumps(rows)

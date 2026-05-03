@@ -230,6 +230,31 @@ doctrine-check: check-clock
 		exit 1; \
 	fi; \
 	echo "✓ stripe sandbox fixtures redacted (no real ids or live keys)"
+	@# v0.17+ — pure rating function stays unaware of roaming. Routing
+	@# happens in the rating consumer (services/rating/app/events/consumer.py)
+	@# AFTER rate_usage returns. CLAUDE.md "(v0.17+) Don't add a new
+	@# event_type for roaming." anti-pattern.
+	@hits=$$(grep -n 'data_roaming' \
+		services/rating/app/domain/rating.py 2>/dev/null \
+		|| true); \
+	if [ -n "$$hits" ]; then \
+		echo "✗ data_roaming leaked into pure rating function:"; \
+		echo "$$hits"; \
+		exit 1; \
+	fi; \
+	echo "✓ rate_usage stays unaware of roaming (routing lives in consumer)"
+	@# v0.17+ — ported_out is terminal. No code path may flip a
+	@# ported_out row back to available. CLAUDE.md "(v0.17+) Don't
+	@# release a ported-out MSISDN back to available."
+	@hits=$$(grep -nE "(ported_out.*'available'|'available'.*ported_out|set status\s*=\s*'available'.*ported_out)" \
+		services/crm/app/repositories/msisdn_repo.py 2>/dev/null \
+		|| true); \
+	if [ -n "$$hits" ]; then \
+		echo "✗ ported_out row reset to available — terminal status doctrine breached:"; \
+		echo "$$hits"; \
+		exit 1; \
+	fi; \
+	echo "✓ ported_out is terminal (no available-loopback)"
 
 fmt:
 	uv run ruff format .
