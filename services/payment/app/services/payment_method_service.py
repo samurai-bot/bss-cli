@@ -147,6 +147,80 @@ class PaymentMethodService:
         )
         return pm
 
+    async def cutover_invalidate_mock_tokens(
+        self, *, dry_run: bool = False
+    ) -> dict[str, int | list[str]]:
+        """v0.16 cutover — mark every mock-token row as expired.
+
+        The proactive half of the v0.16 cutover contract (the lazy-fail
+        half lives in ``payment.charge.token_provider_matches_active``).
+        An operator switching ``BSS_PAYMENT_PROVIDER=mock → stripe``
+        runs this to invalidate every saved card so the customer's next
+        attempt to use one fails immediately and the portal's "add a
+        new card" flow recovers — instead of silently failing on the
+        next renewal charge weeks later.
+
+        Returns a structured result with the affected ids + counts.
+        Emits a ``payment_method.cutover_invalidated`` domain event per
+        row so the v0.14 Resend email-template flow can notify each
+        customer ("please update your payment method").
+        """
+        from sqlalchemy import select, update
+        from bss_models import PaymentMethod as PM
+
+        rows = (
+            await self._session.execute(
+                select(PM).where(
+                    PM.token_provider == "mock",
+                    PM.status == "active",
+                )
+            )
+        ).scalars().all()
+
+        affected_ids = [pm.id for pm in rows]
+        result = {
+            "candidate_count": len(affected_ids),
+            "candidate_ids": affected_ids,
+            "invalidated_count": 0,
+            "invalidated_ids": [],
+        }
+        if dry_run or not affected_ids:
+            log.info(
+                "payment_method.cutover_invalidated",
+                dry_run=dry_run,
+                count=len(affected_ids),
+            )
+            return result
+
+        # Mark rows + emit one event per row (the email-template flow
+        # joins customer_id → email; we don't try to do the join here
+        # so this stays tenant-agnostic).
+        for pm in rows:
+            pm.status = "expired"
+            await publisher.publish(
+                self._session,
+                event_type="payment_method.cutover_invalidated",
+                aggregate_type="payment_method",
+                aggregate_id=pm.id,
+                payload={
+                    "customer_id": pm.customer_id,
+                    "last4": pm.last4,
+                    "brand": pm.brand,
+                    "token_provider": pm.token_provider,
+                    "reason": "operator_cutover",
+                },
+            )
+
+        await self._session.commit()
+        result["invalidated_count"] = len(affected_ids)
+        result["invalidated_ids"] = affected_ids
+        log.info(
+            "payment_method.cutover_invalidated",
+            count=len(affected_ids),
+            dry_run=False,
+        )
+        return result
+
     async def remove_method(self, pm_id: str) -> PaymentMethod:
         pm = await self._pm_repo.get(pm_id)
         if pm is None:

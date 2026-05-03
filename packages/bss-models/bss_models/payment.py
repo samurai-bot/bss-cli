@@ -69,6 +69,12 @@ class PaymentAttempt(Base, TenantMixin, TimestampMixin):
     # identifier for downstream conditionals; human reason stays in
     # `decline_reason`.
     decline_code: Mapped[str | None] = mapped_column(Text)
+    # v0.16+ : ATT-{id}-r{retry_count}. Persisted for forensic
+    # `bss external-calls --idempotency-key X` lookup AND as the
+    # foundation for the v1.0 crash-recovery path (re-read on restart;
+    # same key sent to provider → provider dedupes). Nullable for
+    # back-compat with pre-v0.16 rows that have no key.
+    idempotency_key: Mapped[str | None] = mapped_column(Text)
     attempted_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
 
     payment_method: Mapped["PaymentMethod"] = relationship(back_populates="attempts")

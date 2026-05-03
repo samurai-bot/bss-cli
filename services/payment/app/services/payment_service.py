@@ -108,6 +108,7 @@ class PaymentService:
             decline_reason=charge_result.reason,
             provider_call_id=charge_result.provider_call_id,
             decline_code=charge_result.decline_code,
+            idempotency_key=idempotency_key,
             attempted_at=now,
             tenant_id=ctx.tenant,
         )

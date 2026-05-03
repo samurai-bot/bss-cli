@@ -173,6 +173,24 @@ class PaymentClient(BSSClient):
         )
         return resp.json()
 
+    # ── v0.16 cutover ────────────────────────────────────────────────────
+
+    async def cutover_invalidate_mock_tokens(
+        self, *, dry_run: bool = False
+    ) -> dict[str, Any]:
+        """POST /admin-api/v1/cutover/invalidate-mock-tokens.
+
+        Marks every active mock-token payment_method as expired. Use
+        BEFORE flipping ``BSS_PAYMENT_PROVIDER=mock → stripe``.
+        ``dry_run=True`` returns the candidate count without writing.
+        """
+        resp = await self._request(
+            "POST",
+            "/admin-api/v1/cutover/invalidate-mock-tokens",
+            params={"dryRun": "true" if dry_run else "false"},
+        )
+        return resp.json()
+
     # ── Dev tokenizer ────────────────────────────────────────────────────
 
     async def dev_tokenize_card(self, card_number: str) -> dict[str, Any]:
