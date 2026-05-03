@@ -266,3 +266,88 @@ def test_email_test_mode_drops_resend_creds(tmp_path, monkeypatch):
     assert env["BSS_PORTAL_EMAIL_PROVIDER"] == "logging"
     # Stale API key removed.
     assert "BSS_PORTAL_EMAIL_RESEND_API_KEY" not in env
+
+
+# ── v0.16 payment domain tests ─────────────────────────────────────
+
+
+def test_payment_test_mode_drops_stripe_creds(tmp_path):
+    """Switching production → test must strip stale Stripe creds."""
+    from typer.testing import CliRunner
+
+    from bss_cli.commands.onboard import app
+
+    f = tmp_path / ".env"
+    f.write_text(
+        "BSS_PAYMENT_PROVIDER=stripe\n"
+        "BSS_PAYMENT_STRIPE_API_KEY=sk_test_old\n"
+        "BSS_PAYMENT_STRIPE_PUBLISHABLE_KEY=pk_test_old\n"
+        "BSS_PAYMENT_STRIPE_WEBHOOK_SECRET=whsec_old\n"
+        "BSS_PAYMENT_ALLOW_TEST_CARD_REUSE=true\n"
+    )
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["--domain", "payment", "--env-path", str(f)],
+        input="test\n",
+    )
+    assert result.exit_code == 0, result.output
+    env = read_env_file(f)
+    assert env["BSS_PAYMENT_PROVIDER"] == "mock"
+    assert "BSS_PAYMENT_STRIPE_API_KEY" not in env
+    assert "BSS_PAYMENT_STRIPE_PUBLISHABLE_KEY" not in env
+    assert "BSS_PAYMENT_STRIPE_WEBHOOK_SECRET" not in env
+    assert "BSS_PAYMENT_ALLOW_TEST_CARD_REUSE" not in env
+
+
+def test_payment_production_mode_rejects_bad_secret_prefix(tmp_path):
+    from typer.testing import CliRunner
+
+    from bss_cli.commands.onboard import app
+
+    f = tmp_path / ".env"
+    runner = CliRunner()
+    # production → bogus secret key (no sk_ prefix).
+    result = runner.invoke(
+        app,
+        ["--domain", "payment", "--env-path", str(f)],
+        input="production\nrandom_garbage_key\n",
+    )
+    assert result.exit_code == 2, result.output
+    assert "must start with 'sk_test_' or 'sk_live_'" in result.output
+
+
+def test_payment_production_mode_rejects_key_mode_mismatch(tmp_path):
+    from typer.testing import CliRunner
+
+    from bss_cli.commands.onboard import app
+
+    f = tmp_path / ".env"
+    runner = CliRunner()
+    # production → sk_test secret + pk_live publishable → mismatch.
+    result = runner.invoke(
+        app,
+        ["--domain", "payment", "--env-path", str(f)],
+        input="production\nsk_test_xxx\npk_live_yyy\n",
+    )
+    assert result.exit_code == 2, result.output
+    assert "key mode mismatch" in result.output
+
+
+def test_payment_production_mode_refuses_test_secret_in_production_env(tmp_path):
+    from typer.testing import CliRunner
+
+    from bss_cli.commands.onboard import app
+
+    f = tmp_path / ".env"
+    f.write_text("BSS_ENV=production\n")
+    runner = CliRunner()
+    # production → sk_test_xxx + matching pk_test_yyy → refused because
+    # BSS_ENV=production was already set in the .env.
+    result = runner.invoke(
+        app,
+        ["--domain", "payment", "--env-path", str(f)],
+        input="production\nsk_test_xxx\npk_test_yyy\n",
+    )
+    assert result.exit_code == 2, result.output
+    assert "Refusing to write sk_test_*" in result.output
