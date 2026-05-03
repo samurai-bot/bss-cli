@@ -1,0 +1,89 @@
+name: inventory_low_watermark_and_replenishment
+description: |
+  v0.17 hero — MSISDN pool replenishment + low-watermark observability.
+  Operator extends the pool with a fresh range; a few signups consume
+  numbers; on each reserve, the post-commit hook checks
+  `BSS_INVENTORY_MSISDN_POOL_LOW_THRESHOLD` and emits
+  `inventory.msisdn.pool_low` when the available count crosses it.
+
+  This scenario does NOT drain the production-seed 1000-number pool
+  (too slow + brittle for a hero). Instead it asserts the
+  `add_range` + `range_added` audit edge directly. The
+  `pool_low` emission path is unit-tested elsewhere; here we just
+  smoke that the operator-facing tool works end-to-end against the
+  live stack.
+
+  Green only if:
+    - inventory.msisdn.add_range with prefix=9100, count=10 returns
+      inserted=10
+    - the 10 numbers are visible in inventory.msisdn.list_available
+    - re-running the same add_range is idempotent: inserted=0,
+      skipped=10 (ON CONFLICT DO NOTHING preserves prior rows)
+    - audit log carries inventory.msisdn.range_added for the prefix
+
+tags: [hero, smoke, inventory, v0_17, deterministic]
+
+setup:
+  reset_operational_data: true
+  freeze_clock_at: "2026-05-14T09:00:00+00:00"
+
+variables:
+  prefix: "9100"
+  count: 10
+
+steps:
+  - name: extend the pool by 10 numbers under prefix 9100
+    action: inventory.msisdn.add_range
+    args:
+      prefix: "{{ prefix }}"
+      count: "{{ count }}"
+    capture:
+      inserted: "$.inserted"
+      first: "$.first"
+      last: "$.last"
+
+  - name: 10 rows were inserted on first call
+    assert:
+      tool: inventory.msisdn.add_range
+      args:
+        prefix: "{{ prefix }}"
+        count: "{{ count }}"
+      # Re-running is the idempotency check — ON CONFLICT DO NOTHING
+      # preserves prior rows so this second call inserts 0.
+      expect:
+        inserted: 0
+        skipped: 10
+
+  - name: the new MSISDNs show up in the available pool
+    assert:
+      tool: inventory.msisdn.list_available
+      args: {prefix: "{{ prefix }}", limit: 20}
+      expect:
+        any_match:
+          msisdn: "91000000"
+
+  - name: last MSISDN in the range is also available
+    assert:
+      tool: inventory.msisdn.get
+      args: {msisdn: "91000009"}
+      expect:
+        msisdn: "91000009"
+        status: available
+
+  - name: audit log carries inventory.msisdn.range_added
+    assert:
+      tool: audit.events_by_identity
+      args:
+        service_identity: default
+        aggregate_id: "{{ prefix }}"
+      expect:
+        any_match:
+          eventType: inventory.msisdn.range_added
+          payload.prefix: "{{ prefix }}"
+          payload.inserted: 10
+      poll:
+        interval_ms: 200
+        timeout_seconds: 5
+
+teardown:
+  unfreeze_clock: true

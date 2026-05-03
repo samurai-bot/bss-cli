@@ -32,8 +32,14 @@ class MediationClient(BSSClient):
         unit: str,
         source: str | None = None,
         raw_cdr_ref: str | None = None,
+        roaming_indicator: bool = False,
     ) -> dict[str, Any]:
-        """POST /tmf-api/usageManagement/v4/usage — submit one usage event."""
+        """POST /tmf-api/usageManagement/v4/usage — submit one usage event.
+
+        v0.17 — ``roaming_indicator`` defaults False; set True to mark a
+        usage event as having occurred on a visited network. Mediation
+        passes through; rating routes to ``data_roaming``.
+        """
         body: dict[str, Any] = {
             "msisdn": msisdn,
             "eventType": event_type,
@@ -45,6 +51,8 @@ class MediationClient(BSSClient):
             body["source"] = source
         if raw_cdr_ref is not None:
             body["rawCdrRef"] = raw_cdr_ref
+        if roaming_indicator:
+            body["roamingIndicator"] = True
         resp = await self._request(
             "POST", "/tmf-api/usageManagement/v4/usage", json=body
         )

@@ -19,6 +19,7 @@ async def usage_simulate(
     quantity: int,
     unit: UsageUnit,
     event_time: IsoDatetime | None = None,
+    roaming_indicator: bool = False,
 ) -> dict[str, Any]:
     """Submit a single usage event to mediation. Primary way for the LLM /
     scenario runner to inject data/voice/SMS usage. Mediation decrements the
@@ -31,6 +32,10 @@ async def usage_simulate(
         quantity: Integer amount in ``unit``.
         unit: One of ``mb``, ``gb``, ``minutes``, ``count``.
         event_time: Optional ISO-8601 timestamp. Defaults to ``now`` (UTC).
+        roaming_indicator: v0.17 — set True to mark this event as
+            occurring on a visited (roaming) network. Rating routes
+            the decrement to the ``data_roaming`` BundleBalance and
+            independent block-on-exhaust applies.
 
     Returns:
         Usage dict ``{id, msisdn, subscriptionId, processed, processingError?}``.
@@ -48,6 +53,7 @@ async def usage_simulate(
         quantity=quantity,
         unit=unit,
         source="llm",
+        roaming_indicator=roaming_indicator,
     )
 
 
