@@ -502,12 +502,15 @@ Seed: 6 rules covering HLR_PROVISION, PCRF_POLICY_PUSH, OCS_BALANCE_INIT, ESIM_P
 | current_period_end | TIMESTAMPTZ | |
 | next_renewal_at | TIMESTAMPTZ | |
 | terminated_at | TIMESTAMPTZ | |
+| last_renewal_attempted_at | TIMESTAMPTZ | v0.18+ — written by the renewal worker BEFORE dispatching `renew()` so a peer replica or a re-fired tick doesn't double-charge the same period boundary. Compared via `last_renewal_attempted_at < next_renewal_at` — when `next_renewal_at` advances after a successful renewal the row naturally becomes "due" again next period without any cleanup. Reused by the blocked-overdue sweep to dedup `subscription.renewal_skipped` events. |
 | price_amount | NUMERIC(10,2) NOT NULL | v0.7+ snapshot — drives renewal charge |
 | price_currency | TEXT NOT NULL | v0.7+ snapshot |
 | price_offering_price_id | TEXT NOT NULL FK→catalog.product_offering_price | v0.7+ snapshot |
 | pending_offering_id | TEXT | v0.7+ — set when a plan change / price migration is scheduled |
 | pending_offering_price_id | TEXT | v0.7+ — same |
 | pending_effective_at | TIMESTAMPTZ | v0.7+ — earliest moment renewal applies the pending pivot |
+
+Index `ix_subscription_due_for_renewal` on `(state, next_renewal_at) WHERE state IN ('active','blocked')` (v0.18) backs both renewal-worker sweep queries.
 
 ### `subscription.bundle_balance`
 | column | type | notes |

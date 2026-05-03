@@ -179,6 +179,7 @@ TOOL_PROFILES: dict[str, set[str]] = {
         "subscription.migrate_to_new_price",
         "subscription.purchase_vas",
         "subscription.renew_now",
+        "subscription.tick_renewals_now",
         # Orders
         "order.create",
         "order.cancel",

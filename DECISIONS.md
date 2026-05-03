@@ -2848,3 +2848,102 @@ and rows land with the column populated automatically.
 - The orchestrator's `usage.simulate` cockpit tool gains a
   `roaming_indicator: bool = False` kwarg so scenarios + the LLM
   can drive roaming usage without leaving the existing tool surface.
+
+## 2026-05-04 — v0.18.0 In-process renewal worker in subscription lifespan (not a separate scheduler container)
+
+**Context:** v0.7's renewal logic (`subscription_service.renew()`)
+already handles the period boundary, the price snapshot, the pending
+plan-change pivot, the payment-decline → block path, and every audit
+event. But nothing was *triggering* it automatically — only manual
+paths (CLI, cockpit tool, scenario action) called it. v0.18 needs to
+add an automatic trigger so a customer's bundle actually renews when
+the period boundary passes.
+
+Three reasonable shapes for the trigger:
+
+1. New `services/scheduler/` container running cron(8) (or APScheduler /
+   Celery beat) calling `POST /subscription-api/v1/subscription/{id}/renew`
+   for each due row.
+2. In-process tick loop inside `services/subscription` itself, attached
+   to the lifespan, using `FOR UPDATE SKIP LOCKED` for multi-replica
+   safety.
+3. Postgres `pg_cron` extension firing a SQL UDF that calls a
+   scheduler endpoint.
+
+**Decision:** Option 2 — in-process tick loop in the subscription
+service's lifespan. New module `services/subscription/app/workers/
+renewal.py` with `_renewal_tick_loop` started in
+`dependencies.lifespan` when `BSS_RENEWAL_TICK_SECONDS > 0`.
+
+The sweep query uses `FOR UPDATE SKIP LOCKED` so a peer subscription
+replica grabs disjoint rows when we eventually scale out. The
+`last_renewal_attempted_at` column (Alembic 0020) is written by the
+SELECT-txn BEFORE the row lock is released, so a peer replica's next
+sweep sees the marked dedup column the instant the lock is gone.
+
+**Why option 2:**
+
+(a) `renew()` already lives in `services/subscription/app/services/
+    subscription_service.py:511`. Triggering from inside the same
+    service avoids a cross-service RPC for every renewal and keeps
+    the audit trail single-process. The worker calls
+    `service.renew(sub_id)` and nothing else — no logic duplication.
+
+(b) `FOR UPDATE SKIP LOCKED` makes "every replica runs the loop"
+    multi-replica safe by construction. No coordinator, no leader
+    election, no Zookeeper/etcd. Adding a second subscription replica
+    is a `docker-compose scale subscription=2` change, not a
+    redesign.
+
+(c) Motto #6 (lightweight is measurable). A dedicated scheduler
+    container adds another image, another set of env vars, another
+    lifecycle to monitor, another network hop on every renewal. The
+    4 GB / 30s-cold-start budget has no headroom for ceremony.
+
+(d) The `BSS_RENEWAL_TICK_SECONDS=0` escape hatch keeps the door
+    open: an operator who genuinely wants an external scheduler
+    (Argo Workflows, Airflow) can disable the in-process worker and
+    drive `POST /admin-api/v1/renewal/tick-now` from anywhere. That
+    requires `BSS_ALLOW_ADMIN_RESET=true` in production, which is
+    itself a doctrine break — only accept it with documented
+    justification.
+
+**Alternatives rejected:**
+
+- **Separate scheduler container running cron(8) calling renew_now.**
+  Pro: clean separation of concerns. Con: adds a container, adds an
+  outbound auth surface (the scheduler needs a token), and the
+  `renew_now` endpoint becomes an active production attack surface
+  instead of an operator escape hatch. Doesn't actually solve any
+  problem in-process couldn't solve.
+- **APScheduler / Celery beat in-process.** Pro: industry standard.
+  Con: APScheduler adds the dep but solves a problem we don't have
+  (we want a single `while True: sweep; sleep(60)`, not a cron
+  parser); Celery requires Redis or another broker, adds a dep, adds
+  operational surface. Same outcome as a 30-line `_tick_loop`
+  function with 10x the moving parts.
+- **Postgres `pg_cron` extension.** Pro: single source of time. Con:
+  requires superuser to install (BSS-CLI runs against vanilla
+  Postgres in BYOI mode), and the renewal logic would have to live
+  in PL/pgSQL or an HTTP callout. Cross-language, cross-team
+  ownership, two places to debug a stuck renewal — net negative.
+
+**Consequences:**
+
+- Single new module + lifespan entry. Single migration (0020).
+- Multi-replica safety from day one even though we run
+  single-replica today. Adding a second subscription replica is one
+  `docker-compose scale subscription=2` away.
+- The admin endpoint `POST /admin-api/v1/renewal/tick-now` (gated by
+  `BSS_ALLOW_ADMIN_RESET`) exists ONLY for scenario determinism so
+  the v0.18 hero scenario can drive a single sweep after
+  `clock.advance` instead of waiting 60 wall-seconds. Production
+  deployments keep the flag false.
+- Auth context propagation through a non-HTTP code path required a
+  new `auth_context.push() / pop()` token-returning helper —
+  `set_for_request` was HTTP-shaped (returns nothing), and the
+  worker is one long-lived asyncio Task whose ContextVar values
+  would leak across iterations without explicit reset.
+- Two new doctrine guards: `_renewal_tick_loop` / `_sweep_due` /
+  `_sweep_skipped` references are confined to the worker module +
+  lifespan + admin endpoint via `make doctrine-check` grep.

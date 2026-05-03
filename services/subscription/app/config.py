@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     crm_url: str = "http://crm:8000"
     payment_url: str = "http://payment:8000"
     catalog_url: str = "http://catalog:8000"
+    # v0.18 — in-process renewal worker tick interval. 0 disables.
+    # Documented in .env.example. The lifespan reads via os.environ
+    # (single int() site at startup); this declaration documents the
+    # surface for IDE autocomplete + any future config-show tool.
+    renewal_tick_seconds: int = 60
 
     model_config = SettingsConfigDict(
         env_file=_REPO_ROOT / ".env",

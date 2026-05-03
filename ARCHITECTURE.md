@@ -494,18 +494,19 @@ the route refuses without invoking the LLM.
 
 ### Deployability matrix
 
-| Concern | v0.11 | v0.12 | v0.15 | v0.17 | v1.0 |
-|---|---|---|---|---|---|
-| Customer signup (KYC) | ✅ direct + mocked attestation | ✅ unchanged | ✅ Didit live (channel-layer) + prebaked dev path | ✅ unchanged | ⏳ real Singpass |
-| Card on file | ✅ mock tokenizer | ✅ unchanged | ✅ unchanged | ✅ Stripe Checkout (v0.16) live | ⏳ unchanged |
-| eSIM provisioning | ✅ provisioning-sim | ✅ unchanged | ✅ Protocol seam (sim only; real providers v0.16+) | ✅ unchanged | ⏳ real SM-DP+ |
-| Customer chat | _absent_ | ✅ scoped + capped + escalation | ✅ unchanged shape | ✅ unchanged shape | ✅ unchanged shape |
-| Chat ownership trip-wire | _absent_ | ✅ defence-in-depth | ✅ unchanged shape | ✅ unchanged shape | ✅ unchanged shape |
-| 14-day soak | _absent_ | ✅ frozen-clock 100×14 | ✅ unchanged (prebaked KYC path preserved) | ✅ unchanged (roaming usage path covered by hero) | ⏳ public soak with real cohort |
-| Per-principal RBAC (staff) | _absent_ | _absent_ | _absent_ | _absent_ | _retired in v0.13 — operator trust is perimeter-based; DECISIONS 2026-05-01_ |
-| MNP (port-in / port-out) | _absent_ | _absent_ | _absent_ | ✅ operator-driven `crm.port_request` aggregate | ⏳ unchanged shape (donor-carrier integration channel-layer) |
-| MSISDN pool replenishment | _absent_ | _absent_ | _absent_ | ✅ operator CLI + cockpit + low-watermark event | ⏳ unchanged |
-| Roaming as a product | _absent_ | _absent_ | _absent_ | ✅ bundled `data_roaming` MB + VAS_ROAMING_1GB top-up | ⏳ per-country tariff (post-v0.x) |
+| Concern | v0.11 | v0.12 | v0.15 | v0.17 | v0.18 | v1.0 |
+|---|---|---|---|---|---|---|
+| Customer signup (KYC) | ✅ direct + mocked attestation | ✅ unchanged | ✅ Didit live (channel-layer) + prebaked dev path | ✅ unchanged | ✅ unchanged | ⏳ real Singpass |
+| Card on file | ✅ mock tokenizer | ✅ unchanged | ✅ unchanged | ✅ Stripe Checkout (v0.16) live | ✅ unchanged | ⏳ unchanged |
+| eSIM provisioning | ✅ provisioning-sim | ✅ unchanged | ✅ Protocol seam (sim only; real providers v0.16+) | ✅ unchanged | ✅ unchanged | ⏳ real SM-DP+ |
+| Customer chat | _absent_ | ✅ scoped + capped + escalation | ✅ unchanged shape | ✅ unchanged shape | ✅ unchanged shape | ✅ unchanged shape |
+| Chat ownership trip-wire | _absent_ | ✅ defence-in-depth | ✅ unchanged shape | ✅ unchanged shape | ✅ unchanged shape | ✅ unchanged shape |
+| 14-day soak | _absent_ | ✅ frozen-clock 100×14 | ✅ unchanged (prebaked KYC path preserved) | ✅ unchanged (roaming usage path covered by hero) | ✅ unchanged (auto-renewal exercised by tick-now sweep) | ⏳ public soak with real cohort |
+| Per-principal RBAC (staff) | _absent_ | _absent_ | _absent_ | _absent_ | _absent_ | _retired in v0.13 — operator trust is perimeter-based; DECISIONS 2026-05-01_ |
+| MNP (port-in / port-out) | _absent_ | _absent_ | _absent_ | ✅ operator-driven `crm.port_request` aggregate | ✅ unchanged shape | ⏳ unchanged shape (donor-carrier integration channel-layer) |
+| MSISDN pool replenishment | _absent_ | _absent_ | _absent_ | ✅ operator CLI + cockpit + low-watermark event | ✅ unchanged | ⏳ unchanged |
+| Roaming as a product | _absent_ | _absent_ | _absent_ | ✅ bundled `data_roaming` MB + VAS_ROAMING_1GB top-up | ✅ unchanged | ⏳ per-country tariff (post-v0.x) |
+| Subscription renewal | ✅ manual only (CLI / cockpit / scenario) | ✅ unchanged | ✅ unchanged | ✅ unchanged | ✅ in-process tick loop in subscription lifespan; multi-replica safe via FOR UPDATE SKIP LOCKED | ✅ unchanged shape |
 
 ### v0.15 KYC — Didit (channel-layer)
 
@@ -670,6 +671,63 @@ Doctrine v0.17+:
 - The portal line_card filter hides the Roaming bar when `total=0 AND remaining=0` so PLAN_S users don't see a stranded "Roaming 0/0".
 
 `purchase_vas` now materializes a missing balance row from the VAS spec (generic fix, not roaming-specific) — unblocks any future allowance type without code change.
+
+### v0.18 Automated subscription-renewal worker
+
+The v0.7 renewal logic (`subscription_service.renew()` — handles the period boundary, the price snapshot, the pending plan-change pivot, the payment-decline → block path, and every audit event) had no automatic trigger until v0.18. Manual paths (CLI `bss subscription renew`, cockpit `subscription.renew_now`, scenario action) were the only callers — operator escape hatches, not the production path.
+
+v0.18 adds an in-process tick loop attached to the subscription service's lifespan. **The worker calls `service.renew(sub_id)` and nothing else** — no logic duplication. The only new logic is *triggering*.
+
+```
+                                      v0.18 renewal worker
+                                      ────────────────────
+              ┌────────── subscription service container ──────────┐
+              │                                                     │
+   lifespan ──┤ if BSS_RENEWAL_TICK_SECONDS > 0:                   │
+              │     asyncio.create_task(_renewal_tick_loop)         │
+              │                                                     │
+              │  ┌──────────── tick loop (every 60s) ─────────────┐ │
+              │  │                                                 │ │
+              │  │  txn 1 (single batch, 1 commit):               │ │
+              │  │    SELECT id FROM subscription                  │ │
+              │  │    WHERE state = 'active'                       │ │
+              │  │      AND next_renewal_at <= clock_now()         │ │
+              │  │      AND (last_renewal_attempted_at IS NULL     │ │
+              │  │           OR last_renewal_attempted_at          │ │
+              │  │              < next_renewal_at)                 │ │
+              │  │    LIMIT 100 FOR UPDATE SKIP LOCKED             │ │
+              │  │    ─────────────────────────────────────────    │ │
+              │  │    UPDATE subscription                          │ │
+              │  │    SET last_renewal_attempted_at = clock_now()  │ │
+              │  │    WHERE id = ANY(:ids)                         │ │
+              │  │    COMMIT — releases SKIP LOCKED row locks      │ │
+              │  │       (peer replicas now see marked rows)       │ │
+              │  │                                                 │ │
+              │  │  txn 2..N+1 (one per id, fresh session each):  │ │
+              │  │    auth_context.push(actor=                     │ │
+              │  │       'system:renewal_worker', channel='system')│ │
+              │  │    try:                                         │ │
+              │  │      await service.renew(sub_id)                │ │
+              │  │    except PolicyViolation: log warn, continue   │ │
+              │  │    except Exception:        log error, continue │ │
+              │  │    finally: auth_context.pop(token)             │ │
+              │  │                                                 │ │
+              │  │  same shape for _sweep_skipped (state='blocked')│ │
+              │  │  → emits `subscription.renewal_skipped` event   │ │
+              │  └─────────────────────────────────────────────────┘ │
+              │                                                     │
+              └─────────────────────────────────────────────────────┘
+```
+
+Doctrine v0.18+:
+
+- **Trigger lives only in the subscription lifespan.** No sibling scheduler container, no cron, no Celery beat, no external poller. The whole point of `FOR UPDATE SKIP LOCKED` is that "every replica runs the loop" is multi-replica safe by construction; running the trigger elsewhere defeats the design.
+- **Worker NEVER duplicates `renew()` logic.** `service.renew(sub_id)` and nothing else. Future renewal extensions land in `renew()` once and the worker picks them up for free.
+- **Mark-before-dispatch ordering.** `last_renewal_attempted_at` is committed by the SELECT-txn BEFORE the row lock releases, so a peer replica's next sweep sees the mark the moment the lock is gone. Reverse the order and two replicas can each grab the same row → double charge.
+- **Per-id session for dispatch.** A single subscription's failure does not poison the rest of the batch.
+- **ContextVar reset in `finally`.** Worker is one long-lived asyncio Task; values would leak across iterations without the explicit Token-pattern (`auth_context.push()` / `pop()`).
+
+`BSS_RENEWAL_TICK_SECONDS=0` disables the worker (e.g. for unit tests, or for deployments running multiple subscription replicas behind an external orchestrator). The admin endpoint `POST /admin-api/v1/renewal/tick-now` (gated by `BSS_ALLOW_ADMIN_RESET`) drives one deterministic sweep — used by the v0.18 hero scenario after `clock.advance` to avoid waiting 60 wall-seconds for the natural tick. Production deployments keep the flag false.
 
 ### Note on billing in v0.1
 

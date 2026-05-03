@@ -145,8 +145,9 @@ async def subscription_terminate(subscription_id: SubscriptionId) -> dict[str, A
 @register("subscription.renew_now")
 async def subscription_renew_now(subscription_id: SubscriptionId) -> dict[str, Any]:
     """Manually trigger a subscription renewal (charges COF, resets balances).
-    Normal renewals happen automatically on the period boundary — use this
-    only for edge cases.
+    Normal renewals happen automatically on the period boundary via the
+    v0.18 in-process worker — use this only for edge cases (operator
+    reproducing a charge, scenario driving a deterministic outcome).
 
     Args:
         subscription_id: Subscription ID with the SUB- prefix (opaque suffix).
@@ -160,6 +161,32 @@ async def subscription_renew_now(subscription_id: SubscriptionId) -> dict[str, A
               with ``payment.add_card`` then retry.
     """
     return await get_clients().subscription.renew(subscription_id)
+
+
+@register("subscription.tick_renewals_now")
+async def subscription_tick_renewals_now() -> dict[str, Any]:
+    """Run one deterministic renewal sweep (v0.18 admin endpoint).
+
+    Invokes the same active-due + blocked-overdue sweep the in-process
+    worker runs every ``BSS_RENEWAL_TICK_SECONDS``. Used by scenarios
+    after ``clock.advance`` so they don't wait for the wall-clock
+    interval. Operator-only (the tool wraps an endpoint gated by
+    ``BSS_ALLOW_ADMIN_RESET`` on the subscription service).
+
+    Args:
+        (none)
+
+    Returns:
+        ``{"status": "ok"}`` — the sweep is fire-and-forget; per-id
+        outcomes land in audit events (``subscription.renewed`` /
+        ``subscription.renewal_skipped`` / ``subscription.renew_failed``).
+
+    Raises:
+        ClientError: 403 when ``BSS_ALLOW_ADMIN_RESET`` is not set on
+            the subscription service (the endpoint is disabled in
+            production by design).
+    """
+    return await get_clients().subscription.tick_renewals_now()
 
 
 @register("subscription.schedule_plan_change")

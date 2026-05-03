@@ -32,6 +32,13 @@ class Subscription(Base, TenantMixin, TimestampMixin):
     current_period_end: Mapped[datetime | None] = mapped_column(TZDateTime)
     next_renewal_at: Mapped[datetime | None] = mapped_column(TZDateTime)
     terminated_at: Mapped[datetime | None] = mapped_column(TZDateTime)
+    # v0.18 — written by the renewal worker BEFORE dispatching renew() so a
+    # peer replica or a re-fired tick doesn't double-charge the same period
+    # boundary. Compared via `last_renewal_attempted_at < next_renewal_at` —
+    # when next_renewal_at advances after a successful renewal the row
+    # naturally becomes "due" again next period without any cleanup. Reused
+    # by the blocked-overdue sweep so a single column dedup both signals.
+    last_renewal_attempted_at: Mapped[datetime | None] = mapped_column(TZDateTime)
 
     # v0.7 — price snapshot copied at order time. Renewal charges this, not catalog.
     price_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)

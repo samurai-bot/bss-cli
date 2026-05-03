@@ -49,3 +49,42 @@ def set_for_request(
 def has_permission(permission: str) -> bool:
     ctx = current()
     return "*" in ctx.permissions or permission in ctx.permissions
+
+
+# v0.18 — token-returning helpers for non-HTTP code paths (renewal worker
+# and any future scheduled task). HTTP requests use `set_for_request` and
+# discard the Token because Starlette runs each request in its own asyncio
+# Task and the ContextVar is per-Task. The renewal worker is a SINGLE
+# long-lived Task, so values would leak across iterations unless explicitly
+# reset — these helpers expose the reset Token to the caller.
+
+
+def push(
+    *,
+    actor: str,
+    channel: str,
+    tenant: str = "DEFAULT",
+    service_identity: str = "default",
+):
+    """Set context, return the Token the caller MUST pass back to ``pop()``.
+
+    Usage:
+        token = auth_context.push(actor="system:renewal_worker", channel="system")
+        try:
+            await do_dispatch(...)
+        finally:
+            auth_context.pop(token)
+    """
+    return _current.set(
+        AuthContext(
+            actor=actor,
+            channel=channel,
+            tenant=tenant,
+            service_identity=service_identity,
+        )
+    )
+
+
+def pop(token) -> None:
+    """Reset the ContextVar to the value present before the matching push()."""
+    _current.reset(token)
