@@ -4,7 +4,7 @@ from bss_clock import clock_admin_router
 from bss_events import audit_events_router
 from fastapi import FastAPI
 
-from app.api import admin, health
+from app.api import admin, health, webhooks
 from app.api.tmf import payment, payment_method
 from app.config import Settings
 from app.dependencies import lifespan
@@ -50,5 +50,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # Audit — read-only view onto audit.domain_event
     app.include_router(audit_events_router(), prefix="/audit-api/v1")
+
+    # v0.16 — Stripe webhook receiver. Exempt from BSSApiTokenMiddleware
+    # via the v0.14 WEBHOOK_EXEMPT_PATHS allowlist (`/webhooks/`); auth
+    # is provider signature only.
+    app.include_router(webhooks.router)
 
     return app
