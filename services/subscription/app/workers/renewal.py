@@ -50,6 +50,7 @@ Correctness invariants:
 from __future__ import annotations
 
 import asyncio
+import os
 
 import structlog
 from bss_clock import now as clock_now
@@ -66,6 +67,58 @@ log = structlog.get_logger()
 _BATCH_LIMIT = 100
 _WORKER_ACTOR = "system:renewal_worker"
 _WORKER_CHANNEL = "system"
+
+# v0.18 — upcoming-renewal reminder default lookahead. The reminder
+# sweep selects subs whose next_renewal_at falls inside
+# `[now, now + REMINDER_LOOKAHEAD_SECONDS]`. 24h is the obvious
+# operator default ("your bundle renews tomorrow"); a future v0.x can
+# extend to a multi-tier ladder (3d / 1d / 1h) with three columns.
+_REMINDER_LOOKAHEAD_SECONDS_DEFAULT = 24 * 60 * 60
+
+
+_PLAN_NAME_FALLBACKS = {
+    "PLAN_S": "Lite",
+    "PLAN_M": "Standard",
+    "PLAN_L": "Max",
+}
+
+
+def _plan_name(offering_id: str) -> str:
+    """Map offering_id → human plan name. Falls back to the id itself
+    if unknown (e.g. a future PLAN_XL added without updating this map)."""
+    return _PLAN_NAME_FALLBACKS.get(offering_id, offering_id)
+
+
+def _format_renewal_date(dt) -> str:
+    """Format ``next_renewal_at`` for the reminder body. Day-Month-Year
+    in operator timezone-agnostic form (UTC). Email recipients see a
+    short, unambiguous date — not an ISO timestamp."""
+    return dt.strftime("%-d %b %Y")
+
+
+def _extract_email(customer: dict) -> str | None:
+    """Pull the primary email from a TMF customer payload.
+
+    The CRM response shape is ``contactMedium: [{mediumType, value, isPrimary}, ...]``.
+    Prefer is_primary=True email; fall back to the first email found.
+    Returns None if no email medium exists (rare — every signup
+    requires one — but handled gracefully so the worker logs and
+    skips instead of crashing).
+    """
+    mediums = customer.get("contactMedium") or []
+    primary_email = None
+    any_email = None
+    for m in mediums:
+        if (m.get("mediumType") or "").lower() != "email":
+            continue
+        value = m.get("value")
+        if not value:
+            continue
+        if m.get("isPrimary") and primary_email is None:
+            primary_email = value
+        if any_email is None:
+            any_email = value
+    return primary_email or any_email
 
 
 async def _renewal_tick_loop(app, interval_seconds: int) -> None:
@@ -85,6 +138,7 @@ async def _renewal_tick_loop(app, interval_seconds: int) -> None:
             try:
                 await _sweep_due(app)
                 await _sweep_skipped(app)
+                await _sweep_upcoming_renewal_reminder(app)
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -194,3 +248,121 @@ async def _sweep_skipped(app) -> None:
             )
     finally:
         auth_context.pop(token)
+
+
+async def _sweep_upcoming_renewal_reminder(app) -> None:
+    """v0.18 — find subs whose renewal falls inside the lookahead window
+    and send the customer a reminder email.
+
+    Lookahead = ``BSS_RENEWAL_REMINDER_LOOKAHEAD_SECONDS`` (default 86400 = 24h).
+    Set to 0 to disable the reminder sweep entirely (the renewal sweep
+    keeps running). The email adapter on ``app.state.email_adapter``
+    is the same Protocol the portal uses; in dev (logging adapter)
+    the reminder lands in the dev mailbox file.
+
+    Same FOR UPDATE SKIP LOCKED + dedup-column-in-SELECT-txn pattern
+    as the renewal sweep. Multi-replica safe.
+
+    The customer email is fetched via the CRM client per-id (one HTTP
+    call per due reminder). At thousand-customer scale + 24h lookahead
+    this is at most a few hundred calls per sweep — acceptable. A
+    future v0.x can cache the email on subscription.row at signup if
+    the call pattern becomes hot.
+
+    Errors per id (CRM 404, missing email, mail-send failure) are
+    logged + swallowed so a single bad row doesn't block the rest of
+    the batch. The dedup column is set BEFORE the per-id loop so a
+    crash mid-send doesn't replay the reminder on the next tick;
+    a row whose CRM lookup or email send failed will simply not
+    re-attempt this period (acceptable — the renewal itself still
+    fires, the reminder is the soft signal).
+    """
+    if app.state.email_adapter is None:
+        return
+    lookahead = int(
+        os.environ.get(
+            "BSS_RENEWAL_REMINDER_LOOKAHEAD_SECONDS",
+            str(_REMINDER_LOOKAHEAD_SECONDS_DEFAULT),
+        )
+    )
+    if lookahead <= 0:
+        return
+
+    now = clock_now()
+
+    # ── Txn 1: select + mark + commit ─────────────────────────────────
+    async with app.state.session_factory() as session:
+        repo = SubscriptionRepository(session)
+        rows = await repo.due_for_reminder(
+            now=now,
+            lookahead_seconds=lookahead,
+            limit=_BATCH_LIMIT,
+        )
+        if not rows:
+            return
+        ids = [r["id"] for r in rows]
+        await repo.mark_reminder_sent(ids=ids, at=now)
+        await session.commit()
+
+    # ── Txn 2 (per id): CRM lookup + email send + log ─────────────────
+    token = auth_context.push(actor=_WORKER_ACTOR, channel=_WORKER_CHANNEL)
+    sent = 0
+    skipped_no_email = 0
+    failed = 0
+    try:
+        for row in rows:
+            sub_id = row["id"]
+            try:
+                customer = await app.state.crm_client.get_customer(
+                    row["customer_id"]
+                )
+            except Exception:
+                log.exception(
+                    "renewal.reminder.crm_lookup_failed",
+                    subscription_id=sub_id,
+                    customer_id=row["customer_id"],
+                )
+                failed += 1
+                continue
+
+            email = _extract_email(customer)
+            if not email:
+                log.warning(
+                    "renewal.reminder.no_email_on_customer",
+                    subscription_id=sub_id,
+                    customer_id=row["customer_id"],
+                )
+                skipped_no_email += 1
+                continue
+
+            try:
+                app.state.email_adapter.send_renewal_reminder(
+                    email,
+                    plan_name=_plan_name(row["offering_id"]),
+                    msisdn=row["msisdn"],
+                    amount=f"{row['price_amount']:.2f}",
+                    currency=row["price_currency"],
+                    renewal_date=_format_renewal_date(row["next_renewal_at"]),
+                )
+                sent += 1
+                log.info(
+                    "renewal.reminder.sent",
+                    subscription_id=sub_id,
+                    plan=row["offering_id"],
+                )
+            except Exception:
+                log.exception(
+                    "renewal.reminder.send_failed",
+                    subscription_id=sub_id,
+                )
+                failed += 1
+    finally:
+        auth_context.pop(token)
+
+    log.info(
+        "renewal.reminder.sweep_complete",
+        candidates=len(rows),
+        sent=sent,
+        skipped_no_email=skipped_no_email,
+        failed=failed,
+    )

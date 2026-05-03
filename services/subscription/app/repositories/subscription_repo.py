@@ -225,3 +225,89 @@ class SubscriptionRepository:
             {"at": at, "ids": ids},
         )
         await self._s.flush()
+
+    # ── v0.18 — upcoming-renewal reminder sweep ─────────────────────────
+    #
+    # Selects active subs whose period boundary is within the lookahead
+    # window (default 24h before next_renewal_at). Same FOR UPDATE SKIP
+    # LOCKED + dedup-column-in-SELECT-txn pattern as the renewal sweep.
+
+    async def due_for_reminder(
+        self,
+        *,
+        now: datetime,
+        lookahead_seconds: int,
+        limit: int = 100,
+        tenant_id: str = "DEFAULT",
+    ) -> list[dict]:
+        """IDs + customer/plan info for active subs whose next renewal
+        falls inside the lookahead window AND we haven't reminded
+        them yet for this period.
+
+        Returns a list of dicts so a single round trip carries
+        everything the worker needs to compose the reminder
+        (no per-id CRM call needed if the customer email isn't
+        cached on the row — caller still needs that lookup).
+        """
+        result = await self._s.execute(
+            text(
+                """
+                SELECT
+                    id,
+                    customer_id,
+                    offering_id,
+                    msisdn,
+                    next_renewal_at,
+                    price_amount,
+                    price_currency
+                FROM subscription.subscription
+                WHERE state = 'active'
+                  AND next_renewal_at IS NOT NULL
+                  AND next_renewal_at > :now
+                  AND next_renewal_at <= :now + make_interval(secs => :lookahead_seconds)
+                  AND (renewal_reminder_sent_at IS NULL
+                       OR renewal_reminder_sent_at < next_renewal_at)
+                  AND tenant_id = :tenant
+                ORDER BY next_renewal_at
+                LIMIT :limit
+                FOR UPDATE SKIP LOCKED
+                """
+            ),
+            {
+                "now": now,
+                "lookahead_seconds": lookahead_seconds,
+                "limit": limit,
+                "tenant": tenant_id,
+            },
+        )
+        return [
+            {
+                "id": row[0],
+                "customer_id": row[1],
+                "offering_id": row[2],
+                "msisdn": row[3],
+                "next_renewal_at": row[4],
+                "price_amount": row[5],
+                "price_currency": row[6],
+            }
+            for row in result.all()
+        ]
+
+    async def mark_reminder_sent(
+        self, *, ids: list[str], at: datetime
+    ) -> None:
+        """Bulk-set `renewal_reminder_sent_at` (committed in same SELECT txn)."""
+        if not ids:
+            return
+        await self._s.execute(
+            text(
+                """
+                UPDATE subscription.subscription
+                SET renewal_reminder_sent_at = :at,
+                    updated_at = :at
+                WHERE id = ANY(:ids)
+                """
+            ),
+            {"at": at, "ids": ids},
+        )
+        await self._s.flush()

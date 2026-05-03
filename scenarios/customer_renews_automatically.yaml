@@ -97,11 +97,31 @@ steps:
         currentPeriodStart: "{{ period_start_initial }}"
         nextRenewalAt: "{{ next_renewal_initial }}"
 
-  # ── 2. Advance clock past the period boundary ────────────────────────
-  - name: advance clock past next_renewal_at (30 days)
+  # ── 2a. Advance clock to inside the reminder window (29 days in) ─────
+  # next_renewal_at - 24h is the lookahead boundary for the upcoming-
+  # renewal reminder. Advancing 29 days lands inside that window so
+  # the reminder sweep should pick this subscription up.
+  - name: advance clock to inside the reminder lookahead window
     action: clock.advance
     args:
-      duration: "30d"
+      duration: "29d"
+
+  - name: trigger one sweep — should send the upcoming-renewal reminder
+    action: subscription.tick_renewals_now
+
+  - name: subscription is still active and not yet renewed
+    assert:
+      tool: subscription.get
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        state: active
+        currentPeriodStart: "{{ period_start_initial }}"
+
+  # ── 2b. Advance past the boundary so the renewal sweep fires ─────────
+  - name: advance the final 1 day to reach next_renewal_at
+    action: clock.advance
+    args:
+      duration: "1d"
 
   - name: nudge clock 1 minute past the exact boundary
     action: clock.advance

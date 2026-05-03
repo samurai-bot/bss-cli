@@ -39,6 +39,12 @@ class Subscription(Base, TenantMixin, TimestampMixin):
     # naturally becomes "due" again next period without any cleanup. Reused
     # by the blocked-overdue sweep so a single column dedup both signals.
     last_renewal_attempted_at: Mapped[datetime | None] = mapped_column(TZDateTime)
+    # v0.18 — set when the upcoming-renewal reminder email was sent.
+    # Same dedup pattern; compared via
+    # `renewal_reminder_sent_at < next_renewal_at`. Separate column from
+    # last_renewal_attempted_at because the two signals fire at different
+    # times in the period (reminder ~24h before, renewal at the boundary).
+    renewal_reminder_sent_at: Mapped[datetime | None] = mapped_column(TZDateTime)
 
     # v0.7 — price snapshot copied at order time. Renewal charges this, not catalog.
     price_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)

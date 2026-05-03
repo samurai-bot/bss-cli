@@ -30,7 +30,14 @@ async def _async_cm(value):
     yield value
 
 
-def _build_app(*, due_ids=(), blocked_ids=(), renew_side_effect=None):
+def _build_app(
+    *,
+    due_ids=(),
+    blocked_ids=(),
+    renew_side_effect=None,
+    crm_customer=None,
+    email_adapter=None,
+):
     """Build a fake app with mocked session_factory + clients.
 
     Returns (app, recorder) where `recorder` captures repo + service
@@ -43,8 +50,6 @@ def _build_app(*, due_ids=(), blocked_ids=(), renew_side_effect=None):
         sessions_opened=0,
     )
 
-    # The same session is returned by every session_factory() call —
-    # tests assert that DIFFERENT factory calls happened (one per id).
     def _make_session():
         recorder.sessions_opened += 1
         session = MagicMock()
@@ -56,14 +61,27 @@ def _build_app(*, due_ids=(), blocked_ids=(), renew_side_effect=None):
     def _factory():
         return _async_cm(_make_session())
 
+    crm_client = MagicMock()
+    crm_client.get_customer = AsyncMock(
+        return_value=crm_customer
+        or {
+            "id": "CUST-123",
+            "contactMedium": [
+                {"mediumType": "email", "value": "demo@example.com",
+                 "isPrimary": True},
+            ],
+        }
+    )
+
     app = SimpleNamespace(
         state=SimpleNamespace(
             session_factory=_factory,
-            crm_client=MagicMock(),
+            crm_client=crm_client,
             payment_client=MagicMock(),
             catalog_client=MagicMock(),
             inventory_client=MagicMock(),
             mq_exchange=None,
+            email_adapter=email_adapter,
         )
     )
 
@@ -83,7 +101,9 @@ def patched_worker_module(monkeypatch):
             self.session = session
             self.due_ids: list[str] = []
             self.blocked_ids: list[str] = []
+            self.reminder_rows: list[dict] = []
             self.marked: list[list[str]] = []
+            self.marked_reminder: list[list[str]] = []
             repo_instances.append(self)
 
         async def due_for_renewal(self, *, now, limit=100, tenant_id="DEFAULT"):
@@ -92,8 +112,14 @@ def patched_worker_module(monkeypatch):
         async def overdue_blocked(self, *, now, limit=100, tenant_id="DEFAULT"):
             return list(self.blocked_ids)
 
+        async def due_for_reminder(self, *, now, lookahead_seconds, limit=100, tenant_id="DEFAULT"):
+            return list(self.reminder_rows)
+
         async def mark_renewal_attempted(self, *, ids, at):
             self.marked.append(list(ids))
+
+        async def mark_reminder_sent(self, *, ids, at):
+            self.marked_reminder.append(list(ids))
 
     class FakeVasRepo:
         def __init__(self, session):
@@ -136,7 +162,7 @@ def patched_worker_module(monkeypatch):
     )
 
 
-def _seed_due(patched, due_ids, *, blocked_ids=()):
+def _seed_due(patched, due_ids, *, blocked_ids=(), reminder_rows=()):
     """Set the *next* repo instance to return these ids when queried."""
 
     original_init = patched.FakeRepo.__init__
@@ -145,8 +171,50 @@ def _seed_due(patched, due_ids, *, blocked_ids=()):
         original_init(self, session)
         self.due_ids = list(due_ids)
         self.blocked_ids = list(blocked_ids)
+        self.reminder_rows = list(reminder_rows)
 
     patched.FakeRepo.__init__ = _init
+
+
+def _make_reminder_row(
+    sub_id="SUB-1",
+    customer_id="CUST-1",
+    offering_id="PLAN_M",
+    msisdn="90000001",
+    next_renewal_at=None,
+    price_amount=None,
+    price_currency="SGD",
+):
+    """Helper to build a row dict matching `due_for_reminder()` output."""
+    from datetime import datetime, timezone
+    from decimal import Decimal
+
+    return {
+        "id": sub_id,
+        "customer_id": customer_id,
+        "offering_id": offering_id,
+        "msisdn": msisdn,
+        "next_renewal_at": next_renewal_at
+        or datetime(2026, 6, 5, 9, 0, tzinfo=timezone.utc),
+        "price_amount": price_amount or Decimal("25.00"),
+        "price_currency": price_currency,
+    }
+
+
+class _RecordingEmailAdapter:
+    """Minimal EmailAdapter test double — captures send_renewal_reminder calls."""
+
+    def __init__(self):
+        self.sends: list[dict] = []
+
+    def send_renewal_reminder(self, email, **kwargs):
+        self.sends.append({"email": email, **kwargs})
+
+    # Unused by the reminder sweep but required by the Protocol shape
+    # so static lints (if any) don't grumble. Tests don't exercise these.
+    def send_login(self, email, otp, magic_link): pass  # noqa: E704
+    def send_step_up(self, email, otp, action_label): pass  # noqa: E704
+    def send_email_change_verification(self, new_email, otp, magic_link): pass  # noqa: E704
 
 
 # ── Tests ────────────────────────────────────────────────────────────
@@ -321,3 +389,127 @@ async def test_sweep_skipped_uses_worker_auth_context(patched_worker_module):
         patched.worker_mod.publisher.publish = original_publish
 
     assert captured_actors == ["system:renewal_worker"]
+
+
+# ── Upcoming-renewal reminder sweep ───────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_sweep_reminder_sends_for_each_due_row(patched_worker_module):
+    patched = patched_worker_module
+    rows = [
+        _make_reminder_row(sub_id="SUB-1", customer_id="CUST-1"),
+        _make_reminder_row(sub_id="SUB-2", customer_id="CUST-2"),
+    ]
+    _seed_due(patched, [], reminder_rows=rows)
+    adapter = _RecordingEmailAdapter()
+    app, _rec = _build_app(email_adapter=adapter)
+
+    await patched.worker_mod._sweep_upcoming_renewal_reminder(app)
+
+    # Two reminders sent, one per due row
+    assert len(adapter.sends) == 2
+    assert adapter.sends[0]["email"] == "demo@example.com"
+    assert adapter.sends[0]["plan_name"] == "Standard"   # PLAN_M → human
+    assert adapter.sends[0]["amount"] == "25.00"
+    assert adapter.sends[0]["currency"] == "SGD"
+    assert adapter.sends[0]["msisdn"] == "90000001"
+
+
+@pytest.mark.asyncio
+async def test_sweep_reminder_marks_before_send(patched_worker_module):
+    """The dedup column write must commit before any email goes out
+    so a peer replica's next sweep doesn't double-send the reminder."""
+    patched = patched_worker_module
+    rows = [_make_reminder_row(sub_id="SUB-1")]
+    _seed_due(patched, [], reminder_rows=rows)
+    adapter = _RecordingEmailAdapter()
+    app, _rec = _build_app(email_adapter=adapter)
+
+    await patched.worker_mod._sweep_upcoming_renewal_reminder(app)
+
+    select_repo = patched.repo_instances[0]
+    assert select_repo.marked_reminder == [["SUB-1"]]
+
+
+@pytest.mark.asyncio
+async def test_sweep_reminder_skips_when_no_email_on_customer(
+    patched_worker_module,
+):
+    patched = patched_worker_module
+    rows = [_make_reminder_row(sub_id="SUB-1")]
+    _seed_due(patched, [], reminder_rows=rows)
+    adapter = _RecordingEmailAdapter()
+    app, _rec = _build_app(
+        email_adapter=adapter,
+        crm_customer={"id": "CUST-1", "contactMedium": []},
+    )
+
+    await patched.worker_mod._sweep_upcoming_renewal_reminder(app)
+
+    # No email sent — but the row was still marked (we don't retry on
+    # missing-email; the renewal itself will still fire on the boundary)
+    assert adapter.sends == []
+    assert patched.repo_instances[0].marked_reminder == [["SUB-1"]]
+
+
+@pytest.mark.asyncio
+async def test_sweep_reminder_disabled_when_lookahead_zero(
+    patched_worker_module, monkeypatch,
+):
+    monkeypatch.setenv("BSS_RENEWAL_REMINDER_LOOKAHEAD_SECONDS", "0")
+    patched = patched_worker_module
+    rows = [_make_reminder_row(sub_id="SUB-1")]
+    _seed_due(patched, [], reminder_rows=rows)
+    adapter = _RecordingEmailAdapter()
+    app, _rec = _build_app(email_adapter=adapter)
+
+    await patched.worker_mod._sweep_upcoming_renewal_reminder(app)
+
+    assert adapter.sends == []
+    # Repo not even queried — the lookahead gate short-circuits before
+    # the SELECT, so no FakeRepo got a `due_for_reminder` call.
+    assert patched.repo_instances == []
+
+
+@pytest.mark.asyncio
+async def test_sweep_reminder_no_op_when_email_adapter_missing(
+    patched_worker_module,
+):
+    patched = patched_worker_module
+    rows = [_make_reminder_row(sub_id="SUB-1")]
+    _seed_due(patched, [], reminder_rows=rows)
+    app, _rec = _build_app(email_adapter=None)
+
+    await patched.worker_mod._sweep_upcoming_renewal_reminder(app)
+
+    # Adapter init failed at lifespan; sweep just returns. No repo
+    # query, no mark, no send.
+    assert patched.repo_instances == []
+
+
+@pytest.mark.asyncio
+async def test_sweep_reminder_per_id_failure_does_not_poison_others(
+    patched_worker_module,
+):
+    patched = patched_worker_module
+    rows = [
+        _make_reminder_row(sub_id="SUB-1", customer_id="CUST-1", msisdn="90000001"),
+        _make_reminder_row(sub_id="SUB-2", customer_id="CUST-2", msisdn="90000002"),
+        _make_reminder_row(sub_id="SUB-3", customer_id="CUST-3", msisdn="90000003"),
+    ]
+    _seed_due(patched, [], reminder_rows=rows)
+
+    class _PartiallyFailingAdapter(_RecordingEmailAdapter):
+        def send_renewal_reminder(self, email, **kwargs):
+            if kwargs.get("msisdn") == "90000001":
+                raise RuntimeError("smtp blew up")
+            super().send_renewal_reminder(email, **kwargs)
+
+    adapter = _PartiallyFailingAdapter()
+    app, _rec = _build_app(email_adapter=adapter)
+
+    await patched.worker_mod._sweep_upcoming_renewal_reminder(app)
+
+    # SUB-1's send failed but SUB-2 and SUB-3 still sent
+    assert len(adapter.sends) == 2

@@ -729,6 +729,12 @@ Doctrine v0.18+:
 
 `BSS_RENEWAL_TICK_SECONDS=0` disables the worker (e.g. for unit tests, or for deployments running multiple subscription replicas behind an external orchestrator). The admin endpoint `POST /admin-api/v1/renewal/tick-now` (gated by `BSS_ALLOW_ADMIN_RESET`) drives one deterministic sweep — used by the v0.18 hero scenario after `clock.advance` to avoid waiting 60 wall-seconds for the natural tick. Production deployments keep the flag false.
 
+The worker runs three sweeps per tick:
+
+1. `_sweep_due` — active subs whose `next_renewal_at` has passed → dispatch `service.renew()`. Audit attribution: `actor=system:renewal_worker`.
+2. `_sweep_skipped` — blocked subs whose boundary has passed → emit `subscription.renewal_skipped` (no charge). Cockpit signal.
+3. `_sweep_upcoming_renewal_reminder` — active subs whose `next_renewal_at` falls inside `BSS_RENEWAL_REMINDER_LOOKAHEAD_SECONDS` (default 24h) → look up customer email via CRM, send a reminder email via the portal `EmailAdapter`, deduped via the `subscription.renewal_reminder_sent_at` column (migration `0021`). The email reuses the OTP visual vibe (dark theme, bordered green highlight block) but carries the renewal amount instead of an OTP. Set lookahead to 0 to disable just the reminder sweep without disabling renewal.
+
 ### Note on billing in v0.1
 
 v0.1 ships **without a billing service**. Phase 0 planned one as service #9 (TMF678, port 8009), and the Phase 2 initial migration created the `billing` schema with two tables (`billing_account`, `customer_bill`) — but no phase actually built the service layer. v0.1.1 formally defers billing to v0.2, where it will be reintroduced as a **read-only view layer over `payment.payment_attempt`**: receipt aggregation, statement generation, TMF678 `/customerBill` endpoints. No dunning, no credit extension, no formal invoice generation — bundled-prepaid doesn't need them, since charges happen synchronously at activation / renewal / VAS purchase and are already recorded on `payment.payment_attempt`. The `billing` schema and its tables remain in the migration so v0.2 is purely additive. Port 8009 is reserved. See `DECISIONS.md` 2026-04-13 for the deferral rationale and the scope note separating the billing **service** from "billing" as CRM customer-support **vocabulary**.
