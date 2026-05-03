@@ -10,6 +10,7 @@ from app.policies.payment import (
     check_customer_matches_method,
     check_method_active,
     check_positive_amount,
+    check_token_provider_matches_active,
 )
 from app.policies.payment_method import (
     check_at_most_n_methods,
@@ -112,3 +113,53 @@ class TestPaymentChargePolicies:
         with pytest.raises(PolicyViolation) as exc_info:
             check_customer_matches_method("CUST-999", self._make_method())
         assert exc_info.value.rule == "payment.charge.customer_matches_method"
+
+
+class TestTokenProviderMatchesActive:
+    """v0.16 lazy-fail cutover guard."""
+
+    def _make_method(self, *, token_provider="mock"):
+        from unittest.mock import MagicMock
+
+        m = MagicMock()
+        m.id = "PM-0001"
+        m.token_provider = token_provider
+        return m
+
+    def test_mock_row_with_mock_adapter_passes(self):
+        check_token_provider_matches_active(
+            self._make_method(token_provider="mock"), "MockTokenizerAdapter"
+        )
+
+    def test_stripe_row_with_stripe_adapter_passes(self):
+        check_token_provider_matches_active(
+            self._make_method(token_provider="stripe"), "StripeTokenizerAdapter"
+        )
+
+    def test_mock_row_under_stripe_adapter_rejected(self):
+        with pytest.raises(PolicyViolation) as exc_info:
+            check_token_provider_matches_active(
+                self._make_method(token_provider="mock"),
+                "StripeTokenizerAdapter",
+            )
+        assert (
+            exc_info.value.rule
+            == "payment.charge.token_provider_matches_active"
+        )
+        assert exc_info.value.context["row_token_provider"] == "mock"
+        assert exc_info.value.context["expected_token_provider"] == "stripe"
+
+    def test_stripe_row_under_mock_adapter_rejected(self):
+        with pytest.raises(PolicyViolation):
+            check_token_provider_matches_active(
+                self._make_method(token_provider="stripe"),
+                "MockTokenizerAdapter",
+            )
+
+    def test_unknown_adapter_class_skipped(self):
+        # Test doubles use unknown class names; the guard no-ops so
+        # tests can use stub tokenizers without setting token_provider
+        # to match.
+        check_token_provider_matches_active(
+            self._make_method(token_provider="mock"), "FooTokenizer"
+        )

@@ -8,6 +8,7 @@ from bss_telemetry import configure_telemetry
 from fastapi import Depends, FastAPI, Request
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.domain.select_tokenizer import select_tokenizer
 from app.repositories.payment_attempt_repo import PaymentAttemptRepository
 from app.repositories.payment_method_repo import PaymentMethodRepository
 from app.services.payment_method_service import PaymentMethodService
@@ -28,7 +29,24 @@ async def lifespan(app: FastAPI):
         base_url=settings.crm_url,
         auth_provider=TokenAuthProvider(api_token()),
     )
-    log.info("service.starting", service=settings.service_name)
+    # v0.16: TokenizerAdapter selected once at startup; fail-fast on
+    # any misconfig (unknown provider, missing creds, sk_test_* in
+    # production, ALLOW_TEST_CARD_REUSE + sk_live_*). Service refuses
+    # to start rather than silently downgrading.
+    app.state.tokenizer = select_tokenizer(
+        name=settings.payment_provider,
+        env=settings.env,
+        stripe_api_key=settings.payment_stripe_api_key,
+        stripe_publishable_key=settings.payment_stripe_publishable_key,
+        stripe_webhook_secret=settings.payment_stripe_webhook_secret,
+        allow_test_card_reuse=settings.payment_allow_test_card_reuse,
+        session_factory=app.state.session_factory,
+    )
+    log.info(
+        "service.starting",
+        service=settings.service_name,
+        payment_provider=settings.payment_provider,
+    )
     yield
     log.info("service.stopping", service=settings.service_name)
     await app.state.crm_client.close()
@@ -71,10 +89,12 @@ async def get_payment_method_service(
 
 
 async def get_payment_service(
+    request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> PaymentService:
     return PaymentService(
         session=session,
         attempt_repo=PaymentAttemptRepository(session),
         pm_repo=PaymentMethodRepository(session),
+        tokenizer=request.app.state.tokenizer,
     )

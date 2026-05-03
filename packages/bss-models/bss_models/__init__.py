@@ -44,8 +44,8 @@ from .catalog import (
 # Inventory (2 tables)
 from .inventory import EsimProfile, MsisdnPool
 
-# Payment (2 tables)
-from .payment import PaymentAttempt, PaymentMethod
+# Payment (3 tables; v0.16 added PaymentCustomer)
+from .payment import PaymentAttempt, PaymentCustomer, PaymentMethod
 
 # Order Management (3 tables)
 from .order_mgmt import OrderItem, OrderStateHistory, ProductOrder
@@ -124,6 +124,7 @@ __all__ = [
     # Payment
     "PaymentMethod",
     "PaymentAttempt",
+    "PaymentCustomer",
     # Order Management
     "ProductOrder",
     "OrderItem",

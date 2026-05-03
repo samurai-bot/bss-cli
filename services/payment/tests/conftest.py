@@ -106,6 +106,12 @@ async def client(settings: Settings, db_engine, db_session: AsyncSession):
 
     app.state.session_factory = _FakeSessionFactory()
 
+    # v0.16: tests bypass lifespan, so the tokenizer adapter must be
+    # hung off app.state by hand. MockTokenizerAdapter preserves every
+    # FAIL/DECLINE test affordance the existing payment tests rely on.
+    from app.domain.mock_tokenizer import MockTokenizerAdapter
+    app.state.tokenizer = MockTokenizerAdapter()
+
     # Mock CRM client — returns active customer by default
     mock_crm = AsyncMock(spec=CRMClient)
     mock_crm.get_customer = AsyncMock(
