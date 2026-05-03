@@ -54,6 +54,7 @@ DOMAIN_PAYMENT: Final[str] = "payment"  # v0.16+
 
 ALL_DOMAINS_V014: Final[tuple[str, ...]] = (DOMAIN_EMAIL,)
 ALL_DOMAINS_V015: Final[tuple[str, ...]] = (DOMAIN_EMAIL, DOMAIN_KYC)
+ALL_DOMAINS_V016: Final[tuple[str, ...]] = (DOMAIN_EMAIL, DOMAIN_KYC, DOMAIN_PAYMENT)
 
 # How many wizard-written .env.backup-* files to keep. Hand-named
 # backups (no -HHMMSS suffix) are NOT matched and never touched.
@@ -106,10 +107,7 @@ def onboard_callback(
         elif d == DOMAIN_KYC:
             _configure_kyc(env)
         elif d == DOMAIN_PAYMENT:
-            rprint(
-                "[yellow]Payment is configurable starting in v0.16. "
-                "Re-run `bss onboard --domain payment` after that release.[/]"
-            )
+            _configure_payment(env)
         else:
             rprint(f"[red]Unknown domain: {d!r}[/]")
             raise typer.Exit(code=2)
@@ -322,6 +320,165 @@ def _probe_didit_session(*, api_key: str, workflow_id: str) -> bool:
     return True
 
 
+def _configure_payment(env: dict[str, str]) -> None:
+    """Stripe (v0.16) prompts. Mode 1 = test (mock tokenizer);
+    mode 2 = production (Stripe). The Stripe path probes by calling
+    Account.retrieve — confirms the key works without spending money or
+    creating customers."""
+    current = env.get("BSS_PAYMENT_PROVIDER", "")
+    rprint(f"  Current provider: [cyan]{current or '(unset; defaults to mock)'}[/]")
+    mode = Prompt.ask(
+        "  Mode",
+        choices=["test", "production"],
+        default="production" if current == "stripe" else "test",
+    )
+
+    if mode == "test":
+        env["BSS_PAYMENT_PROVIDER"] = "mock"
+        # Drop stale Stripe creds so the test deployment doesn't
+        # silently carry production keys around. Same foot-gun
+        # reasoning as email + KYC.
+        env.pop("BSS_PAYMENT_STRIPE_API_KEY", None)
+        env.pop("BSS_PAYMENT_STRIPE_PUBLISHABLE_KEY", None)
+        env.pop("BSS_PAYMENT_STRIPE_WEBHOOK_SECRET", None)
+        env.pop("BSS_PAYMENT_ALLOW_TEST_CARD_REUSE", None)
+        rprint(
+            "  [green]✓[/] Mode set to [cyan]mock[/] — "
+            "in-process tokenizer, no external calls. "
+            "Hero scenarios use this mode."
+        )
+        return
+
+    # production = Stripe
+    env["BSS_PAYMENT_PROVIDER"] = "stripe"
+
+    api_key = Prompt.ask(
+        "  Stripe secret key (sk_test_... for sandbox, sk_live_*** for production)",
+        default=env.get("BSS_PAYMENT_STRIPE_API_KEY", ""),
+        password=True,
+    )
+    if not (api_key.startswith("sk_test_") or api_key.startswith("sk_live_")):
+        rprint(
+            "  [red]Secret key must start with 'sk_test_' or 'sk_live_'. Aborting.[/]"
+        )
+        raise typer.Exit(code=2)
+    env["BSS_PAYMENT_STRIPE_API_KEY"] = api_key
+    is_test_secret = api_key.startswith("sk_test_")
+
+    publishable_key = Prompt.ask(
+        "  Stripe publishable key (pk_test_... or pk_live_...)",
+        default=env.get("BSS_PAYMENT_STRIPE_PUBLISHABLE_KEY", ""),
+    )
+    if not (
+        publishable_key.startswith("pk_test_")
+        or publishable_key.startswith("pk_live_")
+    ):
+        rprint(
+            "  [red]Publishable key must start with 'pk_test_' or 'pk_live_'. Aborting.[/]"
+        )
+        raise typer.Exit(code=2)
+    is_test_pub = publishable_key.startswith("pk_test_")
+    if is_test_secret != is_test_pub:
+        rprint(
+            "  [red]Stripe key mode mismatch — secret and publishable keys "
+            "must both be test (sk_test_/pk_test_) or both live "
+            "(sk_live_/pk_live_).[/]"
+        )
+        raise typer.Exit(code=2)
+    env["BSS_PAYMENT_STRIPE_PUBLISHABLE_KEY"] = publishable_key
+
+    bss_env = env.get("BSS_ENV", "development")
+    if bss_env == "production" and is_test_secret:
+        rprint(
+            "  [red]Refusing to write sk_test_* with BSS_ENV=production. "
+            "Production must use sk_live_*; sandbox testing must use "
+            "BSS_ENV=staging or development.[/]"
+        )
+        raise typer.Exit(code=2)
+    if bss_env != "production" and not is_test_secret:
+        rprint(
+            "  [yellow]Warning:[/] live Stripe keys (sk_live_*) configured "
+            f"with BSS_ENV={bss_env!r}. Real card charges will hit your "
+            "Stripe account — make sure this is intentional."
+        )
+
+    webhook_secret = Prompt.ask(
+        "  Stripe webhook signing secret (whsec_...)",
+        default=env.get("BSS_PAYMENT_STRIPE_WEBHOOK_SECRET", ""),
+        password=True,
+    )
+    if not webhook_secret.startswith("whsec_"):
+        rprint(
+            "  [red]Webhook secret must start with 'whsec_'. "
+            "Get it from Stripe Dashboard → Developers → Webhooks → "
+            "your endpoint → Signing secret. Aborting.[/]"
+        )
+        raise typer.Exit(code=2)
+    env["BSS_PAYMENT_STRIPE_WEBHOOK_SECRET"] = webhook_secret
+
+    if is_test_secret:
+        # Sandbox affordance — preserved across re-runs to stay consistent
+        # with Track 1 select_tokenizer guards (refuses with sk_live_*).
+        if Confirm.ask(
+            "  Enable BSS_PAYMENT_ALLOW_TEST_CARD_REUSE? "
+            "(sandbox-only; lets the same Stripe test pm_* re-attach to "
+            "different BSS customers — required if you'll signup multiple "
+            "test customers using `pm_card_visa`)",
+            default=env.get("BSS_PAYMENT_ALLOW_TEST_CARD_REUSE", "").lower()
+            == "true",
+        ):
+            env["BSS_PAYMENT_ALLOW_TEST_CARD_REUSE"] = "true"
+        else:
+            env.pop("BSS_PAYMENT_ALLOW_TEST_CARD_REUSE", None)
+    else:
+        # Live keys — strip the flag if it's there. select_tokenizer
+        # would refuse to start otherwise.
+        env.pop("BSS_PAYMENT_ALLOW_TEST_CARD_REUSE", None)
+
+    if Confirm.ask(
+        "  Probe Stripe by calling Account.retrieve?", default=True
+    ):
+        ok = _probe_stripe(api_key=api_key)
+        if not ok:
+            rprint(
+                "  [red]Probe failed. Review the error above and re-run "
+                "`bss onboard --domain payment`.[/]"
+            )
+            raise typer.Exit(code=2)
+        rprint("  [green]✓[/] Stripe accepted the key.")
+
+    rprint(
+        "  [dim]Reminder: cut over saved cards before flipping the env "
+        "var in production — see [cyan]docs/runbooks/stripe-cutover.md[/].[/]"
+    )
+
+
+def _probe_stripe(*, api_key: str) -> bool:
+    """Try a single stripe.Account.retrieve. Return True on success.
+
+    Account.retrieve costs nothing and creates nothing — it just
+    confirms the key is valid + tells us the account id.
+    """
+    try:
+        import stripe  # type: ignore[import-not-found]
+    except ImportError:
+        rprint("  [red]The `stripe` SDK isn't installed. Run `uv sync`.[/]")
+        return False
+
+    try:
+        account = stripe.Account.retrieve(api_key=api_key)
+    except Exception as exc:  # noqa: BLE001 — surface SDK error verbatim
+        rprint(f"  [red]Stripe rejected the probe: {exc}[/]")
+        return False
+    acct_id = (
+        account.get("id")
+        if isinstance(account, dict)
+        else getattr(account, "id", "?")
+    )
+    rprint(f"    Stripe account: id=[cyan]{acct_id}[/]")
+    return True
+
+
 def _probe_resend(*, api_key: str, from_addr: str, recipient: str) -> bool:
     """Try a single Resend send. Return ``True`` on success."""
     try:
@@ -486,7 +643,7 @@ def _quote_if_needed(value: str) -> str:
 
 def _domains_to_configure(domain: str | None) -> tuple[str, ...]:
     if domain is None:
-        return ALL_DOMAINS_V015
+        return ALL_DOMAINS_V016
     d = domain.lower()
     if d in (DOMAIN_EMAIL, DOMAIN_KYC, DOMAIN_PAYMENT):
         return (d,)

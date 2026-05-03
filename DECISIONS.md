@@ -2411,3 +2411,268 @@ raise.
 - v0.16 (or whenever the real provider lands) is a config swap +
   HTTP-call impl + redaction tests. The structural change ships
   in v0.15.
+
+## 2026-05-03 — v0.16.0 PCI scope: Stripe.js + Elements only in production
+
+**Context:** v0.16 makes Stripe a real production payment provider.
+Stripe's API accepts both `tokenize_card(PAN)` (server-side, requires
+PCI DSS SAQ D scope) and `Elements` (client-side, qualifies for SAQ A
+— the smallest possible scope). PCI SAQ A is the only viable posture
+for a small MVNO operator without a dedicated security team.
+
+**Decision:** PAN never touches BSS in production. Server-side
+tokenization is forbidden in `BSS_PAYMENT_PROVIDER=stripe` mode:
+
+- `StripeTokenizerAdapter.tokenize` raises `NotImplementedError` loudly
+  with a security-mistake message. Anyone calling it is making a
+  mistake, not a normal-flow choice.
+- Track 2 (portal Elements rework) replaces the v0.1 server-rendered
+  card-number form with Stripe.js + Elements when
+  `BSS_PAYMENT_PROVIDER=stripe`. Mock-mode keeps the existing form for
+  dev affordance.
+- A startup template scan refuses to boot the portal in
+  `BSS_ENV=production` + `BSS_PAYMENT_PROVIDER=stripe` if any template
+  contains a card-number `<input>`.
+- The `bss payment add-card` CLI is mode-gated to
+  `BSS_PAYMENT_PROVIDER=mock`. Stripe-mode customers add cards via
+  Elements; CLI add-card is dev-only.
+
+**Alternatives rejected:**
+- Server-side tokenization with PCI SAQ D. Rejected — SAQ D is
+  expensive (annual audit, network segmentation, intrusion-detection
+  systems, six-figure compliance budget). Out of scope for "small
+  MVNO."
+- Mode-switched server-side path that uses Elements in production but
+  keeps server-side as a fallback. Rejected — fallbacks don't pass PCI
+  audits. The line "PAN never touches BSS in production" must be
+  unconditional.
+
+**Consequences:**
+- Track 2 is the most invasive single UI change in BSS-CLI since the
+  v0.4 portal landed. Spec budgets two days; trap section reasserts.
+- Operator who switches to stripe-mode without Track 2 deployed sees
+  the portal refuse to start. The startup template scan catches it
+  before customers can hit a broken form.
+- `tokenize` lives in the `TokenizerAdapter` Protocol surface anyway
+  (Mock implements it for dev affordance) — Adyen-portable shape
+  preserved.
+
+## 2026-05-03 — v0.16.0 Stripe chargebacks are record-only
+
+**Context:** Stripe emits `charge.dispute.created` when a customer
+disputes a charge with their bank. Most BSS-shaped products use this as
+a trigger to auto-open a customer-care case, possibly auto-block the
+service, possibly auto-flag the customer. CSR ergonomics improve.
+
+**Decision:** v0.16 records the dispute event and emits
+`payment.dispute_opened` for the cockpit to surface. **No automatic
+case creation. No automatic service block. No automatic customer
+flagging.** Operator handles via the existing case workflow if they
+choose.
+
+**Why:** Motto #1 (no dunning, no collections, no auto-action on
+payment-collection-adjacent events). Bundled-prepaid posture means
+"failed charge = service stops at next renewal boundary"; chargebacks
+are a payment-collection-adjacent signal that a different product
+might dispute, contest, or escalate on. BSS-CLI deliberately doesn't.
+
+**Alternatives rejected:**
+- Auto-open `case.opened` keyed on chargeback. Rejected — motto #1
+  erosion. The version of BSS-CLI that auto-acts on chargebacks is a
+  different product.
+- Auto-block service for the disputed charge's customer. Rejected —
+  same. The customer's bundle either has remaining quota or it doesn't;
+  a contested historical charge doesn't change that.
+
+**Consequences:**
+- The cockpit operator sees `payment.dispute_opened` events and can
+  decide to open a case manually. The decision is human, not
+  automatic.
+- A future product variant that wants auto-action would add it as a
+  webhook-event consumer that subscribes to
+  `payment.dispute_opened` — no change to v0.16 record-only stance is
+  required.
+
+## 2026-05-03 — v0.16.0 Out-of-band refunds are record-only
+
+**Context:** Stripe's dashboard lets the operator issue a refund
+directly without going through BSS. The `charge.refunded` webhook
+fires; BSS sees it.
+
+**Decision:** v0.16 emits `payment.refunded` with the refund amount and
+reason. **No automatic balance adjustment. No automatic bundle restore.
+No service un-block.** Operator handles balance changes via existing
+tools if they choose.
+
+**Why:** Motto #1 again. Refund-driven balance changes are a v1.0
+concern; v0.16 records the refund but doesn't reverse the bundle. The
+product is bundled-prepaid; refund is an exception, not a flow.
+
+**Alternatives rejected:**
+- Auto-restore the bundle on refund. Rejected — opens up "operator
+  refunds at Stripe → customer's service un-blocks → operator
+  expected the refund to be admin-only", which leaks operator intent.
+  Better to require explicit balance-adjustment.
+
+**Consequences:**
+- An operator who refunds at Stripe AND wants the customer's bundle
+  reversed must do both actions. The cockpit can surface the refund
+  event so the operator doesn't forget.
+- v1.0+ may add an opt-in auto-reconcile. v0.16 doesn't.
+
+## 2026-05-03 — v0.16.0 Webhook is secondary source of truth for charge state
+
+**Context:** Stripe's `PaymentIntent.create` returns synchronously with
+the charge result; webhooks fire afterward (often more than one per
+logical state). Two sources of truth → which wins?
+
+**Decision:** The synchronous `StripeTokenizerAdapter.charge` response
+is **primary**. Webhooks **reconcile and detect drift**:
+
+- Webhook says success + row says success → `process_outcome='reconciled'`
+  or `'noop'`.
+- Webhook says X + row says NOT-X → emit `payment.attempt_state_drift`
+  for ops; **do NOT overwrite the row**.
+
+**Why:** A webhook handler that overwrites `payment_attempt.status`
+based on what the webhook says will eventually fight a sync response
+that already wrote a different status — the result is non-deterministic
+based on which write wins. Stripe's webhook is at-least-once and runs
+on Stripe's clock; it must be treated as "did the world agree with
+what we already recorded?", not "what did the world decide for us?"
+Spec trap #2.
+
+**Alternatives rejected:**
+- Webhook is primary. Rejected — see above; sync result then arrives
+  later and wars with the webhook. Plus the BSS-side renewal flow
+  blocks on the sync result, so making the webhook primary would
+  require introducing async charge semantics across the entire stack.
+- Last-write-wins. Rejected — same race; nondeterministic.
+
+**Consequences:**
+- A `payment.attempt_state_drift` event is the operator's signal that
+  the BSS row and Stripe disagree. Investigation: query both sides
+  via `bss external-calls --provider stripe --idempotency-key X`.
+- Multi-webhook reconciliation across Stripe's cascade
+  (`payment_intent.created` → `processing` → `charge.succeeded`)
+  uses last-write-wins on the receiving row's update path
+  intentionally — every webhook updates, the latest sticks. Different
+  semantic from "webhook overwrites sync result"; v0.15 commit
+  `a649bba` documented the inverse anti-pattern.
+
+## 2026-05-03 — v0.16.0 payment.customer caches per-(BSS customer, provider) external ref
+
+**Context:** `StripeTokenizerAdapter.ensure_customer` upserts a Stripe
+customer keyed on `bss_customer_id` metadata. Calling it on every
+charge would be a wasteful round-trip (Stripe can dedupe on
+idempotency_key but the BSS still pays the latency).
+
+**Decision:** New `payment.customer` table caches per-(BSS customer,
+provider) the provider-side customer ref:
+
+- `id`: BSS customer id (`CUST-001`, etc.)
+- `customer_external_ref`: Stripe `cus_*` (or future Adyen ref)
+- `customer_external_ref_provider`: `'stripe'` (or future `'adyen'`)
+
+`StripeTokenizerAdapter.ensure_customer` checks the cache first; on
+miss, calls Stripe and writes the cache. `PaymentService.charge` reads
+the cache via `_lookup_customer_external_ref` and passes it to
+`tokenizer.charge` (the adapter's `charge` requires a non-None ref;
+mock accepts None).
+
+**Alternatives rejected:**
+- Add `customer_external_ref` to `payment_method`. Rejected —
+  Stripe's `cus_*` is per-(BSS-customer, provider), not per-payment-method.
+  A customer with three saved cards has ONE Stripe customer with three
+  attached `pm_*` ids.
+- Cache in `crm.customer`. Rejected — cross-schema coupling. CRM
+  shouldn't carry payment-domain artifacts.
+- Use Stripe's `Customer.search(query="metadata['bss_customer_id']:X")`
+  on every charge. Rejected — search is rate-limited and slower than
+  a local lookup. Cache exists for a reason.
+
+**Consequences:**
+- Migration 0017 creates the table.
+- `payment.customer.id` is intentionally the BSS customer id (FK-shape
+  but not a real FK because CRM lives in a different schema; the
+  v0.1 schema-per-domain doctrine bars cross-schema FKs).
+- Future Adyen integration adds rows with
+  `customer_external_ref_provider='adyen'`; the same BSS customer can
+  carry both refs (one row per provider).
+
+## 2026-05-03 — v0.16.0 Stripe Checkout (not Elements) for browser compatibility
+
+**Context:** Track 2 originally specified Stripe.js + Elements iframe
+(spec line 152, DECISIONS 2026-05-03 PCI scope entry). In manual smoke
+testing the Elements iframe failed to render reliably:
+
+- Safari ITP-strict partitions cross-origin iframe storage; Stripe
+  Elements requires that storage to render the card form. Result:
+  iframe shows the Stripe logo briefly then disappears.
+- Chrome (regular profile, no extensions) had a related issue: my
+  inline mount script wasn't running because HTMX-injected `<script>`
+  tags don't always re-execute, and my conditional Stripe.js loader
+  on the parent page only fired at initial page render — not when
+  the customer reached pending_cof_elements via subsequent HTMX swap.
+
+The cumulative effect: customers couldn't enter card details in any
+browser tested. Multiple fix attempts (eager-load Stripe.js, mount
+via htmx:afterSwap, polling fallback, explicit form action) made the
+code more complex without solving the core fragility.
+
+**Decision:** Switch to **Stripe Checkout** — full-page redirect to
+a Stripe-hosted card form. Replaces the Elements iframe entirely.
+
+- POST /signup/step/cof/checkout-init: portal calls
+  PaymentClient.ensure_customer (via the new payment-service admin
+  endpoint) to mint cus_*, calls stripe.checkout.Session.create with
+  mode="setup", 303-redirects browser to session.url.
+- Customer enters card on Stripe-hosted page (Stripe's domain, no
+  iframe involvement on our side).
+- Stripe redirects back to GET /signup/step/cof/checkout-return?cs_id=cs_xxx.
+- Portal retrieves the session, extracts setup_intent.payment_method
+  (the pm_*), registers via bss-clients (token_provider='stripe').
+- Same shape for post-login add-card: POST /payment-methods/add/checkout-init
+  + GET /payment-methods/add/checkout-return.
+
+No Stripe.js in the browser. No iframe. No CSP issues. No HTMX
+interaction. Works in every browser including Safari ITP-strict.
+
+**Alternatives rejected:**
+
+- **Keep Elements + tell users to switch browsers.** Rejected — a
+  payment integration that doesn't work in Safari isn't shippable.
+  Singapore (the v0.1 reference market) has ~30% Safari share.
+- **Embed Checkout (mode='embedded').** Rejected — same iframe issues
+  as Elements. Stripe's docs explicitly warn that embedded mode
+  inherits the parent's CSP/iframe-policy quirks.
+- **Build our own card form + tokenize via Stripe.js's createToken
+  API.** Rejected — same Stripe.js + iframe dependency, plus we'd
+  own form UX bugs we don't today.
+
+**Consequences:**
+
+- The PCI scope guard (production-stripe + card-number input refusal)
+  stays — even more relevant now since we have ONE template path
+  (Checkout button). The mock template can keep its card_number
+  input (it's `*_mock.html` suffixed; guard exempts).
+- The portal takes a NEW dependency on the `stripe` Python SDK
+  (`stripe.checkout.Session.create/retrieve`). Adds ~600KB to the
+  portal image. Acceptable.
+- The portal needs `BSS_PAYMENT_STRIPE_API_KEY` (the secret key) so
+  it can call Stripe server-side. Previously the portal only had the
+  publishable key (browser-side). The secret key is now in TWO
+  containers (payment service + portal) — same key, same rotation
+  story, just a wider blast radius if leaked. Documented in
+  api-token-rotation runbook.
+- The customer experience IS slightly different: instead of entering
+  a card inline, they see "Continue to Stripe →" → full-page redirect
+  → Stripe-hosted form → redirect back. Most consumers know this
+  flow (Shopify uses it; many SaaS checkout flows use it).
+- The `pending_cof_elements` SignupStep value is repurposed: it now
+  means "checkout in flight" (customer is on Stripe's page, hasn't
+  completed yet). If they hit Back, the progress page renders a
+  "Open the Stripe card form again" CTA so they can retry without
+  restarting the whole signup.
+- `bss_payment_stripe_publishable_key` setting on the portal is no
+  longer needed; removed.

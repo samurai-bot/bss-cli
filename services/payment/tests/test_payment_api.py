@@ -76,6 +76,39 @@ class TestCharge:
         assert body["declineReason"] == "card_declined_by_issuer"
 
     @pytest.mark.asyncio
+    async def test_charge_persists_idempotency_key_on_attempt_row(
+        self, client: AsyncClient, db_session
+    ):
+        """v0.16: every charge stamps ATT-{id}-r0 on payment_attempt.idempotency_key.
+
+        Foundation for the v1.0 crash-recovery path. Forensics today;
+        crash-restart-detect tomorrow. See docs/runbooks/payment-idempotency.md.
+        """
+        from sqlalchemy import select
+        from bss_models import PaymentAttempt
+
+        pm_id = await _create_pm(client, token="tok_idempotency_test")
+        resp = await client.post(
+            PAY_PATH,
+            json={
+                "customerId": "CUST-001",
+                "paymentMethodId": pm_id,
+                "amount": "10.00",
+                "currency": "SGD",
+                "purpose": "activation",
+            },
+        )
+        assert resp.status_code == 201
+        attempt_id = resp.json()["id"]
+
+        row = (
+            await db_session.execute(
+                select(PaymentAttempt).where(PaymentAttempt.id == attempt_id)
+            )
+        ).scalar_one()
+        assert row.idempotency_key == f"ATT-{attempt_id}-r0"
+
+    @pytest.mark.asyncio
     async def test_charge_negative_amount_rejected(self, client: AsyncClient):
         pm_id = await _create_pm(client, token="tok_neg_test")
         resp = await client.post(

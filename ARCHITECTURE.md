@@ -545,6 +545,90 @@ without external hops — used by the v0.12 14-day soak corpus and
 hero scenarios. Selection via `BSS_PORTAL_KYC_PROVIDER`. Full
 doctrine + alternatives in DECISIONS.md (2026-05-02 entries).
 
+### v0.16 Payment — Stripe (service-layer)
+
+The payment provider seam lives in the payment service itself
+(`services/payment/app/domain/`), not the channel layer — payment is
+a back-office concern, not a customer-input concern. The portal uses
+**Stripe Checkout** (full-page redirect to Stripe-hosted card form);
+the customer's PAN goes directly to Stripe's domain — BSS only ever
+sees the resulting `pm_*` id (DECISIONS 2026-05-03 — Checkout over
+Elements, browser compatibility).
+
+```
+┌──── browser ────┐    ┌──── portal-self-serve ─────────┐    ┌── payment service (8003) ──────┐    ┌── Stripe ──┐
+│                 │    │                                 │    │                                 │    │            │
+│ /signup/step/cof│    │ render "Continue to Stripe →"   │    │                                 │    │            │
+│ pending_cof step│◀───┤   button (no Stripe.js)         │    │                                 │    │            │
+│                 │    │                                 │    │                                 │    │            │
+│ click button ──▶│    │ POST /signup/step/cof/checkout-init                                    │    │            │
+│                 │    │   ensure cus_* via bss-clients ─────▶ POST /admin-api/.../ensure       │    │            │
+│                 │    │   ◀───── cus_* ──────────────────────│  StripeTokenizerAdapter         │    │            │
+│                 │    │                                 │    │  .ensure_customer ─────────────▶│ Customer.  │
+│                 │    │                                 │    │  ◀───── cus_* ──────────────────│  create   │
+│                 │    │                                 │    │  (cached in payment.customer)   │    │            │
+│                 │    │   stripe.checkout.Session.create ──────────────────────────────────────────▶│ Checkout │
+│                 │    │     (mode=setup, customer=cus_*)│    │                                 │ Session    │
+│                 │    │   ◀──── session.url (cs_*) ────────────────────────────────────────────────│  .create  │
+│                 │    │                                 │    │                                 │    │            │
+│ ◀── 303 redirect to checkout.stripe.com/c/pay/cs_* ────┤    │                                 │    │            │
+│                 │    │                                 │    │                                 │    │            │
+│ Customer enters card on Stripe-hosted page             │    │                                 │    │            │
+│ (Stripe's domain, no iframe, no JS we control)         │    │                                 │    │            │
+│                 │    │                                 │    │                                 │    │            │
+│ ◀── 303 redirect back to portal: ──────────────────────────────────────────────────────────────────│            │
+│   /signup/step/cof/checkout-return?cs_id=cs_*          │    │                                 │    │            │
+│                 │    │                                 │    │                                 │    │            │
+│ GET checkout-   │    │ stripe.checkout.Session.retrieve                                        │    │            │
+│   return ──────▶│    │   (expand=setup_intent) ─────────────────────────────────────────────────▶│ retrieve  │
+│                 │    │ ◀──── setup_intent.payment_method (pm_*) ──────────────────────────────────│            │
+│                 │    │                                 │    │                                 │    │            │
+│                 │    │ POST /tmf-api/.../paymentMethod │    │ PaymentMethodService.register   │    │            │
+│                 │    │   (pm_*, token_provider=stripe) ───▶                                    │    │            │
+│                 │    │                                 │    │ (cus_* already attached at      │    │            │
+│                 │    │                                 │    │  Checkout time, so no extra     │    │            │
+│                 │    │                                 │    │  attach call needed)            │    │            │
+│                 │    │                                 │    │                                 │    │            │
+│ ◀── 303 to /signup/PLAN_M/progress (state=pending_order)    │                                 │    │            │
+│                 │    │                                 │    │                                 │    │            │
+│                 │    │                                 │    │  --- at renewal time ---        │    │            │
+│                 │    │                                 │    │  PaymentService.charge          │    │            │
+│                 │    │                                 │    │   → tokenizer.charge(pm_*, …)──▶│ PaymentInt │
+│                 │    │                                 │    │   (idempotency_key=ATT-{id}-r0) │ ent.create │
+│                 │    │                                 │    │  ◀───── status, pi_*, ──────────│ confirm=T  │
+│                 │    │                                 │    │     decline_code                │            │
+│                 │    │                                 │    │   → row + audit.domain_event    │            │
+│                 │    │                                 │    │                                 │            │
+│                 │    │                                 │    │  POST /webhooks/stripe ◀────────────────── webhook
+│                 │    │                                 │    │   verify HMAC (Stripe scheme)   │  charge.* │
+│                 │    │                                 │    │   → integrations.webhook_event  │  refund.* │
+│                 │    │                                 │    │   → reconcile or drift event    │  dispute  │
+└─────────────────┘    └─────────────────────────────────┘    └─────────────────────────────────┘    └────────────┘
+```
+
+The `mock` adapter (default, used by hero scenarios) preserves every
+v0.1 `tok_FAIL_*`/`tok_DECLINE_*` test affordance and skips Stripe
+entirely. Selection via `BSS_PAYMENT_PROVIDER`. Five startup guards in
+`select_tokenizer` fail-fast on misconfig (missing creds, sk_test_*
+in production, ALLOW_TEST_CARD_REUSE + sk_live_*, etc.).
+
+The webhook is **secondary source of truth** — the synchronous Stripe
+response from `charge` writes the `payment_attempt.status`; webhooks
+reconcile and emit `payment.attempt_state_drift` on contradiction
+without overwriting the row. **Chargebacks (`charge.dispute.created`)
+and out-of-band refunds (`charge.refunded`) are record-only** —
+emit `payment.dispute_opened` / `payment.refunded` for the cockpit;
+no auto-action (motto #1). Full doctrine + alternatives in
+DECISIONS.md (2026-05-03 entries).
+
+The cutover playbook (mock → stripe) lives at
+`docs/runbooks/stripe-cutover.md`. Lazy-fail (next charge against any
+mock-token row raises `payment.charge.token_provider_matches_active`)
+is the default; `bss payment cutover --invalidate-mock-tokens` is the
+proactive path that emits one `payment_method.cutover_invalidated`
+event per row so the v0.14 Resend email-template flow can notify each
+customer to re-add their card before the env-var flip.
+
 ### Note on billing in v0.1
 
 v0.1 ships **without a billing service**. Phase 0 planned one as service #9 (TMF678, port 8009), and the Phase 2 initial migration created the `billing` schema with two tables (`billing_account`, `customer_bill`) — but no phase actually built the service layer. v0.1.1 formally defers billing to v0.2, where it will be reintroduced as a **read-only view layer over `payment.payment_attempt`**: receipt aggregation, statement generation, TMF678 `/customerBill` endpoints. No dunning, no credit extension, no formal invoice generation — bundled-prepaid doesn't need them, since charges happen synchronously at activation / renewal / VAS purchase and are already recorded on `payment.payment_attempt`. The `billing` schema and its tables remain in the migration so v0.2 is purely additive. Port 8009 is reserved. See `DECISIONS.md` 2026-04-13 for the deferral rationale and the scope note separating the billing **service** from "billing" as CRM customer-support **vocabulary**.

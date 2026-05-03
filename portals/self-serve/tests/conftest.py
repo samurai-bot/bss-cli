@@ -40,6 +40,31 @@ from bss_self_serve.config import Settings
 from bss_self_serve.main import create_app
 
 
+# v0.16 — Force payment_provider=mock for the entire test session so
+# legacy mock-mode tests don't break when the operator's .env says
+# BSS_PAYMENT_PROVIDER=stripe (manual smoke testing). Pydantic-settings
+# reads OS env AFTER .env, so a session-scoped override in os.environ
+# wins over .env.
+#
+# Stripe-mode tests opt in by mutating app.state directly via
+# `_make_stripe_app` in test_signup_stripe_mode.py — they don't need
+# Settings() to return stripe-mode (they patch around it).
+@pytest.fixture(autouse=True, scope="session")
+def _force_mock_payment_provider_for_tests():
+    import os
+    prev_provider = os.environ.get("BSS_PAYMENT_PROVIDER")
+    prev_key = os.environ.get("BSS_PAYMENT_STRIPE_API_KEY")
+    os.environ["BSS_PAYMENT_PROVIDER"] = "mock"
+    os.environ.pop("BSS_PAYMENT_STRIPE_API_KEY", None)
+    yield
+    if prev_provider is not None:
+        os.environ["BSS_PAYMENT_PROVIDER"] = prev_provider
+    else:
+        os.environ.pop("BSS_PAYMENT_PROVIDER", None)
+    if prev_key is not None:
+        os.environ["BSS_PAYMENT_STRIPE_API_KEY"] = prev_key
+
+
 @dataclass
 class FakeCatalog:
     offerings: list[dict[str, Any]] = field(default_factory=list)

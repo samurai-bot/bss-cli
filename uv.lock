@@ -1988,9 +1988,11 @@ dependencies = [
     { name = "bss-middleware" },
     { name = "bss-models" },
     { name = "bss-telemetry" },
+    { name = "bss-webhooks" },
     { name = "fastapi" },
     { name = "pydantic-settings" },
     { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "stripe" },
     { name = "structlog" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -2013,9 +2015,11 @@ requires-dist = [
     { name = "bss-middleware", editable = "packages/bss-middleware" },
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "bss-telemetry", editable = "packages/bss-telemetry" },
+    { name = "bss-webhooks", editable = "packages/bss-webhooks" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "pydantic-settings", specifier = ">=2.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
+    { name = "stripe", specifier = ">=10.0" },
     { name = "structlog", specifier = ">=24.4" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
 ]
@@ -2178,6 +2182,7 @@ dependencies = [
     { name = "python-multipart" },
     { name = "qrcode" },
     { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "stripe" },
     { name = "structlog" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -2207,6 +2212,7 @@ requires-dist = [
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "qrcode", specifier = ">=7.4" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
+    { name = "stripe", specifier = ">=10.0" },
     { name = "structlog", specifier = ">=24.4" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
 ]
@@ -2953,6 +2959,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/81/69/17425771797c36cded50b7fe44e850315d039f28b15901ab44839e70b593/starlette-1.0.0.tar.gz", hash = "sha256:6a4beaf1f81bb472fd19ea9b918b50dc3a77a6f2e190a12954b25e6ed5eea149", size = 2655289, upload-time = "2026-03-22T18:29:46.779Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/0b/c9/584bc9651441b4ba60cc4d557d8a547b5aff901af35bda3a4ee30c819b82/starlette-1.0.0-py3-none-any.whl", hash = "sha256:d3ec55e0bb321692d275455ddfd3df75fff145d009685eb40dc91fc66b03d38b", size = 72651, upload-time = "2026-03-22T18:29:45.111Z" },
+]
+
+[[package]]
+name = "stripe"
+version = "15.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "requests" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/45/26/5d6f5f5beae6f1ff78213e2e6f4fbd431518dcd98733cdd39fb4ba0d01d3/stripe-15.1.0.tar.gz", hash = "sha256:24bd3b6bd0969a4841bd4d7681556a9e35e46c414a07c8590a225fbd5a878450", size = 1501673, upload-time = "2026-04-24T00:18:58.612Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d8/4e/fd9cb74ddf1e61fb6241e2f6799a81ef99bf6cf2e94f8812ee1cd5458e5d/stripe-15.1.0-py3-none-any.whl", hash = "sha256:bdfb556be08662a41833e6403607ebf12e0062cae4f9b93e2b89b6ba926d7c82", size = 2143199, upload-time = "2026-04-24T00:18:56.027Z" },
 ]
 
 [[package]]

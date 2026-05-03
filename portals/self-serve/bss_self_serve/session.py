@@ -38,7 +38,8 @@ SignupStep = Literal[
     "pending_customer",     # before POST /signup runs customer.create
     "pending_kyc",          # CUST-id known; next call is customer.attest_kyc
     "pending_kyc_handoff",  # v0.15 — Didit hosted UI active; polling for the corroborating webhook
-    "pending_cof",          # KYC done; next call is payment.add_card
+    "pending_cof",          # KYC done; next call is payment.add_card (mock auto-tokenize OR mount Stripe Elements)
+    "pending_cof_elements", # v0.16 — Stripe.js + Elements iframe mounted, waiting for customer to enter card
     "pending_order",        # COF added; next call is com.create_order + submit
     "pending_activation",   # order placed; polling com.get_order until completed
     "completed",            # subscription active; activation code known

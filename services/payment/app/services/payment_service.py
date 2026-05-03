@@ -10,7 +10,7 @@ from bss_clock import now as clock_now
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import auth_context
-from app.domain import mock_tokenizer
+from app.domain.tokenizer import TokenizerAdapter
 from app.events import publisher
 from app.policies import payment as pay_policies
 from app.policies.base import PolicyViolation
@@ -28,10 +28,12 @@ class PaymentService:
         session: AsyncSession,
         attempt_repo: PaymentAttemptRepository,
         pm_repo: PaymentMethodRepository,
+        tokenizer: TokenizerAdapter,
     ) -> None:
         self._session = session
         self._attempt_repo = attempt_repo
         self._pm_repo = pm_repo
+        self._tokenizer = tokenizer
 
     async def charge(
         self,
@@ -57,13 +59,41 @@ class PaymentService:
         pay_policies.check_method_active(method)
         pay_policies.check_positive_amount(amount)
         pay_policies.check_customer_matches_method(customer_id, method)
+        # v0.16: lazy-fail cutover guard. A payment_method.token minted
+        # under BSS_PAYMENT_PROVIDER=mock is unusable when the active
+        # adapter is Stripe (and vice versa). Track 4's `bss payment
+        # cutover` CLI is the proactive path; here we fail the charge
+        # cleanly so the customer can re-add their card via the portal.
+        pay_policies.check_token_provider_matches_active(
+            method, type(self._tokenizer).__name__
+        )
 
-        # --- Execute charge via mock gateway ---
+        # --- Execute charge via injected tokenizer adapter ---
         attempt_id = await self._attempt_repo.next_id()
         now = clock_now()
 
-        charge_result = await mock_tokenizer.charge(
-            method.token, amount, currency
+        # v0.16: per-attempt idempotency key. Same key on a BSS-restart
+        # retry of the same attempt → Stripe dedupes; new attempt rows
+        # get fresh keys (Track 4 tightens semantics).
+        idempotency_key = f"ATT-{attempt_id}-r0"
+
+        # Resolve provider-side customer ref from the payment.customer
+        # cache. The cache is populated when the customer first adds a
+        # card (Track 2's portal Elements flow calls ensure_customer
+        # there with the real captured email). PaymentService at charge
+        # time just reads. None for mock-mode customers; cus_* for
+        # Stripe-mode customers who've added a card via Elements.
+        customer_external_ref = await self._lookup_customer_external_ref(
+            customer_id
+        )
+
+        charge_result = await self._tokenizer.charge(
+            method.token,
+            amount,
+            currency,
+            idempotency_key=idempotency_key,
+            purpose=purpose,
+            customer_external_ref=customer_external_ref,
         )
 
         attempt = PaymentAttempt(
@@ -76,6 +106,9 @@ class PaymentService:
             status=charge_result.status,
             gateway_ref=charge_result.gateway_ref,
             decline_reason=charge_result.reason,
+            provider_call_id=charge_result.provider_call_id,
+            decline_code=charge_result.decline_code,
+            idempotency_key=idempotency_key,
             attempted_at=now,
             tenant_id=ctx.tenant,
         )
@@ -87,6 +120,9 @@ class PaymentService:
             "declined": "payment.declined",
         }.get(charge_result.status, "payment.errored")
 
+        # v0.16: payload carries provider_call_id + decline_code so
+        # downstream consumers (renewal-flow listener, ops cockpit) can
+        # join to integrations.external_call without a second lookup.
         await publisher.publish(
             self._session,
             event_type=event_type,
@@ -100,6 +136,8 @@ class PaymentService:
                 "purpose": purpose,
                 "status": charge_result.status,
                 "gateway_ref": charge_result.gateway_ref,
+                "provider_call_id": charge_result.provider_call_id,
+                "decline_code": charge_result.decline_code,
             },
         )
 
@@ -111,6 +149,27 @@ class PaymentService:
             purpose=purpose,
         )
         return attempt
+
+    async def _lookup_customer_external_ref(
+        self, customer_id: str
+    ) -> str | None:
+        """Read cached cus_* (or equivalent) from payment.customer.
+
+        Returns ``None`` if the BSS customer has never had a
+        provider-side customer ref ensured. For mock-mode this is
+        always None (mock charges accept None). For Stripe-mode the
+        portal Elements flow (Track 2) populates the cache when the
+        customer adds their first card; until then, charges against
+        Stripe-mode raise cleanly via the adapter's missing-ref guard.
+        """
+        from sqlalchemy import select
+        from bss_models import PaymentCustomer
+
+        row = await self._session.execute(
+            select(PaymentCustomer).where(PaymentCustomer.id == customer_id)
+        )
+        cached = row.scalar_one_or_none()
+        return cached.customer_external_ref if cached else None
 
     async def get_attempt(self, attempt_id: str) -> PaymentAttempt | None:
         return await self._attempt_repo.get(attempt_id)

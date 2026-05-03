@@ -52,5 +52,24 @@ class Settings(BaseSettings):
     # default for dev / tests; production deployments set this via env.
     bss_portal_public_url: str = "http://localhost:9001"
 
+    # v0.16 — payment provider mode (read by signup templates to decide
+    # mock card-number form vs Stripe Checkout redirect). Defaults to
+    # mock so a portal that boots without these env vars set keeps the
+    # v0.1-v0.15 behavior.
+    #
+    # Stripe Checkout flow (Track 2 redo, supersedes Elements iframe):
+    # - The PORTAL needs the Stripe SECRET key to call
+    #   stripe.checkout.Session.create from the server. No publishable
+    #   key in the browser, no Stripe.js, no iframe.
+    # - The portal's POST /signup/step/cof/checkout-init route mints
+    #   a CheckoutSession (mode=setup), 303-redirects the customer to
+    #   Stripe's hosted card form, and waits for the customer to come
+    #   back to /signup/step/cof/checkout-return with the session id.
+    # - On return, the portal retrieves the session, extracts the
+    #   resulting pm_*, and registers it via bss-clients.
+    bss_payment_provider: str = "mock"
+    bss_payment_stripe_api_key: str = ""
+    bss_env: str = "development"
+
 
 settings = Settings()

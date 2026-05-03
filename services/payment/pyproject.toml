@@ -14,8 +14,10 @@ dependencies = [
     "bss-events",
     "bss-telemetry",
     "bss-middleware",
+    "bss-webhooks",
     "asyncpg>=0.29",
     "sqlalchemy[asyncio]>=2.0",
+    "stripe>=10.0",
 ]
 
 [dependency-groups]
@@ -41,3 +43,4 @@ bss-clock = { workspace = true }
 bss-events = { workspace = true }
 bss-telemetry = { workspace = true }
 bss-middleware = { workspace = true }
+bss-webhooks = { workspace = true }

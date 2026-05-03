@@ -34,7 +34,10 @@
 {# v0.15: ``pending_kyc_handoff`` is a sub-state of "attest KYC" — the
    timeline still highlights the same step. Treated as equivalent to
    ``pending_kyc`` in the step_order index lookup below. #}
-{% set step_order = ['pending_customer','pending_kyc','pending_kyc_handoff','pending_cof','pending_order','pending_activation','completed'] %}
+{# v0.16: ``pending_cof_elements`` is a sub-state of "add card" — the
+   timeline still highlights the same step. Treated as equivalent to
+   ``pending_cof`` in the step_order index lookup. #}
+{% set step_order = ['pending_customer','pending_kyc','pending_kyc_handoff','pending_cof','pending_cof_elements','pending_order','pending_activation','completed'] %}
 {% set current_idx = step_order.index(signup.step) if signup.step in step_order else 0 %}
 {# Default the trigger flag to True so the progress page (which
    doesn't pass it explicitly) keeps auto-advancing the chain. The
@@ -92,7 +95,40 @@
           </div>
         {% endif %}
       {% elif signup.step == 'pending_cof' %}
-        KYC verified. Adding your card on file…
+        {% if payment_provider == 'stripe' %}
+          <strong>Add a payment method to continue.</strong>
+          <p style="margin: 0 0 8px;">
+            You'll be redirected to a secure Stripe-hosted card form.
+            Card details go directly to Stripe — they never touch our
+            servers.
+          </p>
+          <form method="post" action="/signup/step/cof/checkout-init?session={{ session_id }}">
+            <button type="submit"
+                    style="margin-top: 8px; padding: 10px 20px; background: #635bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 1em;">
+              Continue to Stripe →
+            </button>
+          </form>
+        {% else %}
+          KYC verified. Adding your card on file…
+        {% endif %}
+      {% elif signup.step == 'pending_cof_elements' %}
+        {# v0.16 — repurposed: "Stripe Checkout in flight". The customer
+           was redirected to Stripe's hosted form by /checkout-init;
+           we're waiting for Stripe to redirect them back to
+           /checkout-return. If they navigated back via the cancel-URL
+           or Back button, this step renders a "resume" CTA so they can
+           retry without restarting the whole signup. #}
+        <strong>Waiting for you to finish the card form on Stripe.</strong>
+        <p style="margin: 0 0 8px;">
+          If the Stripe page didn't open or you came back without
+          completing it, you can retry the redirect:
+        </p>
+        <form method="post" action="/signup/step/cof/checkout-init?session={{ session_id }}">
+          <button type="submit"
+                  style="margin-top: 8px; padding: 10px 20px; background: #635bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 1em;">
+            Open the Stripe card form again
+          </button>
+        </form>
       {% elif signup.step == 'pending_order' %}
         Card on file. Placing the order for {{ plan_id }}…
       {% elif signup.step == 'pending_activation' %}
@@ -125,11 +161,29 @@
          hx-swap="outerHTML"
          class="progress-trigger" hidden></div>
   {% elif signup.step == 'pending_cof' %}
-    <div hx-post="/signup/step/cof?session={{ session_id }}"
-         hx-trigger="load"
-         hx-target="#signup-progress"
-         hx-swap="outerHTML"
-         class="progress-trigger" hidden></div>
+    {% if payment_provider == 'stripe' %}
+      {# v0.16 stripe mode — Stripe Checkout flow. The customer clicks
+         the "Continue to Stripe →" button rendered above; the form
+         POSTs to /signup/step/cof/checkout-init which 303-redirects
+         the browser to Stripe's hosted card form. NO HTMX auto-trigger
+         here — the customer's explicit click is the trigger (per the
+         "no pre-step UI" doctrine, and because a server-side redirect
+         would yank the customer mid-page-load).
+      #}
+    {% else %}
+      <div hx-post="/signup/step/cof?session={{ session_id }}"
+           hx-trigger="load"
+           hx-target="#signup-progress"
+           hx-swap="outerHTML"
+           class="progress-trigger" hidden></div>
+    {% endif %}
+  {% elif signup.step == 'pending_cof_elements' %}
+    {# v0.16 — "Stripe Checkout in flight" sub-state. The customer was
+       redirected to Stripe; we're waiting for them to come back via
+       /checkout-return (which advances state to pending_order). If
+       they hit Back / hit cancel-URL, the body above renders a "retry"
+       button. NO auto-poll here — Stripe's redirect is what advances
+       the state, not our polling. #}
   {% elif signup.step == 'pending_order' %}
     <div hx-post="/signup/step/order?session={{ session_id }}"
          hx-trigger="load"

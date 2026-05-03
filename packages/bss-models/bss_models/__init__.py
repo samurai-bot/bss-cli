@@ -10,7 +10,7 @@ service ``/health`` versions). One bump per release; doctrine.
 # Single source of truth for the platform release version. Every surface
 # (REPL, CSR cockpit, self-serve portal, service /health) imports this
 # so a release bump is one line. Bump on every release tag.
-BSS_RELEASE = "0.15.0"
+BSS_RELEASE = "0.16.0"
 
 from .base import Base, TenantMixin, TimestampMixin
 
@@ -44,8 +44,8 @@ from .catalog import (
 # Inventory (2 tables)
 from .inventory import EsimProfile, MsisdnPool
 
-# Payment (2 tables)
-from .payment import PaymentAttempt, PaymentMethod
+# Payment (3 tables; v0.16 added PaymentCustomer)
+from .payment import PaymentAttempt, PaymentCustomer, PaymentMethod
 
 # Order Management (3 tables)
 from .order_mgmt import OrderItem, OrderStateHistory, ProductOrder
@@ -124,6 +124,7 @@ __all__ = [
     # Payment
     "PaymentMethod",
     "PaymentAttempt",
+    "PaymentCustomer",
     # Order Management
     "ProductOrder",
     "OrderItem",

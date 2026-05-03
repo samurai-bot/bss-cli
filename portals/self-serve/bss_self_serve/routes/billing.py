@@ -50,8 +50,21 @@ def _purpose_label(purpose: str) -> str:
 
 
 def _last4_index(methods: list[dict[str, Any]]) -> dict[str, str]:
-    """Build payment_method_id → last-4 lookup. Removed methods miss."""
-    return {m.get("id"): m.get("last4") or "" for m in methods if m.get("id")}
+    """Build payment_method_id → last-4 lookup. Removed methods miss.
+
+    The TMF response nests card metadata under ``cardSummary``, not at
+    the top level. v0.16 fix — the previous lookup ``m.get("last4")``
+    always returned None since v0.10's billing-history page launch,
+    making EVERY charge render "(removed)" in the UI.
+    """
+    out: dict[str, str] = {}
+    for m in methods:
+        mid = m.get("id")
+        if not mid:
+            continue
+        cs = m.get("cardSummary") or {}
+        out[mid] = cs.get("last4") or m.get("last4") or ""
+    return out
 
 
 @router.get("/billing/history", response_class=HTMLResponse)

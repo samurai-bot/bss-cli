@@ -21,12 +21,19 @@
     <ul class="cof-list">
       {% for m in methods %}
         <li class="cof-card {% if m.isDefault %}cof-card--default{% endif %}">
+          {# v0.16 fix — TMF response nests card metadata under
+             cardSummary, not top-level. The previous template read
+             m.brand / m.last4 / m.expMonth (all None at top level),
+             which has rendered "? •••• 00 / ----" for every card
+             since the page launched in v0.10. Same pre-existing bug
+             that bit billing-history. #}
+          {% set cs = m.cardSummary or {} %}
           <header class="cof-card-header">
-            <span class="cof-card-brand">{{ (m.brand or '?') | upper }}</span>
-            <span class="cof-card-last4">•••• {{ m.last4 }}</span>
+            <span class="cof-card-brand">{{ (cs.brand or m.brand or '?') | upper }}</span>
+            <span class="cof-card-last4">•••• {{ cs.last4 or m.last4 or '----' }}</span>
             <span class="cof-card-expiry">
-              {{ '%02d' | format(m.expMonth or 0) }} /
-              {{ m.expYear or '----' }}
+              {{ '%02d' | format(cs.expMonth or m.expMonth or 0) }} /
+              {{ cs.expYear or m.expYear or '----' }}
             </span>
             {% if m.isDefault %}
               <span class="cof-card-badge">Default</span>
