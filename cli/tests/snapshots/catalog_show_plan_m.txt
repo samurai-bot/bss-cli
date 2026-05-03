@@ -5,6 +5,7 @@
 │   Data        30 GB                                      │
 │   Voice       unlimited                                  │
 │   SMS         unlimited                                  │
+│   Roaming     500 mb                                     │
 │                                                          │
 │ Block-on-exhaust. Top up via VAS or wait for renewal.    │
 └───────────────────────────────────────────────────────────┘

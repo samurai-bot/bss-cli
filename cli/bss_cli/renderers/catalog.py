@@ -73,6 +73,9 @@ def render_catalog(offerings: list[dict[str, Any]]) -> str:
         # Header gets a ★ on the popular plan so the eye lands on it first.
         marker = " ★" if p["id"] == _POPULAR_PLAN else ""
         header = f"{p['id']}{marker}  {name}"
+        # v0.17 — show roaming when the plan carries any (PLAN_S has 0
+        # and renders "—"; PLAN_M/L show their bundled MB).
+        roaming = _allowance_str(allowances, "data_roaming")
         col = [
             header,
             f"SGD {price} /mo",
@@ -80,6 +83,7 @@ def render_catalog(offerings: list[dict[str, Any]]) -> str:
             f"Data    {data}",
             f"Voice   {voice}",
             f"SMS     {sms}",
+            f"Roaming {roaming}",
         ]
         cols.append(col)
 
@@ -109,6 +113,10 @@ def render_catalog_show(offering: dict[str, Any]) -> str:
     if voice == "—":
         voice = _allowance_str(allowances, "voice_minutes")
     sms = _allowance_str(allowances, "sms")
+    # v0.17 — additive roaming bucket. Shown only when the plan has
+    # quota; PLAN_S has 0 mb so the row is suppressed (consistent with
+    # the portal line_card filter).
+    roaming = _allowance_str(allowances, "data_roaming")
 
     marker = "  ★ MOST POPULAR" if pid == _POPULAR_PLAN else ""
     title = f"{pid}  {name}{marker}"
@@ -124,8 +132,16 @@ def render_catalog_show(offering: dict[str, Any]) -> str:
         f"│   Data        {data}" + " " * max(0, width - len(f"│   Data        {data}") - 1) + "│",
         f"│   Voice       {voice}" + " " * max(0, width - len(f"│   Voice       {voice}") - 1) + "│",
         f"│   SMS         {sms}" + " " * max(0, width - len(f"│   SMS         {sms}") - 1) + "│",
+    ]
+    if roaming != "—":
+        rows.append(
+            f"│   Roaming     {roaming}"
+            + " " * max(0, width - len(f"│   Roaming     {roaming}") - 1)
+            + "│"
+        )
+    rows.extend([
         f"│ " + " " * (width - 3) + "│",
         f"│ Block-on-exhaust. Top up via VAS or wait for renewal." + " " * max(0, width - 56) + "│",
         bottom,
-    ]
+    ])
     return "\n".join(rows)
