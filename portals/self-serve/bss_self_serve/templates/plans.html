@@ -26,6 +26,9 @@
         <li><span class="allowance-label">Data</span><span class="allowance-value">{{ plan.data }}</span></li>
         <li><span class="allowance-label">Voice</span><span class="allowance-value">{{ plan.voice }}</span></li>
         <li><span class="allowance-label">SMS</span><span class="allowance-value">{{ plan.sms }}</span></li>
+        {% if plan.roaming %}
+        <li><span class="allowance-label">Roaming</span><span class="allowance-value">{{ plan.roaming }}</span></li>
+        {% endif %}
       </ul>
       {% if is_signed_in %}
         <a class="plan-card-cta" href="/signup/{{ plan.id }}/msisdn">Choose {{ plan.id }}</a>

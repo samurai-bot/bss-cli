@@ -36,7 +36,7 @@
       <dt>Plan</dt>
       <dd>{{ plan.name }} · SGD {{ plan.price }}/mo</dd>
       <dt>Allowance</dt>
-      <dd>{{ plan.data }} data · {{ plan.voice }} voice · {{ plan.sms }} SMS</dd>
+      <dd>{{ plan.data }} data · {{ plan.voice }} voice · {{ plan.sms }} SMS{% if plan.roaming %} · {{ plan.roaming }} roaming{% endif %}</dd>
       {% endif %}
     </dl>
 
