@@ -1,4 +1,6 @@
 from pathlib import Path
+
+from bss_models import BSS_RELEASE
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -6,7 +8,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 class Settings(BaseSettings):
     service_name: str = "catalog"
-    version: str = "0.1.0"
+    version: str = BSS_RELEASE
     log_level: str = "INFO"
     db_url: str = ""
     env: str = "development"

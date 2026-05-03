@@ -205,9 +205,12 @@ def test_post_confirm_is_a_no_op_marker(cockpit_client) -> None:
 
 
 def test_health_endpoint(cockpit_client) -> None:
+    from bss_models import BSS_RELEASE
+
     r = cockpit_client.get("/health")
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "ok"
     assert body["service"] == "portal-csr"
-    assert body["version"] == "0.18.0"
+    # v0.18.1 — every surface's version is sourced from BSS_RELEASE.
+    assert body["version"] == BSS_RELEASE

@@ -5,6 +5,7 @@ from seeded data.
 """
 
 import pytest
+from bss_models import BSS_RELEASE
 from httpx import AsyncClient
 
 
@@ -15,7 +16,8 @@ class TestHealth:
         body = r.json()
         assert body["status"] == "ok"
         assert body["service"] == "catalog"
-        assert body["version"] == "0.1.0"
+        # v0.18.1 — service version is sourced from BSS_RELEASE.
+        assert body["version"] == BSS_RELEASE
 
     async def test_ready(self, client: AsyncClient):
         r = await client.get("/ready")

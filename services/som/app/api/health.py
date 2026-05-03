@@ -1,21 +1,28 @@
-"""Health endpoints."""
+"""Health endpoints — version sourced from settings.version (= BSS_RELEASE)."""
 
 from fastapi import APIRouter, Request
+from sqlalchemy import text
 
 router = APIRouter(tags=["health"])
 
 
 @router.get("/health")
-async def health():
-    return {"status": "ok", "service": "som"}
+async def health(request: Request) -> dict:
+    settings = request.app.state.settings
+    return {
+        "status": "ok",
+        "service": settings.service_name,
+        "version": settings.version,
+    }
 
 
 @router.get("/ready")
-async def ready(request: Request):
+async def ready(request: Request) -> dict:
+    settings = request.app.state.settings
     try:
         engine = request.app.state.engine
         async with engine.connect() as conn:
-            await conn.execute(__import__("sqlalchemy").text("SELECT 1"))
-        return {"status": "ready"}
+            await conn.execute(text("SELECT 1"))
+        return {"status": "ready", "service": settings.service_name}
     except Exception:
-        return {"status": "not_ready"}
+        return {"status": "unavailable", "service": settings.service_name}
