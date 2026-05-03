@@ -275,6 +275,20 @@ doctrine-check: check-clock
 		exit 1; \
 	fi; \
 	echo "✓ renewal worker stays in subscription lifespan only"
+	@# v0.18.1+ — service config.py never hardcodes a version string.
+	@# `version: str = BSS_RELEASE` (sourced from bss_models) so a single
+	@# bump in packages/bss-models/bss_models/__init__.py propagates to
+	@# every service's /health endpoint on the next container recreate.
+	@# Any literal "version: str = "X.Y.Z"" is drift waiting to happen.
+	@hits=$$(grep -rnE 'version:\s*str\s*=\s*"[0-9]' --include='config.py' \
+		services/ portals/ packages/ 2>/dev/null \
+		|| true); \
+	if [ -n "$$hits" ]; then \
+		echo "✗ service version hardcoded — should source BSS_RELEASE:"; \
+		echo "$$hits"; \
+		exit 1; \
+	fi; \
+	echo "✓ all service versions sourced from BSS_RELEASE"
 
 fmt:
 	uv run ruff format .
