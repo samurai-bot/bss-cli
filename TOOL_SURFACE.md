@@ -161,7 +161,8 @@ SOM writes are internally triggered by COM events — no direct-create tool for 
 | `subscription.get_balance` | read | |
 | `subscription.purchase_vas` | create | Charges COF, decrements block if exhausted |
 | `subscription.terminate` | destructive | Releases MSISDN + recycles eSIM |
-| `subscription.renew_now` | update | Manual renewal trigger |
+| `subscription.renew_now` | update | Manual renewal trigger (operator escape hatch — production renewal is automatic via the v0.18 worker) |
+| `subscription.tick_renewals_now` | admin | v0.18 — runs one deterministic renewal sweep (active-due + blocked-overdue). Wraps `POST /admin-api/v1/renewal/tick-now`, gated by `BSS_ALLOW_ADMIN_RESET` on the subscription service. Used by hero scenarios after `clock.advance` to drive a single tick without waiting for the wall-clock interval. Production deployments keep the flag false; the worker runs naturally on `BSS_RENEWAL_TICK_SECONDS`. |
 | `subscription.get_esim_activation` | read | Returns LPA + QR for first-time display |
 | `subscription.schedule_plan_change` | update | v0.7 — pivots plan + price at next renewal; no proration |
 | `subscription.cancel_pending_plan_change` | update | v0.7 — clears pending pivot; idempotent |

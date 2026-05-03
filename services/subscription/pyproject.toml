@@ -17,6 +17,7 @@ dependencies = [
     "bss-events",
     "bss-telemetry",
     "bss-middleware",
+    "bss-portal-auth",
 ]
 
 [dependency-groups]
@@ -44,6 +45,7 @@ bss-clock = { workspace = true }
 bss-events = { workspace = true }
 bss-telemetry = { workspace = true }
 bss-middleware = { workspace = true }
+bss-portal-auth = { workspace = true }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

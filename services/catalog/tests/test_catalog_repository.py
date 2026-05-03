@@ -91,11 +91,17 @@ class TestGetSpecification:
 
 
 class TestListVasOfferings:
-    async def test_returns_three_vas(self, repo: CatalogRepository):
+    async def test_returns_four_vas(self, repo: CatalogRepository):
+        # v0.17 added VAS_ROAMING_1GB to the seed → 4 offerings.
         vas = await repo.list_vas_offerings()
-        assert len(vas) == 3
+        assert len(vas) == 4
         ids = {v.id for v in vas}
-        assert ids == {"VAS_DATA_1GB", "VAS_DATA_5GB", "VAS_UNLIMITED_DAY"}
+        assert ids == {
+            "VAS_DATA_1GB",
+            "VAS_DATA_5GB",
+            "VAS_UNLIMITED_DAY",
+            "VAS_ROAMING_1GB",
+        }
 
 
 class TestGetVasOffering:

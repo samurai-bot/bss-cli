@@ -1,3 +1,6 @@
+import asyncio
+import contextlib
+import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -15,10 +18,13 @@ from bss_telemetry import configure_telemetry
 from fastapi import Depends, FastAPI, Request
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from bss_portal_auth.email import select_adapter as select_email_adapter
+
 from app.events.consumer import setup_consumer
 from app.repositories.subscription_repo import SubscriptionRepository
 from app.repositories.vas_repo import VasPurchaseRepository
 from app.services.subscription_service import SubscriptionService
+from app.workers.renewal import _renewal_tick_loop
 
 log = structlog.get_logger()
 
@@ -51,9 +57,55 @@ async def lifespan(app: FastAPI):
     except Exception:
         log.warning("mq.consumer.setup_failed", exc_info=True)
 
+    # v0.18 — email adapter for the upcoming-renewal reminder. Re-uses
+    # the same env vars the portal-self-serve already reads
+    # (BSS_PORTAL_EMAIL_PROVIDER + RESEND_API_KEY + EMAIL_FROM), so a
+    # production deploy already has this configured. Set provider to
+    # "noop" to disable the reminder sweep silently in tests; set
+    # BSS_RENEWAL_REMINDER_LOOKAHEAD_SECONDS=0 to disable on a running
+    # service without changing email provider.
+    try:
+        app.state.email_adapter = select_email_adapter(
+            os.environ.get("BSS_PORTAL_EMAIL_PROVIDER", "logging"),
+            os.environ.get(
+                "BSS_PORTAL_DEV_MAILBOX_PATH",
+                "/tmp/bss-portal-mailbox.log",
+            ),
+            resend_api_key=os.environ.get(
+                "BSS_PORTAL_EMAIL_RESEND_API_KEY", ""
+            ),
+            from_address=os.environ.get("BSS_PORTAL_EMAIL_FROM", ""),
+        )
+    except Exception:
+        log.warning("renewal.reminder.email_adapter_init_failed", exc_info=True)
+        app.state.email_adapter = None
+
+    # v0.18 — automated renewal worker (in-process tick loop). Disable
+    # by setting BSS_RENEWAL_TICK_SECONDS=0 (useful for tests that
+    # don't want a background ticker firing during their assertions,
+    # or when an external scheduler drives /admin-api/v1/renewal/tick-now).
+    tick = int(os.environ.get("BSS_RENEWAL_TICK_SECONDS", "60"))
+    if tick > 0:
+        app.state.renewal_task = asyncio.create_task(
+            _renewal_tick_loop(app, tick)
+        )
+    else:
+        app.state.renewal_task = None
+        log.info(
+            "renewal.worker.disabled",
+            reason="BSS_RENEWAL_TICK_SECONDS=0",
+        )
+
     log.info("service.starting", service=settings.service_name)
     yield
     log.info("service.stopping", service=settings.service_name)
+
+    # v0.18 — cancel renewal worker BEFORE closing payment/catalog
+    # clients so an in-flight renew() doesn't hit a closed httpx client.
+    if app.state.renewal_task is not None:
+        app.state.renewal_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await app.state.renewal_task
 
     if app.state.mq_connection:
         try:

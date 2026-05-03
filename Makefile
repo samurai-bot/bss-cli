@@ -255,6 +255,26 @@ doctrine-check: check-clock
 		exit 1; \
 	fi; \
 	echo "✓ ported_out is terminal (no available-loopback)"
+	@# v0.18+ — renewal worker is confined to subscription lifespan.
+	@# Tick loop + sweep helpers live in workers/renewal.py and are
+	@# referenced by dependencies.py (lifespan) and renewal_admin.py
+	@# (admin tick endpoint) only. Any other reference is a parallel
+	@# scheduler and breaks the multi-replica safety guarantee that
+	@# lives in FOR UPDATE SKIP LOCKED.
+	@hits=$$(grep -rnE '(_renewal_tick_loop|_sweep_due|_sweep_skipped)' \
+		--include='*.py' \
+		services/ packages/ orchestrator/ portals/ cli/ 2>/dev/null \
+		| grep -v 'services/subscription/app/workers/renewal\.py' \
+		| grep -v 'services/subscription/app/dependencies\.py' \
+		| grep -v 'services/subscription/app/api/renewal_admin\.py' \
+		| grep -v '/tests/' \
+		|| true); \
+	if [ -n "$$hits" ]; then \
+		echo "✗ renewal worker referenced outside subscription lifespan:"; \
+		echo "$$hits"; \
+		exit 1; \
+	fi; \
+	echo "✓ renewal worker stays in subscription lifespan only"
 
 fmt:
 	uv run ruff format .

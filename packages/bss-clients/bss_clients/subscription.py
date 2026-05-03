@@ -100,6 +100,20 @@ class SubscriptionClient(BSSClient):
         )
         return resp.json()
 
+    async def tick_renewals_now(self) -> dict[str, Any]:
+        """POST /admin-api/v1/renewal/tick-now — v0.18 deterministic sweep.
+
+        Used by the v0.18 hero scenario after `clock.advance` to drive
+        one renewal sweep (active-due + blocked-overdue) without
+        waiting for the worker's wall-clock tick interval. Gated by
+        ``BSS_ALLOW_ADMIN_RESET=true`` on the subscription service —
+        production deployments keep this false.
+        """
+        resp = await self._request(
+            "POST", "/admin-api/v1/renewal/tick-now"
+        )
+        return resp.json()
+
     async def terminate(
         self,
         subscription_id: str,

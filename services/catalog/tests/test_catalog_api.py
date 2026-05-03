@@ -142,7 +142,8 @@ class TestVas:
         r = await client.get("/vas/offering")
         assert r.status_code == 200
         vas = r.json()
-        assert len(vas) == 3
+        # v0.17 added VAS_ROAMING_1GB → 4 seeded VAS offerings.
+        assert len(vas) == 4
 
         first = vas[0]
         assert "priceAmount" in first

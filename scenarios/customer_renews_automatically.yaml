@@ -1,0 +1,182 @@
+name: customer_renews_automatically
+description: |
+  v0.18 hero — automated subscription-renewal worker.
+
+  Until v0.18, renewal was a function with no automatic trigger:
+  every existing scenario explicitly called subscription.renew_now to
+  drive the period boundary. v0.18 ships an in-process tick loop in
+  the subscription service that polls due rows and dispatches
+  renew() automatically.
+
+  This hero proves the worker fires on its own:
+
+    1. Customer signs up on PLAN_M (frozen clock, deterministic).
+    2. Capture pre-renewal period_start so we can assert it advanced.
+    3. Advance clock past next_renewal_at (30 days + 1 minute).
+    4. Trigger ONE deterministic sweep via the v0.18 admin tick
+       endpoint (avoids waiting BSS_RENEWAL_TICK_SECONDS for the
+       wall-clock loop).
+    5. Assert subscription state still active, period advanced,
+       next_renewal_at moved forward, last_renewal_attempted_at set.
+    6. Assert audit log carries subscription.renewed stamped with
+       actor=system:renewal_worker + channel=system (NOT the test
+       runner's own actor — that would mean the worker didn't fire
+       and a manual path triggered the renewal instead).
+    7. Assert idempotency: a second tick on the same period boundary
+       does NOT re-renew (last_renewal_attempted_at < next_renewal_at
+       fails on the second sweep — exactly one renewal per boundary).
+
+  No LLM. Every step is a direct tool call.
+
+tags: [hero, smoke, regression, deterministic, v0.18]
+
+setup:
+  reset_operational_data: true
+  freeze_clock_at: "2026-05-04T09:00:00+00:00"
+
+variables:
+  customer_email: "auto-renew-{{ run_id }}@bss-cli.local"
+  customer_phone: "+6590007777"
+  plan: PLAN_M
+
+steps:
+  # ── 1. Setup: customer + signup + capture pre-renewal state ──────────
+  - name: create customer
+    action: customer.create
+    args:
+      name: "Auto Renew Demo {{ run_id }}"
+      email: "{{ customer_email }}"
+      phone: "{{ customer_phone }}"
+    capture:
+      customer_id: "$.id"
+
+  - name: attest KYC
+    action: customer.attest_kyc
+    args:
+      customer_id: "{{ customer_id }}"
+      provider: myinfo
+      attestation_token: "auto-renew-stub-jwt-{{ run_id }}"
+
+  - name: add card on file
+    action: payment.add_card
+    args:
+      customer_id: "{{ customer_id }}"
+      card_number: "4242424242424242"
+
+  - name: place PLAN_M order
+    action: order.create
+    args:
+      customer_id: "{{ customer_id }}"
+      offering_id: "{{ plan }}"
+    capture:
+      order_id: "$.id"
+
+  - name: wait for activation
+    action: order.wait_until
+    args:
+      order_id: "{{ order_id }}"
+      target_state: completed
+      timeout_s: 30
+
+  - name: get subscription id + msisdn + initial period
+    action: subscription.list_for_customer
+    args:
+      customer_id: "{{ customer_id }}"
+    capture:
+      subscription_id: "$[0].id"
+      msisdn: "$[0].msisdn"
+      period_start_initial: "$[0].currentPeriodStart"
+      next_renewal_initial: "$[0].nextRenewalAt"
+
+  - name: subscription is active with the captured period
+    assert:
+      tool: subscription.get
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        state: active
+        currentPeriodStart: "{{ period_start_initial }}"
+        nextRenewalAt: "{{ next_renewal_initial }}"
+
+  # ── 2a. Advance clock to inside the reminder window (29 days in) ─────
+  # next_renewal_at - 24h is the lookahead boundary for the upcoming-
+  # renewal reminder. Advancing 29 days lands inside that window so
+  # the reminder sweep should pick this subscription up.
+  - name: advance clock to inside the reminder lookahead window
+    action: clock.advance
+    args:
+      duration: "29d"
+
+  - name: trigger one sweep — should send the upcoming-renewal reminder
+    action: subscription.tick_renewals_now
+
+  - name: subscription is still active and not yet renewed
+    assert:
+      tool: subscription.get
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        state: active
+        currentPeriodStart: "{{ period_start_initial }}"
+
+  # ── 2b. Advance past the boundary so the renewal sweep fires ─────────
+  - name: advance the final 1 day to reach next_renewal_at
+    action: clock.advance
+    args:
+      duration: "1d"
+
+  - name: nudge clock 1 minute past the exact boundary
+    action: clock.advance
+    args:
+      duration: "1m"
+
+  # ── 3. Drive ONE deterministic worker sweep ──────────────────────────
+  # Avoids waiting BSS_RENEWAL_TICK_SECONDS for the natural tick.
+  # Endpoint is gated by BSS_ALLOW_ADMIN_RESET on the subscription
+  # service — make scenarios sets this true for the run.
+  - name: trigger one renewal sweep deterministically
+    action: subscription.tick_renewals_now
+
+  # ── 4. Assert worker fired + renewal succeeded ────────────────────────
+  - name: subscription is renewed (period advanced, still active)
+    assert:
+      tool: subscription.get
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        state: active
+        currentPeriodStart: {ne: "{{ period_start_initial }}"}
+        nextRenewalAt: {ne: "{{ next_renewal_initial }}"}
+      poll:
+        interval_ms: 200
+        timeout_seconds: 10
+
+  - name: audit log carries subscription.renewed stamped by the worker
+    assert:
+      tool: audit.events_by_identity
+      args:
+        service_identity: default
+        aggregate_id: "{{ subscription_id }}"
+        event_type_prefix: subscription.renewed
+      expect:
+        any_match:
+          eventType: subscription.renewed
+          actor: "system:renewal_worker"
+          channel: system
+
+  # ── 5. Idempotency — second tick on the same period must not re-renew
+  - name: capture period_start after the first auto-renewal
+    action: subscription.get
+    args: {subscription_id: "{{ subscription_id }}"}
+    capture:
+      period_start_after_first_renewal: "$.currentPeriodStart"
+
+  - name: trigger a second sweep on the same period boundary
+    action: subscription.tick_renewals_now
+
+  - name: subscription period unchanged (idempotency held)
+    assert:
+      tool: subscription.get
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        currentPeriodStart: "{{ period_start_after_first_renewal }}"
+
+teardown:
+  unfreeze_clock: true

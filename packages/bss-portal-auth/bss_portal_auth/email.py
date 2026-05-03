@@ -98,6 +98,112 @@ def _humanize_action_label(label: str) -> str:
     return label.replace("_", " ").capitalize()
 
 
+def _render_notification_email(
+    *,
+    preheader: str,
+    heading: str,
+    intro: str,
+    highlight: str,
+    highlight_sub: str | None,
+    cta_label: str | None,
+    cta_url: str | None,
+    footnote: str,
+) -> str:
+    """Same OTP-vibe template, no OTP — the bordered green block carries
+    a non-secret highlight (renewal amount, plan name, etc.) instead.
+
+    v0.18 — used by the upcoming-renewal reminder emitted by the
+    subscription service's renewal worker. The visual hierarchy
+    (header brand, heading, intro, highlight block, optional CTA,
+    footnote) matches the auth emails so the inbox stays consistent.
+
+    ``highlight`` is the prominent monospaced phrase (e.g. ``"SGD 25"``).
+    ``highlight_sub`` is an optional smaller line under it (e.g.
+    ``"renews 5 Jun 2026"``); pass ``None`` to omit.
+    """
+    cta_html = ""
+    if cta_label and cta_url:
+        cta_html = (
+            f'<tr><td align="center" style="padding: 8px 0 24px 0;">'
+            f'<a href="{cta_url}" '
+            f'style="display:inline-block;'
+            f'background:{_EMAIL_ACCENT};color:#0e1014;'
+            f'font-family:{_FONT_SANS};font-weight:600;font-size:14px;'
+            f'text-decoration:none;padding:11px 24px;border-radius:6px;'
+            f'border:1px solid {_EMAIL_ACCENT_DIM};">{cta_label}</a>'
+            f'</td></tr>'
+        )
+
+    sub_html = ""
+    if highlight_sub:
+        sub_html = (
+            f'<div style="margin-top:8px;font-family:{_FONT_SANS};'
+            f'font-size:13px;color:{_EMAIL_MUTED};">{highlight_sub}</div>'
+        )
+
+    return (
+        '<!doctype html>\n'
+        '<html><head>'
+        '<meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<meta name="color-scheme" content="dark">'
+        '<meta name="supported-color-schemes" content="dark light">'
+        f'<title>{heading}</title>'
+        '</head>'
+        f'<body style="margin:0;padding:0;background:{_EMAIL_BG};'
+        f'color:{_EMAIL_FG};font-family:{_FONT_SANS};">'
+        f'<div style="display:none;max-height:0;overflow:hidden;'
+        f'opacity:0;color:transparent;">{preheader}</div>'
+        '<table role="presentation" width="100%" cellspacing="0" '
+        f'cellpadding="0" border="0" style="background:{_EMAIL_BG};">'
+        '<tr><td align="center" style="padding: 32px 16px;">'
+        '<table role="presentation" width="100%" cellspacing="0" '
+        f'cellpadding="0" border="0" '
+        f'style="max-width:480px;background:{_EMAIL_CARD};'
+        f'border:1px solid {_EMAIL_BORDER};border-radius:8px;'
+        f'overflow:hidden;">'
+        f'<tr><td style="padding:18px 24px;border-bottom:1px solid '
+        f'{_EMAIL_BORDER};font-family:{_FONT_MONO};font-size:13px;">'
+        f'<span style="color:{_EMAIL_ACCENT};font-weight:700;">▶</span>'
+        f'<span style="color:{_EMAIL_FG};font-weight:600;'
+        ' margin-left:8px;">bss-cli</span>'
+        f'<span style="color:{_EMAIL_MUTED};margin-left:8px;">'
+        ' / self-serve portal</span>'
+        '</td></tr>'
+        f'<tr><td style="padding:28px 24px 12px 24px;">'
+        f'<h1 style="margin:0 0 12px 0;font-size:20px;line-height:1.3;'
+        f'color:{_EMAIL_FG};font-weight:600;">{heading}</h1>'
+        f'<p style="margin:0 0 20px 0;font-size:15px;line-height:1.5;'
+        f'color:{_EMAIL_FG};">{intro}</p>'
+        '</td></tr>'
+        # Highlight block — same border + green color as the OTP block,
+        # but content is non-secret (amount, plan, etc.).
+        '<tr><td align="center" style="padding: 0 24px 16px 24px;">'
+        f'<div style="display:inline-block;background:{_EMAIL_INSET};'
+        f'border:1px solid {_EMAIL_BORDER};border-radius:6px;'
+        f'padding:14px 22px;font-family:{_FONT_MONO};'
+        f'font-size:22px;font-weight:600;'
+        f'color:{_EMAIL_ACCENT};">{highlight}{sub_html}</div>'
+        '</td></tr>'
+        + cta_html +
+        f'<tr><td style="padding: 12px 24px 24px 24px;">'
+        f'<p style="margin:0;font-family:{_FONT_SANS};font-size:12px;'
+        f'line-height:1.5;color:{_EMAIL_MUTED};">{footnote}</p>'
+        '</td></tr>'
+        '</table>'
+        f'<table role="presentation" width="100%" cellspacing="0" '
+        f'cellpadding="0" border="0" style="max-width:480px;'
+        f'margin-top:16px;">'
+        f'<tr><td align="center" style="font-family:{_FONT_MONO};'
+        f'font-size:11px;color:{_EMAIL_DIM};">'
+        '— sent by BSS-CLI · transactional only —'
+        '</td></tr>'
+        '</table>'
+        '</td></tr></table>'
+        '</body></html>'
+    )
+
+
 def _render_email(
     *,
     preheader: str,
@@ -204,13 +310,35 @@ def _render_email(
 
 
 class EmailAdapter(Protocol):
-    """Three-method delivery surface used by the auth flows."""
+    """Delivery surface used by the auth flows + v0.18 renewal worker."""
 
     def send_login(self, email: str, otp: str, magic_link: str) -> None: ...
     def send_step_up(self, email: str, otp: str, action_label: str) -> None: ...
     def send_email_change_verification(
         self, new_email: str, otp: str, magic_link: str
     ) -> None: ...
+    def send_renewal_reminder(
+        self,
+        email: str,
+        *,
+        plan_name: str,
+        msisdn: str,
+        amount: str,
+        currency: str,
+        renewal_date: str,
+    ) -> None:
+        """v0.18 — sent ~24h before next_renewal_at by the subscription
+        service's renewal worker.
+
+        Args:
+            email: customer's verified email address.
+            plan_name: human plan name (``"Standard"``, not ``"PLAN_M"``).
+            msisdn: 8-digit MSISDN of the line being renewed.
+            amount: pre-formatted decimal string (``"25.00"``).
+            currency: ISO-4217 (``"SGD"``).
+            renewal_date: human date (``"5 Jun 2026"``).
+        """
+        ...
 
 
 class LoggingEmailAdapter:
@@ -291,6 +419,36 @@ class LoggingEmailAdapter:
         )
         log.info("portal_auth.email.change_sent", adapter="logging")
 
+    def send_renewal_reminder(
+        self,
+        email: str,
+        *,
+        plan_name: str,
+        msisdn: str,
+        amount: str,
+        currency: str,
+        renewal_date: str,
+    ) -> None:
+        self._append(
+            [
+                f"To: {email}",
+                f"Subject: Your {plan_name} plan renews on {renewal_date}",
+                "",
+                f"Plan: {plan_name}",
+                f"MSISDN: {msisdn}",
+                f"Amount: {currency} {amount}",
+                f"Renews on: {renewal_date}",
+                "",
+                "Card on file will be charged automatically.",
+                "No action needed unless you want to switch plans or cancel.",
+            ]
+        )
+        log.info(
+            "portal_auth.email.renewal_reminder_sent",
+            adapter="logging",
+            email_domain=email.split("@", 1)[-1] if "@" in email else "?",
+        )
+
 
 class NoopEmailAdapter:
     """Test adapter — keeps the most recent code for each (email, kind)
@@ -321,6 +479,25 @@ class NoopEmailAdapter:
         self.records[(new_email, "email_change")] = {
             "otp": otp,
             "magic_link": magic_link,
+            "ts": clock_now(),
+        }
+
+    def send_renewal_reminder(
+        self,
+        email: str,
+        *,
+        plan_name: str,
+        msisdn: str,
+        amount: str,
+        currency: str,
+        renewal_date: str,
+    ) -> None:
+        self.records[(email, "renewal_reminder")] = {
+            "plan_name": plan_name,
+            "msisdn": msisdn,
+            "amount": amount,
+            "currency": currency,
+            "renewal_date": renewal_date,
             "ts": clock_now(),
         }
 
@@ -467,6 +644,56 @@ class ResendEmailAdapter:
             text=body_text,
         )
 
+    def send_renewal_reminder(
+        self,
+        email: str,
+        *,
+        plan_name: str,
+        msisdn: str,
+        amount: str,
+        currency: str,
+        renewal_date: str,
+    ) -> None:
+        body_html = _render_notification_email(
+            preheader=(
+                f"Your {plan_name} plan renews {renewal_date} for "
+                f"{currency} {amount}."
+            ),
+            heading=f"Your {plan_name} plan renews soon",
+            intro=(
+                f"Your line <strong>{msisdn}</strong> renews on "
+                f"<strong>{renewal_date}</strong>. Your card on file "
+                "will be charged automatically — no action needed unless "
+                "you want to switch plans or cancel."
+            ),
+            highlight=f"{currency} {amount}",
+            highlight_sub=f"renews {renewal_date}",
+            cta_label=None,
+            cta_url=None,
+            footnote=(
+                "Want to switch plans, cancel, or update your card? Sign "
+                "in to your portal — changes take effect at the next "
+                "renewal boundary."
+            ),
+        )
+        body_text = (
+            f"BSS-CLI — your {plan_name} plan renews soon\n"
+            f"\n"
+            f"Line: {msisdn}\n"
+            f"Renews on: {renewal_date}\n"
+            f"Amount: {currency} {amount}\n"
+            f"\n"
+            f"Your card on file will be charged automatically. "
+            f"No action needed unless you want to switch plans or cancel."
+        )
+        self._send(
+            operation="send_renewal_reminder",
+            to=email,
+            subject=f"Your {plan_name} plan renews on {renewal_date}",
+            html=body_html,
+            text=body_text,
+        )
+
     # ── internal ─────────────────────────────────────────────────────
 
     def _send(
@@ -537,6 +764,11 @@ class SmtpEmailAdapter:
 
     def send_email_change_verification(
         self, new_email: str, otp: str, magic_link: str
+    ) -> None:  # pragma: no cover
+        raise NotImplementedError
+
+    def send_renewal_reminder(
+        self, email: str, **_kwargs
     ) -> None:  # pragma: no cover
         raise NotImplementedError
 
