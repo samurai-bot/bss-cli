@@ -112,7 +112,23 @@ class PaymentClient(BSSClient):
         Server is pre-tokenized (no PAN on the wire). ``card_token`` is the
         opaque provider token we pass through as ``providerToken``; real
         channels would pass a Stripe/Adyen token with the matching provider.
+
+        v0.16: when ``tokenization_provider='stripe'``, the BSS-side card
+        metadata (last4/brand/exp) is canonical on Stripe's side, not BSS.
+        Portal callers send empty strings / 0s; we substitute schema-
+        satisfying placeholders here so the TMF schema validation passes.
+        The payment service replaces them with real data fetched from
+        Stripe before persisting (PaymentMethodService.register_method).
         """
+        if tokenization_provider == "stripe":
+            if not last4:
+                last4 = "0000"
+            if not brand:
+                brand = "card"
+            if not exp_month:
+                exp_month = 12
+            if not exp_year:
+                exp_year = 2099
         card_summary: dict[str, Any] = {
             "brand": brand,
             "last4": last4,

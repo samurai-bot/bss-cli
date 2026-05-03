@@ -120,6 +120,28 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         provider=settings.bss_portal_kyc_provider,
     )
 
+    # v0.16 — payment provider mode + PCI scope guard.
+    # The mode drives signup template selection (mock = server-rendered
+    # card-number form; stripe = Stripe.js + Elements iframe).
+    # The PCI guard refuses to boot in production-stripe mode if any
+    # template still has a `name="card_number"` input — the doctrine
+    # line is "PAN never touches BSS in production" (DECISIONS 2026-05-03).
+    app.state.payment_provider = settings.bss_payment_provider
+    app.state.payment_stripe_publishable_key = (
+        settings.bss_payment_stripe_publishable_key
+    )
+    if (
+        settings.bss_env == "production"
+        and settings.bss_payment_provider == "stripe"
+    ):
+        from .pci_scope import scan_templates_for_pan_inputs
+
+        scan_templates_for_pan_inputs()  # raises RuntimeError if any survive
+    log.info(
+        "portal.payment_provider.selected",
+        provider=settings.bss_payment_provider,
+    )
+
     app.state.session_store = SessionStore(
         ttl_seconds=settings.bss_portal_self_serve_session_ttl,
     )

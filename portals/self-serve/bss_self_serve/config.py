@@ -52,5 +52,14 @@ class Settings(BaseSettings):
     # default for dev / tests; production deployments set this via env.
     bss_portal_public_url: str = "http://localhost:9001"
 
+    # v0.16 — payment provider mode (read by signup templates to decide
+    # mock card-number form vs Stripe.js + Elements). The publishable
+    # key is the only Stripe value the browser needs; the secret key
+    # stays in the payment service. Defaults to mock so a portal that
+    # boots without these env vars set keeps the v0.1-v0.15 behavior.
+    bss_payment_provider: str = "mock"
+    bss_payment_stripe_publishable_key: str = ""
+    bss_env: str = "development"
+
 
 settings = Settings()

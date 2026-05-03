@@ -25,10 +25,12 @@ class PaymentMethodService:
         session: AsyncSession,
         pm_repo: PaymentMethodRepository,
         crm_client: CRMClient,
+        tokenizer=None,  # v0.16 — TokenizerAdapter; None = mock-only deployment
     ) -> None:
         self._session = session
         self._pm_repo = pm_repo
         self._crm_client = crm_client
+        self._tokenizer = tokenizer
 
     async def register_method(
         self,
@@ -50,7 +52,13 @@ class PaymentMethodService:
             customer_id, self._crm_client
         )
         pm_policies.check_customer_active_or_pending(customer)
-        pm_policies.check_card_not_expired(exp_month, exp_year)
+
+        # v0.16: Stripe-mode pm_* don't carry exp_month/exp_year on the
+        # portal payload — the data lives on Stripe's PaymentMethod
+        # object. Skip the local expiry check for stripe rows; Stripe
+        # blocks expired cards itself at charge time.
+        if tokenization_provider != "stripe":
+            pm_policies.check_card_not_expired(exp_month, exp_year)
         await pm_policies.check_at_most_n_methods(customer_id, self._pm_repo)
 
         # --- Create ---
@@ -61,11 +69,59 @@ class PaymentMethodService:
         existing_count = await self._pm_repo.count_active_for_customer(customer_id)
         is_default = existing_count == 0
 
+        # v0.16: Stripe path — ensure_customer (cached in
+        # payment.customer) + attach the pm_* to the customer BEFORE
+        # we persist the row. If Stripe rejects either call, the row
+        # never lands and the portal's failure path can render cleanly.
+        # The actual last4/brand are also fetched from Stripe and
+        # written onto the row (the portal sent empty strings).
+        token_provider = (
+            "stripe" if tokenization_provider == "stripe" else "mock"
+        )
+        if token_provider == "stripe":
+            if self._tokenizer is None:
+                from app.policies.base import PolicyViolation
+                raise PolicyViolation(
+                    rule="payment.method.add.no_tokenizer",
+                    message=(
+                        "stripe payment_method registration requires a "
+                        "configured TokenizerAdapter on the payment service "
+                        "(BSS_PAYMENT_PROVIDER=stripe + the four stripe "
+                        "env vars; see select_tokenizer)."
+                    ),
+                    context={"customer_id": customer_id},
+                )
+            customer_email = (
+                customer.get("contactMedium", [{}])[0].get("emailAddress")
+                if isinstance(customer.get("contactMedium"), list)
+                else customer.get("email")
+            ) or f"{customer_id}@bss-cli.local"
+            cus_external_ref = await self._tokenizer.ensure_customer(
+                bss_customer_id=customer_id,
+                email=customer_email,
+            )
+            await self._tokenizer.attach_payment_method_to_customer(
+                payment_method_id=provider_token,
+                customer_id=cus_external_ref,
+            )
+            # Sane defaults so the row's NOT NULL exp_month/exp_year
+            # constraints don't trip when the portal sent 0/0 (stripe
+            # mode); the authoritative card metadata stays in Stripe.
+            if not exp_month:
+                exp_month = 12
+            if not exp_year:
+                exp_year = 2099
+            if not last4:
+                last4 = "stripe"  # surfaces in `bss list-methods`; readers know stripe-side is canonical
+            if not brand:
+                brand = "card"
+
         pm = PaymentMethod(
             id=pm_id,
             customer_id=customer_id,
             type=type_,
             token=provider_token,
+            token_provider=token_provider,
             last4=last4,
             brand=brand,
             exp_month=exp_month,
@@ -87,11 +143,17 @@ class PaymentMethodService:
                 "brand": brand,
                 "last4": last4,
                 "tokenization_provider": tokenization_provider,
+                "token_provider": token_provider,
             },
         )
 
         await self._session.commit()
-        log.info("payment_method.registered", pm_id=pm_id, customer_id=customer_id)
+        log.info(
+            "payment_method.registered",
+            pm_id=pm_id,
+            customer_id=customer_id,
+            token_provider=token_provider,
+        )
         return pm
 
     async def get_method(self, pm_id: str) -> PaymentMethod | None:

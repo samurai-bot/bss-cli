@@ -53,6 +53,20 @@
        to satisfy the POST /signup form contract; the route ignores
        it on the reuse path. #}
     <input type="hidden" name="card_pan" value="" />
+  {% elif payment_provider == 'stripe' %}
+    {# v0.16 stripe mode — card data does NOT touch this form. PCI
+       doctrine: PAN never reaches BSS in production. The customer
+       enters their card inside the Stripe Elements iframe at the
+       /signup/step/cof step (after KYC). Empty hidden card_pan
+       satisfies the POST /signup form contract. #}
+    <input type="hidden" name="card_pan" value="" />
+    <fieldset>
+      <legend>Payment</legend>
+      <p class="form-hint">
+        You'll add your card on the next page using a secure Stripe form —
+        card details go directly to Stripe and never touch our servers.
+      </p>
+    </fieldset>
   {% else %}
   {# v0.15 — removed the prebaked "✓ Identity verified" badge that used
      to render here. Identity verification is performed AFTER this form

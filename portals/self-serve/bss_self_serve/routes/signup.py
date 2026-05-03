@@ -114,6 +114,13 @@ async def signup_form(
             "identity_email": identity.email,
             "prefill_name": prefill_name,
             "is_returning": is_returning,
+            # v0.16 — drives the form's mode-switch (mock card-number
+            # input vs Stripe-Elements-deferred-to-COF-step). The
+            # publishable key is later read at the COF step's iframe
+            # mount.
+            "payment_provider": getattr(
+                request.app.state, "payment_provider", "mock"
+            ),
         },
     )
 
@@ -180,9 +187,16 @@ async def signup_submit(
     # second link — that's the bug a returning visitor reported.
     existing_customer_id = identity.customer_id
 
-    # New customers MUST supply a PAN — the COF step will need it.
-    # Returning customers reuse the existing default method and don't.
-    if not existing_customer_id and not card_pan.strip():
+    # New customers MUST supply a PAN in mock mode — the COF step
+    # will need it. Stripe mode collects the card inside the Elements
+    # iframe at the COF step, so the PAN is intentionally absent here
+    # (and the form omits the input entirely; PCI doctrine).
+    payment_provider = getattr(request.app.state, "payment_provider", "mock")
+    if (
+        not existing_customer_id
+        and payment_provider == "mock"
+        and not card_pan.strip()
+    ):
         await store.update(session)
         return await _render_failed(
             request, session, "policy.payment.method.invalid_card"
@@ -601,12 +615,62 @@ async def signup_step_cof(
     session: str = Query(...),
     identity: IdentityView = Depends(requires_verified_email),
 ) -> HTMLResponse:
+    """Add card on file. Mock and stripe paths share this entry point.
+
+    - Mock mode: auto-fired by HTMX from `pending_cof`. Uses the
+      `card_pan` we collected on the original signup form, runs it
+      through the local mock tokenizer, calls
+      `payment.create_payment_method(token_provider='mock')`, advances
+      to `pending_order`.
+    - Stripe mode: customer enters card inside the Stripe Elements
+      iframe; on success Stripe.js POSTs the resulting `pm_*` id here
+      via fetch (the form's hidden `payment_method_id` field carries
+      it). We call `payment.create_payment_method(token_provider='stripe',
+      provider_token=pm_id)` and advance.
+    """
     store = request.app.state.session_store
     factory = request.app.state.db_session_factory
     sig = await _resolve(store, session, identity)
+
+    # Stripe mode: the customer's pm_* id is the only thing on the form.
+    # The state may be `pending_cof` (immediate fetch from Elements
+    # success) or `pending_cof_elements` (after the mount endpoint had
+    # already pivoted the state); accept both.
+    payment_provider = getattr(request.app.state, "payment_provider", "mock")
+    if payment_provider == "stripe":
+        if sig.step not in ("pending_cof", "pending_cof_elements"):
+            return _render_step_fragment(request, sig)
+        form = await request.form()
+        pm_id = (form.get("payment_method_id") or "").strip()
+        if not pm_id:
+            # No pm_* yet — render the Elements iframe again. Polling
+            # path lands here too.
+            sig.step = "pending_cof_elements"
+            await store.update(sig)
+            return _render_step_fragment(request, sig)
+        return await _signup_step_cof_stripe(
+            request,
+            store=store,
+            factory=factory,
+            sig=sig,
+            payment_method_id=pm_id,
+        )
+
+    # Mock mode (v0.1-v0.15 default).
     if sig.step != "pending_cof":
         return _render_step_fragment(request, sig)
+    return await _signup_step_cof_mock(
+        request, store=store, factory=factory, sig=sig
+    )
 
+
+async def _signup_step_cof_mock(
+    request: Request,
+    *,
+    store,
+    factory,
+    sig: SignupSession,
+) -> HTMLResponse:
     clients = get_clients()
     try:
         tok = _local_tokenize(sig.card_pan)
@@ -667,6 +731,122 @@ async def signup_step_cof(
     )
     sig.step = "pending_order"
     await store.update(sig)
+    return _render_step_fragment(request, sig)
+
+
+async def _signup_step_cof_stripe(
+    request: Request,
+    *,
+    store,
+    factory,
+    sig: SignupSession,
+    payment_method_id: str,
+) -> HTMLResponse:
+    """v0.16 stripe path — register the pm_* with the payment service.
+
+    PaymentMethodService.register_method handles the
+    ensure_customer + attach round-trips on the service side
+    (DECISIONS 2026-05-03 — payment.customer caches per-(BSS customer,
+    provider) external ref). The portal just hands over pm_id +
+    customer_id and gets back the BSS-side PM-* id.
+    """
+    clients = get_clients()
+    try:
+        method = await clients.payment.create_payment_method(
+            customer_id=sig.customer_id,
+            card_token=payment_method_id,
+            # v0.16 — last4/brand come back in the response (Stripe
+            # exposes them on PaymentMethod.card). Submitting empty here
+            # is fine; the service derives them from Stripe.
+            last4="",
+            brand="",
+            tokenization_provider="stripe",
+        )
+    except PolicyViolationFromServer as exc:
+        await _record_step(
+            factory,
+            sig,
+            customer_id=sig.customer_id,
+            action="signup_add_card",
+            route="/signup/step/cof",
+            success=False,
+            error_rule=exc.rule,
+            request=request,
+        )
+        if not is_known(exc.rule):
+            log.info("portal.signup.unknown_policy_rule", rule=exc.rule)
+        sig.step = "failed"
+        sig.step_error = exc.rule
+        await store.update(sig)
+        return _render_step_fragment(request, sig)
+
+    sig.payment_method_id = (
+        method.get("id") if isinstance(method, dict) else None
+    )
+    await _record_step(
+        factory,
+        sig,
+        customer_id=sig.customer_id,
+        action="signup_add_card",
+        route="/signup/step/cof",
+        success=True,
+        request=request,
+    )
+    sig.step = "pending_order"
+    await store.update(sig)
+    return _render_step_fragment(request, sig)
+
+
+# ── POST /signup/step/cof/mount — v0.16 Stripe Elements pivot ─────────
+
+
+@router.post("/signup/step/cof/mount", response_class=HTMLResponse)
+async def signup_step_cof_mount(
+    request: Request,
+    session: str = Query(...),
+    identity: IdentityView = Depends(requires_verified_email),
+) -> HTMLResponse:
+    """v0.16 — pivots state from pending_cof → pending_cof_elements.
+
+    Auto-fired by the progress fragment in stripe mode. The pivot is
+    server-side (not pure client-side) so the timeline label updates
+    consistently and the Elements iframe is rendered with the
+    publishable key from app.state, not the form.
+
+    No card data is submitted yet — the customer's actual card entry
+    happens inside the iframe; the iframe's submit handler POSTs to
+    /signup/step/cof with the resulting pm_id.
+    """
+    store = request.app.state.session_store
+    sig = await _resolve(store, session, identity)
+    if sig.step != "pending_cof":
+        # Already advanced (or rolled back) — render whatever's current.
+        return _render_step_fragment(request, sig)
+    sig.step = "pending_cof_elements"
+    await store.update(sig)
+    return _render_step_fragment(request, sig)
+
+
+# ── GET /signup/step/cof/poll — v0.16 Elements heartbeat ──────────────
+
+
+@router.get("/signup/step/cof/poll", response_class=HTMLResponse)
+async def signup_step_cof_poll(
+    request: Request,
+    session: str = Query(...),
+    identity: IdentityView = Depends(requires_verified_email),
+) -> HTMLResponse:
+    """v0.16 — keeps the Elements iframe rendered while waiting for
+    customer to enter their card.
+
+    The Stripe.js submit handler does the actual pm_id submission via
+    fetch (not HTMX); this poll fragment exists so a JS-disabled or
+    stuck client doesn't sit forever on a frozen iframe. Returns the
+    same fragment which keeps the iframe mounted (the JS guards via
+    `window._bssStripeMounted` to avoid double-mount).
+    """
+    store = request.app.state.session_store
+    sig = await _resolve(store, session, identity)
     return _render_step_fragment(request, sig)
 
 
@@ -892,6 +1072,15 @@ def _render_step_fragment(request: Request, sig: SignupSession) -> HTMLResponse:
             "plan_id": sig.plan,
             "step_error_message": (
                 render(sig.step_error) if sig.step_error else None
+            ),
+            # v0.16 — read by the COF branch to decide between the
+            # mock auto-tokenize trigger and the Stripe.js + Elements
+            # mount + pm_id submission flow.
+            "payment_provider": getattr(
+                request.app.state, "payment_provider", "mock"
+            ),
+            "stripe_publishable_key": getattr(
+                request.app.state, "payment_stripe_publishable_key", ""
             ),
         },
     )

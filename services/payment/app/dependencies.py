@@ -85,6 +85,7 @@ async def get_payment_method_service(
         session=session,
         pm_repo=PaymentMethodRepository(session),
         crm_client=request.app.state.crm_client,
+        tokenizer=getattr(request.app.state, "tokenizer", None),
     )
 
 
