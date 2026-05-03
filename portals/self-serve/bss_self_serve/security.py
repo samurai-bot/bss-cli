@@ -378,14 +378,25 @@ async def _stash_for_replay(
     request: Request,
     payload: dict[str, str] | None,
 ) -> None:
-    """Stash the original POST body so /auth/step-up can replay it.
+    """Stash the original POST so /auth/step-up can replay it.
 
-    No-op for non-POST requests or empty payloads — there's nothing to
-    replay. Failures are swallowed: the stash is a UX optimisation,
-    not a correctness gate, and the StepUpRequired bounce must still
-    happen even if the stash insert fails.
+    No-op for non-POST requests. Empty-body POSTs (e.g. the
+    "Continue to Stripe" button or the "Remove card" form, where
+    the URL path carries the action and the body is empty) ARE
+    stashed — the replay just POSTs to the URL with no fields,
+    which is exactly what the original click did.
+
+    Pre-v0.16 the gate also excluded empty payloads, which broke
+    the replay for any URL-path-driven action (POST /payment-methods/add,
+    POST /payment-methods/<id>/remove, POST /payment-methods/<id>/set-default).
+    Customers had to click the action button TWICE — once to trigger
+    the OTP challenge, then again after OTP verification.
+
+    Failures are swallowed: the stash is a UX optimisation, not a
+    correctness gate, and the StepUpRequired bounce must still happen
+    even if the stash insert fails.
     """
-    if request.method != "POST" or not payload:
+    if request.method != "POST":
         return
     target_url = request.url.path
     try:
@@ -395,7 +406,7 @@ async def _stash_for_replay(
                 session_id=session_id,
                 action_label=action_label,
                 target_url=target_url,
-                payload=payload,
+                payload=payload or {},
             )
             await db.commit()  # type: ignore[attr-defined]
     except Exception:

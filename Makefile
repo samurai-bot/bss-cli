@@ -250,16 +250,25 @@ seed:
 	@$(ENV_SOURCE); uv run --package bss-seed python -m bss_seed.main
 
 # Hero / general scenarios drive auth flows by reading OTPs from the
-# dev-mailbox file that LoggingEmailAdapter writes. v0.14 added the
-# Resend provider — when an operator has BSS_PORTAL_EMAIL_PROVIDER=resend
-# in .env (real outbound mail), the LoggingEmailAdapter never runs and
-# the mailbox file stays empty, so capture_regex fails. Both targets
-# below temporarily flip the portal to logging mode for the duration of
-# the run, then restore the operator's setting on exit (or trap).
+# dev-mailbox file that LoggingEmailAdapter writes. They also run
+# against synthetic identities that don't have real KYC documents OR
+# real Stripe-side `cus_*`/`pm_*` records. So when an operator runs
+# with .env pointing at real providers, we temporarily flip every
+# customer-facing provider to its in-process equivalent for the
+# duration of the run, then restore on exit:
+#
+#   BSS_PORTAL_EMAIL_PROVIDER  resend → logging
+#   BSS_PORTAL_KYC_PROVIDER    didit  → prebaked  (+ ALLOW_PREBAKED=true)
+#   BSS_PAYMENT_PROVIDER       stripe → mock      (v0.16)
+#
+# Each flip recreates the affected containers (env vars are read at
+# lifespan startup, NOT baked into the image — so just a recreate is
+# enough, no rebuild needed).
 define SCENARIOS_RUN
 	@$(ENV_SOURCE); \
 	prev=$$(grep -E '^BSS_PORTAL_EMAIL_PROVIDER=' .env | tail -1 | cut -d= -f2-); \
 	prev_kyc=$$(grep -E '^BSS_PORTAL_KYC_PROVIDER=' .env | tail -1 | cut -d= -f2-); \
+	prev_payment=$$(grep -E '^BSS_PAYMENT_PROVIDER=' .env | tail -1 | cut -d= -f2-); \
 	had_allow_prebaked=$$(grep -cE '^BSS_KYC_ALLOW_PREBAKED=' .env); \
 	if [ "$$prev" != "logging" ] && [ "$$prev" != "noop" ]; then \
 		printf "▶ scenarios: flipping BSS_PORTAL_EMAIL_PROVIDER=%s → logging for portal container\n" "$$prev"; \
@@ -278,9 +287,16 @@ define SCENARIOS_RUN
 	else \
 		recreate_kyc=0; \
 	fi; \
-	if [ $$recreate_email -eq 1 ] || [ $$recreate_kyc -eq 1 ]; then \
-		docker compose up -d --force-recreate portal-self-serve crm >/dev/null 2>&1 || true; \
-		trap 'if [ '"$$recreate_email"' -eq 1 ]; then sed -i "s|^BSS_PORTAL_EMAIL_PROVIDER=.*|BSS_PORTAL_EMAIL_PROVIDER='"$$prev"'|" .env; rm -f .env.bak; printf "▶ scenarios: restored BSS_PORTAL_EMAIL_PROVIDER=%s\n" "'"$$prev"'"; fi; if [ '"$$recreate_kyc"' -eq 1 ]; then sed -i "s|^BSS_PORTAL_KYC_PROVIDER=.*|BSS_PORTAL_KYC_PROVIDER='"$$prev_kyc"'|" .env; rm -f .env.bak2; if [ '"$$had_allow_prebaked"' -eq 0 ]; then sed -i "/^BSS_KYC_ALLOW_PREBAKED=/d" .env; fi; printf "▶ scenarios: restored BSS_PORTAL_KYC_PROVIDER=%s\n" "'"$$prev_kyc"'"; fi; docker compose up -d --force-recreate portal-self-serve crm >/dev/null 2>&1 || true' EXIT INT TERM; \
+	if [ -n "$$prev_payment" ] && [ "$$prev_payment" != "mock" ]; then \
+		printf "▶ scenarios: flipping BSS_PAYMENT_PROVIDER=%s → mock for the run\n" "$$prev_payment"; \
+		sed -i.bak3 's|^BSS_PAYMENT_PROVIDER=.*|BSS_PAYMENT_PROVIDER=mock|' .env; \
+		recreate_payment=1; \
+	else \
+		recreate_payment=0; \
+	fi; \
+	if [ $$recreate_email -eq 1 ] || [ $$recreate_kyc -eq 1 ] || [ $$recreate_payment -eq 1 ]; then \
+		docker compose up -d --force-recreate portal-self-serve crm payment >/dev/null 2>&1 || true; \
+		trap 'if [ '"$$recreate_email"' -eq 1 ]; then sed -i "s|^BSS_PORTAL_EMAIL_PROVIDER=.*|BSS_PORTAL_EMAIL_PROVIDER='"$$prev"'|" .env; rm -f .env.bak; printf "▶ scenarios: restored BSS_PORTAL_EMAIL_PROVIDER=%s\n" "'"$$prev"'"; fi; if [ '"$$recreate_kyc"' -eq 1 ]; then sed -i "s|^BSS_PORTAL_KYC_PROVIDER=.*|BSS_PORTAL_KYC_PROVIDER='"$$prev_kyc"'|" .env; rm -f .env.bak2; if [ '"$$had_allow_prebaked"' -eq 0 ]; then sed -i "/^BSS_KYC_ALLOW_PREBAKED=/d" .env; fi; printf "▶ scenarios: restored BSS_PORTAL_KYC_PROVIDER=%s\n" "'"$$prev_kyc"'"; fi; if [ '"$$recreate_payment"' -eq 1 ]; then sed -i "s|^BSS_PAYMENT_PROVIDER=.*|BSS_PAYMENT_PROVIDER='"$$prev_payment"'|" .env; rm -f .env.bak3; printf "▶ scenarios: restored BSS_PAYMENT_PROVIDER=%s\n" "'"$$prev_payment"'"; fi; docker compose up -d --force-recreate portal-self-serve crm payment >/dev/null 2>&1 || true' EXIT INT TERM; \
 	fi; \
 	uv run bss scenario run-all scenarios $(1)
 endef
