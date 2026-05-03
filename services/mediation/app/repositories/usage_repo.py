@@ -71,6 +71,10 @@ class UsageEventRepository:
             "unit": event.unit,
             "source": event.source,
             "rawCdrRef": event.raw_cdr_ref,
+            # v0.17 — rating consumer reads this to decide whether to
+            # decrement `data_roaming` instead of `data`. Default false
+            # is set on the column itself.
+            "roamingIndicator": event.roaming_indicator,
         }
         base.update(extra)
         return base

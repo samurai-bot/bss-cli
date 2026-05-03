@@ -17,12 +17,14 @@ from app.repositories.esim_repo import EsimRepository
 from app.repositories.interaction_repo import InteractionRepository
 from app.repositories.kyc_repo import KycRepository
 from app.repositories.msisdn_repo import MsisdnRepository
+from app.repositories.port_request_repo import PortRequestRepository
 from app.repositories.ticket_repo import TicketRepository
 from app.services.case_service import CaseService
 from app.services.chat_transcript_service import ChatTranscriptService
 from app.services.customer_service import CustomerService
 from app.services.inventory_service import InventoryService
 from app.services.kyc_service import KycService
+from app.services.port_request_service import PortRequestService
 from app.services.ticket_service import TicketService
 
 log = structlog.get_logger()
@@ -163,4 +165,22 @@ async def get_inventory_service(
         session=session,
         msisdn_repo=MsisdnRepository(session),
         esim_repo=EsimRepository(session),
+    )
+
+
+async def get_port_request_repo(
+    session: AsyncSession = Depends(get_session),
+) -> PortRequestRepository:
+    return PortRequestRepository(session)
+
+
+async def get_port_request_service(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> PortRequestService:
+    return PortRequestService(
+        session=session,
+        port_repo=PortRequestRepository(session),
+        msisdn_repo=MsisdnRepository(session),
+        subscription_client=request.app.state.subscription_client,
     )

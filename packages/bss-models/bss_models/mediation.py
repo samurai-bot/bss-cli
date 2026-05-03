@@ -28,3 +28,11 @@ class UsageEvent(Base, TenantMixin, TimestampMixin):
     raw_cdr_ref: Mapped[str | None] = mapped_column(Text)
     processed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     processing_error: Mapped[str | None] = mapped_column(Text)
+    # v0.17 — set by the channel/network adapter when the underlying CDR
+    # was produced on a visited (roaming) network. Mediation passes it
+    # through to rating; rating routes the decrement to the
+    # `data_roaming` BundleBalance instead of `data`. Default false so
+    # pre-v0.17 callers (and every existing scenario) keep working.
+    roaming_indicator: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )

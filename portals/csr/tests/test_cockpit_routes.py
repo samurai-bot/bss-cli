@@ -210,4 +210,4 @@ def test_health_endpoint(cockpit_client) -> None:
     body = r.json()
     assert body["status"] == "ok"
     assert body["service"] == "portal-csr"
-    assert body["version"] == "0.14.0"
+    assert body["version"] == "0.17.0"

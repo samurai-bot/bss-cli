@@ -55,6 +55,11 @@ def flatten_offerings(offerings: list[dict[str, Any]]) -> list[dict[str, str]]:
         voice = _allowance_str(allowances, "voice")
         if voice == "—":
             voice = _allowance_str(allowances, "voice_minutes")
+        # v0.17 — additive roaming bucket. PLAN_S has 0 mb so we
+        # surface ``None`` (template suppresses the row); PLAN_M/L
+        # show their bundled MB. Mirrors the dashboard's line_card
+        # filter so a stranded "Roaming 0/0" row never appears.
+        roaming = _allowance_str(allowances, "data_roaming")
         plans.append(
             {
                 "id": p["id"],
@@ -63,6 +68,7 @@ def flatten_offerings(offerings: list[dict[str, Any]]) -> list[dict[str, str]]:
                 "data": _allowance_str(allowances, "data"),
                 "voice": voice,
                 "sms": _allowance_str(allowances, "sms"),
+                "roaming": roaming if roaming not in ("—", "0 mb") else None,
             }
         )
     return plans

@@ -93,6 +93,12 @@ ProvisioningTaskId = Annotated[
     "Provisioning task ID with the PTK- prefix. The suffix is opaque. "
     "Pass through verbatim from provisioning.list_tasks.",
 ]
+PortRequestId = Annotated[
+    str,
+    "Port request ID with the PORT- prefix (e.g. PORT-3360CC22). The "
+    "suffix is opaque. Pass through verbatim from port_request.list / "
+    "port_request.create. Never fabricate.",
+]
 AggregateId = Annotated[
     str,
     "Prefixed ID matching the aggregate_type (SUB- / ORD- / CASE- / "
@@ -173,6 +179,8 @@ TicketState = Literal[
 ]
 CasePriority = Literal["low", "medium", "high", "critical"]
 CaseCategory = Literal["technical", "billing", "account", "information"]
+PortDirection = Literal["port_in", "port_out"]
+PortRequestState = Literal["requested", "validated", "completed", "rejected"]
 EscalationCategory = Literal[
     # The five non-negotiable v0.12 chat escalation categories per
     # phases/V0_12_0.md §4.4. Plus ``other`` as a catch-all the CSR

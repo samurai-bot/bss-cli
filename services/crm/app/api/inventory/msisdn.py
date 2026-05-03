@@ -3,7 +3,12 @@
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.dependencies import get_inventory_service
-from app.schemas.internal.inventory import MsisdnResponse, to_msisdn_response
+from app.schemas.internal.inventory import (
+    AddRangeRequest,
+    AddRangeResponse,
+    MsisdnResponse,
+    to_msisdn_response,
+)
 from app.services.inventory_service import InventoryService
 
 router = APIRouter(tags=["Inventory MSISDN"])
@@ -67,3 +72,17 @@ async def release_msisdn(
 ) -> MsisdnResponse:
     row = await svc.release_msisdn(msisdn)
     return to_msisdn_response(row)
+
+
+@router.post(
+    "/msisdn/add-range",
+    response_model=AddRangeResponse,
+    status_code=201,
+)
+async def add_msisdn_range(
+    body: AddRangeRequest,
+    svc: InventoryService = Depends(get_inventory_service),
+) -> AddRangeResponse:
+    """v0.17 — operator-only bulk extension of the MSISDN pool."""
+    out = await svc.add_msisdn_range(prefix=body.prefix, count=body.count)
+    return AddRangeResponse(**out)

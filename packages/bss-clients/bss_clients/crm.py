@@ -460,6 +460,75 @@ class CRMClient(BSSClient):
         )
         return resp.json()
 
+    # ── Port request (v0.17 MNP, operator-only) ─────────────────────────
+
+    async def list_port_requests(
+        self,
+        *,
+        state: str | None = None,
+        direction: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """GET /crm-api/v1/port-requests."""
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        if state:
+            params["state"] = state
+        if direction:
+            params["direction"] = direction
+        resp = await self._request(
+            "GET", "/crm-api/v1/port-requests", params=params
+        )
+        return resp.json()
+
+    async def get_port_request(self, port_id: str) -> dict[str, Any]:
+        """GET /crm-api/v1/port-requests/{id}."""
+        resp = await self._request(
+            "GET", f"/crm-api/v1/port-requests/{port_id}"
+        )
+        return resp.json()
+
+    async def create_port_request(
+        self,
+        *,
+        direction: str,
+        donor_carrier: str,
+        donor_msisdn: str,
+        requested_port_date: str,
+        target_subscription_id: str | None = None,
+    ) -> dict[str, Any]:
+        """POST /crm-api/v1/port-requests."""
+        body = {
+            "direction": direction,
+            "donorCarrier": donor_carrier,
+            "donorMsisdn": donor_msisdn,
+            "requestedPortDate": requested_port_date,
+        }
+        if target_subscription_id is not None:
+            body["targetSubscriptionId"] = target_subscription_id
+        resp = await self._request(
+            "POST", "/crm-api/v1/port-requests", json=body
+        )
+        return resp.json()
+
+    async def approve_port_request(self, port_id: str) -> dict[str, Any]:
+        """POST /crm-api/v1/port-requests/{id}/approve."""
+        resp = await self._request(
+            "POST", f"/crm-api/v1/port-requests/{port_id}/approve"
+        )
+        return resp.json()
+
+    async def reject_port_request(
+        self, port_id: str, *, reason: str
+    ) -> dict[str, Any]:
+        """POST /crm-api/v1/port-requests/{id}/reject."""
+        resp = await self._request(
+            "POST",
+            f"/crm-api/v1/port-requests/{port_id}/reject",
+            json={"reason": reason},
+        )
+        return resp.json()
+
     # ── Ticket (TMF621) ──────────────────────────────────────────────────
 
     async def open_ticket(

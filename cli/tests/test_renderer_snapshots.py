@@ -36,6 +36,10 @@ _THREE_PLANS = [
             {"type": "data", "total": 5120, "unit": "mb"},
             {"type": "voice", "total": 100, "unit": "min"},
             {"type": "sms", "total": 100, "unit": "sms"},
+            # v0.17 — PLAN_S has no roaming (0 mb); renders as "—" in
+            # the comparison column so the row is still shown for grid
+            # alignment but it's clear there's no inclusion.
+            {"type": "data_roaming", "total": 0, "unit": "mb"},
         ],
     },
     {
@@ -48,6 +52,7 @@ _THREE_PLANS = [
             {"type": "data", "total": 30720, "unit": "mb"},
             {"type": "voice", "total": -1, "unit": "min"},
             {"type": "sms", "total": -1, "unit": "sms"},
+            {"type": "data_roaming", "total": 500, "unit": "mb"},
         ],
     },
     {
@@ -60,6 +65,7 @@ _THREE_PLANS = [
             {"type": "data", "total": -1, "unit": "mb"},
             {"type": "voice", "total": -1, "unit": "min"},
             {"type": "sms", "total": -1, "unit": "sms"},
+            {"type": "data_roaming", "total": 2048, "unit": "mb"},
         ],
     },
 ]

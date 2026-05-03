@@ -398,7 +398,14 @@ async def _stash_for_replay(
     """
     if request.method != "POST":
         return
+    # Preserve the query string. Routes like ``POST /top-up`` use
+    # ``?subscription=SUB-X`` to identify the target subscription;
+    # stripping it makes the post-step-up replay 422 because the
+    # required Query param is missing. ``safe_next_path`` validates
+    # the same path+query shape so we trust the inbound URL here.
     target_url = request.url.path
+    if request.url.query:
+        target_url = f"{target_url}?{request.url.query}"
     try:
         async with factory() as db:  # type: ignore[misc]
             await stash_pending_action(

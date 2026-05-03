@@ -494,15 +494,18 @@ the route refuses without invoking the LLM.
 
 ### Deployability matrix
 
-| Concern | v0.11 | v0.12 | v0.15 | v1.0 |
-|---|---|---|---|---|
-| Customer signup (KYC) | ✅ direct + mocked attestation | ✅ unchanged | ✅ Didit live (channel-layer) + prebaked dev path | ⏳ real Singpass |
-| Card on file | ✅ mock tokenizer | ✅ unchanged | ✅ unchanged | ⏳ real Stripe |
-| eSIM provisioning | ✅ provisioning-sim | ✅ unchanged | ✅ Protocol seam (sim only; real providers v0.16+) | ⏳ real SM-DP+ |
-| Customer chat | _absent_ | ✅ scoped + capped + escalation | ✅ unchanged shape | ✅ unchanged shape |
-| Chat ownership trip-wire | _absent_ | ✅ defence-in-depth | ✅ unchanged shape | ✅ unchanged shape |
-| 14-day soak | _absent_ | ✅ frozen-clock 100×14 | ✅ unchanged (prebaked KYC path preserved) | ⏳ public soak with real cohort |
-| Per-principal RBAC (staff) | _absent_ | _absent_ | _absent_ | _retired in v0.13 — operator trust is perimeter-based; DECISIONS 2026-05-01_ |
+| Concern | v0.11 | v0.12 | v0.15 | v0.17 | v1.0 |
+|---|---|---|---|---|---|
+| Customer signup (KYC) | ✅ direct + mocked attestation | ✅ unchanged | ✅ Didit live (channel-layer) + prebaked dev path | ✅ unchanged | ⏳ real Singpass |
+| Card on file | ✅ mock tokenizer | ✅ unchanged | ✅ unchanged | ✅ Stripe Checkout (v0.16) live | ⏳ unchanged |
+| eSIM provisioning | ✅ provisioning-sim | ✅ unchanged | ✅ Protocol seam (sim only; real providers v0.16+) | ✅ unchanged | ⏳ real SM-DP+ |
+| Customer chat | _absent_ | ✅ scoped + capped + escalation | ✅ unchanged shape | ✅ unchanged shape | ✅ unchanged shape |
+| Chat ownership trip-wire | _absent_ | ✅ defence-in-depth | ✅ unchanged shape | ✅ unchanged shape | ✅ unchanged shape |
+| 14-day soak | _absent_ | ✅ frozen-clock 100×14 | ✅ unchanged (prebaked KYC path preserved) | ✅ unchanged (roaming usage path covered by hero) | ⏳ public soak with real cohort |
+| Per-principal RBAC (staff) | _absent_ | _absent_ | _absent_ | _absent_ | _retired in v0.13 — operator trust is perimeter-based; DECISIONS 2026-05-01_ |
+| MNP (port-in / port-out) | _absent_ | _absent_ | _absent_ | ✅ operator-driven `crm.port_request` aggregate | ⏳ unchanged shape (donor-carrier integration channel-layer) |
+| MSISDN pool replenishment | _absent_ | _absent_ | _absent_ | ✅ operator CLI + cockpit + low-watermark event | ⏳ unchanged |
+| Roaming as a product | _absent_ | _absent_ | _absent_ | ✅ bundled `data_roaming` MB + VAS_ROAMING_1GB top-up | ⏳ per-country tariff (post-v0.x) |
 
 ### v0.15 KYC — Didit (channel-layer)
 
@@ -628,6 +631,45 @@ is the default; `bss payment cutover --invalidate-mock-tokens` is the
 proactive path that emits one `payment_method.cutover_invalidated`
 event per row so the v0.14 Resend email-template flow can notify each
 customer to re-add their card before the env-var flip.
+
+### v0.17 Telco hygiene — MNP, MSISDN replenishment, roaming
+
+Three real-telco gaps closed without new doctrine pillars or new external integrations. Single Alembic migration (`0019`).
+
+**MNP (port-in / port-out, operator-only).** New `crm.port_request` aggregate distinct from `crm.case` (port requests have a fixed FSM + specific data shape; CLAUDE.md v0.17+ anti-pattern bars Case overload). FSM: `requested → validated → completed | rejected`. Approve dispatches:
+
+- **Port-in:** donor MSISDN gets seeded into `inventory.msisdn_pool` (status `assigned` if `target_subscription_id` is set, else `available`) via `INSERT … ON CONFLICT DO NOTHING`. Emits `inventory.msisdn.seeded_from_port_in`.
+- **Port-out:** donor MSISDN flips to terminal `ported_out` (`quarantine_until='9999-12-31'` so reserve-next never selects it again — the predicate is `status='available'`); the target subscription is then terminated via `SubscriptionClient.terminate(release_inventory=False)` (new v0.17 kwarg) so the MSISDN release path is skipped. eSIM still recycles. Emits `inventory.msisdn.ported_out` + `subscription.terminated`.
+
+Operator surfaces: REPL `/ports` slash command (`list`, `approve PORT-NNN`, `reject PORT-NNN <reason>`) + cockpit tools `port_request.{list,get,create,approve,reject}`. Registered in `operator_cockpit` profile only — exposing port-request writes to `customer_self_serve` is a doctrine bug caught by `validate_profiles()`.
+
+**MSISDN replenishment.** `bss inventory msisdn add-range <prefix> <count>` (CLI + cockpit tool) bulk-inserts `count` MSISDNs starting at `{prefix}{0:04d}`. Idempotent on overlap. Post-commit fire-and-forget hook on every successful reserve emits `inventory.msisdn.pool_low` when available count drops to or below `BSS_INVENTORY_MSISDN_POOL_LOW_THRESHOLD` (default 50).
+
+**Roaming as a product.** New `data_roaming` allowance type. Plans seed: PLAN_S=0, PLAN_M=500 mb, PLAN_L=2048 mb. New `VAS_ROAMING_1GB` top-up (8 SGD, 1024 mb, no expiry). Pipeline:
+
+```
+mediation                rating consumer                 subscription
+─────────                ──────────────                  ────────────
+UsageEvent               post-rate override:             handle_usage_rated:
++ roaming_indicator ──▶  if roamingIndicator and    ──▶  if allowance_type == 'data_roaming':
+  (boolean,                 result.allowance_type            check_roaming_balance_required(...)
+   server_default              == 'data':                    └─ rejects when balance row missing
+   false)                  validate offering carries           OR remaining ≤ 0
+                              data_roaming                     subscription stays `active`,
+                           override allowance_type             home `data` untouched
+                              to 'data_roaming'                emit usage.rejected
+                           (else publish usage.rejected
+                            with rating.no_roaming_allowance)
+```
+
+Doctrine v0.17+:
+
+- Roaming is a per-event **attribute** (`roaming_indicator: bool`), not a new `event_type`. Mediation's `VALID_EVENT_TYPES` set stays `{data, voice, voice_minutes, sms}`.
+- The pure `rate_usage` function is unchanged — routing happens in the consumer, after rate_usage returns. Doctrine guard: `data_roaming` must NOT appear in `services/rating/app/domain/rating.py`.
+- `data_roaming` is **additive**, never primary. `is_exhausted()` continues to consider only `primary_type='data'`. Roaming-balance exhaustion blocks roaming usage but does not block the subscription itself.
+- The portal line_card filter hides the Roaming bar when `total=0 AND remaining=0` so PLAN_S users don't see a stranded "Roaming 0/0".
+
+`purchase_vas` now materializes a missing balance row from the VAS spec (generic fix, not roaming-specific) — unblocks any future allowance type without code change.
 
 ### Note on billing in v0.1
 

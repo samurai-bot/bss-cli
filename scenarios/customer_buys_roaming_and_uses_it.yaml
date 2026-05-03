@@ -1,0 +1,245 @@
+name: customer_buys_roaming_and_uses_it
+description: |
+  v0.17 hero — roaming end-to-end. Customer signs up on PLAN_M (which
+  carries 500 MB of bundled `data_roaming`). They use 100 MB roaming;
+  the `data_roaming` balance decrements while home `data` stays
+  untouched (additive doctrine). They exhaust roaming; the next
+  roaming usage gets rejected with rule
+  `subscription.usage_rated.roaming_balance_required`. Subscription
+  stays `active` (block-on-exhaust independence). Customer tops up
+  via `VAS_ROAMING_1GB`; roaming bucket grows by 1024 MB; usage flows
+  again.
+
+  Green only if:
+    - PLAN_M subscription activates with both `data` (30720 mb) and
+      `data_roaming` (500 mb) BundleBalance rows
+    - 100 mb roaming usage decrements ONLY the roaming row (home
+      data untouched at 30720)
+    - exhausting the 500 mb roaming bucket leaves subscription state
+      unchanged at `active`
+    - one further 50 mb roaming attempt emits `usage.rejected`
+      with reason `subscription.usage_rated.roaming_balance_required`
+    - `subscription.purchase_vas` for VAS_ROAMING_1GB grows
+      `data_roaming` by 1024 mb
+    - audit log carries usage.rejected for the rejected attempt
+
+tags: [hero, smoke, roaming, v0_17, deterministic]
+
+setup:
+  reset_operational_data: true
+  freeze_clock_at: "2026-05-13T09:00:00+00:00"
+
+variables:
+  customer_email: "roaming-{{ run_id }}@bss-cli.local"
+  customer_phone: "+6590004444"
+  plan: PLAN_M
+  vas_top_up: VAS_ROAMING_1GB
+
+steps:
+  - name: create customer
+    action: customer.create
+    args:
+      name: "Roaming Demo {{ run_id }}"
+      email: "{{ customer_email }}"
+      phone: "{{ customer_phone }}"
+    capture:
+      customer_id: "$.id"
+
+  - name: attest KYC
+    action: customer.attest_kyc
+    args:
+      customer_id: "{{ customer_id }}"
+      provider: myinfo
+      attestation_token: "roaming-stub-jwt-{{ run_id }}"
+
+  - name: add card on file
+    action: payment.add_card
+    args:
+      customer_id: "{{ customer_id }}"
+      card_number: "4242424242424242"
+
+  - name: place PLAN_M order
+    action: order.create
+    args:
+      customer_id: "{{ customer_id }}"
+      offering_id: "{{ plan }}"
+    capture:
+      order_id: "$.id"
+
+  - name: wait for activation
+    action: order.wait_until
+    args:
+      order_id: "{{ order_id }}"
+      target_state: completed
+      timeout_s: 30
+
+  - name: get subscription + msisdn
+    action: subscription.list_for_customer
+    args:
+      customer_id: "{{ customer_id }}"
+    capture:
+      subscription_id: "$[0].id"
+      msisdn: "$[0].msisdn"
+
+  - name: PLAN_M subscription has both data and data_roaming rows
+    assert:
+      tool: subscription.get_balance
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        any_match:
+          allowanceType: data
+          remaining: 30720
+      poll:
+        interval_ms: 100
+        timeout_seconds: 5
+
+  - name: data_roaming starts at 500 mb
+    assert:
+      tool: subscription.get_balance
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        any_match:
+          allowanceType: data_roaming
+          remaining: 500
+
+  # ─── Use 100 MB while roaming ─────────────────────────────────────
+  - name: post 100 mb of roaming usage
+    action: usage.simulate
+    args:
+      msisdn: "{{ msisdn }}"
+      event_type: data
+      quantity: 100
+      unit: mb
+      roaming_indicator: true
+
+  - name: data_roaming decrements to 400 after first roaming usage
+    assert:
+      tool: subscription.get_balance
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        any_match:
+          allowanceType: data_roaming
+          remaining: 400
+      poll:
+        interval_ms: 100
+        timeout_seconds: 5
+
+  - name: home data still 30720 (independence — roaming did not touch it)
+    assert:
+      tool: subscription.get_balance
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        any_match:
+          allowanceType: data
+          remaining: 30720
+
+  # ─── Exhaust the roaming bucket ──────────────────────────────────
+  - name: burn the remaining 400 mb
+    action: usage.simulate
+    args:
+      msisdn: "{{ msisdn }}"
+      event_type: data
+      quantity: 400
+      unit: mb
+      roaming_indicator: true
+
+  - name: data_roaming is exhausted (remaining=0)
+    assert:
+      tool: subscription.get_balance
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        any_match:
+          allowanceType: data_roaming
+          remaining: 0
+      poll:
+        interval_ms: 100
+        timeout_seconds: 5
+
+  - name: home data still 30720 after roaming exhaustion
+    assert:
+      tool: subscription.get_balance
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        any_match:
+          allowanceType: data
+          remaining: 30720
+
+  - name: subscription stays active (independence doctrine)
+    assert:
+      tool: subscription.get
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        state: active
+
+  - name: post one more roaming attempt — should be rejected
+    action: usage.simulate
+    args:
+      msisdn: "{{ msisdn }}"
+      event_type: data
+      quantity: 50
+      unit: mb
+      roaming_indicator: true
+
+  - name: subscription is still active after the rejected roaming attempt
+    assert:
+      tool: subscription.get
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        state: active
+
+  - name: audit log carries usage.rejected with the roaming policy rule
+    assert:
+      tool: audit.events_by_identity
+      args:
+        service_identity: default
+        aggregate_id: "{{ subscription_id }}"
+      expect:
+        any_match:
+          eventType: usage.rejected
+          payload.reason: subscription.usage_rated.roaming_balance_required
+      poll:
+        interval_ms: 200
+        timeout_seconds: 10
+
+  # ─── Top up via VAS_ROAMING_1GB ──────────────────────────────────
+  - name: customer tops up roaming
+    action: subscription.purchase_vas
+    args:
+      subscription_id: "{{ subscription_id }}"
+      vas_offering_id: "{{ vas_top_up }}"
+
+  - name: data_roaming bucket grew to 1024 mb after top-up
+    assert:
+      tool: subscription.get_balance
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        any_match:
+          allowanceType: data_roaming
+          remaining: 1024
+      poll:
+        interval_ms: 100
+        timeout_seconds: 5
+
+  - name: roaming usage flows again after top-up
+    action: usage.simulate
+    args:
+      msisdn: "{{ msisdn }}"
+      event_type: data
+      quantity: 50
+      unit: mb
+      roaming_indicator: true
+
+  - name: data_roaming now at 974 (1024 - 50)
+    assert:
+      tool: subscription.get_balance
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        any_match:
+          allowanceType: data_roaming
+          remaining: 974
+      poll:
+        interval_ms: 100
+        timeout_seconds: 5
+
+teardown:
+  unfreeze_clock: true

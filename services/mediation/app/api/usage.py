@@ -24,6 +24,7 @@ async def create_usage(
         unit=body.unit,
         source=body.source,
         raw_cdr_ref=body.raw_cdr_ref,
+        roaming_indicator=body.roaming_indicator,
     )
     return to_usage_response(evt)
 

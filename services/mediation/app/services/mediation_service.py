@@ -54,6 +54,7 @@ class MediationService:
         unit: str,
         source: str | None = None,
         raw_cdr_ref: str | None = None,
+        roaming_indicator: bool = False,
     ) -> UsageEvent:
         # Policies that don't require enrichment
         check_positive_quantity(quantity)
@@ -107,6 +108,7 @@ class MediationService:
             source=source,
             raw_cdr_ref=raw_cdr_ref,
             processed=False,
+            roaming_indicator=roaming_indicator,
         )
         await self._repo.create(evt)
 

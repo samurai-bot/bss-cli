@@ -39,6 +39,7 @@ from app.policies.subscription import (
     check_msisdn_and_esim_reserved,
     check_renew_allowed,
 )
+from app.policies.usage import check_roaming_balance_required
 from app.policies.vas import check_not_terminated, check_vas_offering_sellable
 from app.repositories.subscription_repo import SubscriptionRepository
 from app.repositories.vas_repo import VasPurchaseRepository
@@ -269,6 +270,42 @@ class SubscriptionService:
             return
 
         target = await self._repo.get_balance_for_update(subscription_id, allowance_type)
+
+        # v0.17 — roaming usage is policy-gated independently from home
+        # data. A missing balance row OR an exhausted roaming balance
+        # rejects the decrement; the subscription stays `active` (home
+        # data unaffected). For non-roaming allowance types, the
+        # existing "missing row" branch is a benign warning + skip.
+        if allowance_type == "data_roaming":
+            try:
+                check_roaming_balance_required(
+                    subscription_id=subscription_id,
+                    balance=target,
+                    consumed_quantity=consumed_quantity,
+                )
+            except PolicyViolation as exc:
+                await publisher.publish(
+                    self._session,
+                    event_type="usage.rejected",
+                    aggregate_type="subscription",
+                    aggregate_id=subscription_id,
+                    payload={
+                        "subscriptionId": subscription_id,
+                        "allowanceType": allowance_type,
+                        "usageEventId": usage_event_id,
+                        "reason": exc.rule,
+                        **exc.context,
+                    },
+                    exchange=exchange,
+                )
+                await self._session.commit()
+                log.warning(
+                    "usage.rejected.roaming_balance_required",
+                    subscription_id=subscription_id,
+                    usage_event_id=usage_event_id,
+                )
+                return
+
         if target is None:
             log.warning(
                 "usage.rated.allowance_not_on_subscription",
@@ -407,10 +444,28 @@ class SubscriptionService:
             )
             await self._vas_repo.create(purchase)
 
-            # Add to balance
+            # Add to balance. v0.17 — when no balance row exists for this
+            # allowance_type yet, materialize one from the VAS spec. This
+            # matters for `data_roaming` top-ups against subscriptions whose
+            # plan has zero roaming included (BA_S_ROAM=0 still creates a
+            # row, but pre-v0.17 subscriptions or future allowance types
+            # may have no row at all). Generally correct fix: any future
+            # allowance type works without a separate code path.
             balances = await self._repo.get_balances(sub_id)
             target = next((b for b in balances if b.allowance_type == allowance_type), None)
-            if target and allowance_qty > 0 and target.total != -1:
+            if target is None and allowance_qty > 0:
+                target = BundleBalance(
+                    id=f"{sub_id}-{allowance_type.upper()}",
+                    subscription_id=sub_id,
+                    allowance_type=allowance_type,
+                    total=allowance_qty,
+                    consumed=0,
+                    unit=vas.get("allowanceUnit", "mb"),
+                    period_start=now,
+                    period_end=sub.current_period_end,
+                )
+                await self._repo.add_balance(target)
+            elif target and allowance_qty > 0 and target.total != -1:
                 snap = BalanceSnapshot(
                     allowance_type=target.allowance_type,
                     total=target.total, consumed=target.consumed, unit=target.unit,
@@ -905,7 +960,11 @@ class SubscriptionService:
         return {"count": len(affected_ids), "subscriptionIds": affected_ids}
 
     async def terminate(
-        self, sub_id: str, *, reason: str = "customer_requested"
+        self,
+        sub_id: str,
+        *,
+        reason: str = "customer_requested",
+        release_inventory: bool = True,
     ) -> Subscription:
         """Terminate a subscription — release MSISDN + eSIM, transition state.
 
@@ -915,6 +974,13 @@ class SubscriptionService:
         ``is_valid_transition`` check. v0.10 portal cancel route uses
         ``"customer_requested"``; CSR-initiated cancels would use
         ``"csr_initiated"``; admin pruning would use ``"admin_cleanup"``.
+
+        v0.17 — ``release_inventory`` defaults True (preserves existing
+        behaviour). The MNP port-out flow passes False because it has
+        already flipped the donor MSISDN to terminal ``ported_out``;
+        re-releasing would either no-op (policy rejects terminal) or
+        break the doctrine that ``ported_out`` is non-recyclable. eSIM
+        recycle still runs in both cases.
         """
         sub = await self._repo.get(sub_id)
         if not sub:
@@ -933,11 +999,12 @@ class SubscriptionService:
 
         now = clock_now()
 
-        # Release inventory
-        try:
-            await self._inventory.release_msisdn(sub.msisdn)
-        except Exception:
-            log.warning("inventory.release_msisdn.failed", msisdn=sub.msisdn)
+        # Release inventory (skipped for port-out — see docstring)
+        if release_inventory:
+            try:
+                await self._inventory.release_msisdn(sub.msisdn)
+            except Exception:
+                log.warning("inventory.release_msisdn.failed", msisdn=sub.msisdn)
 
         try:
             await self._inventory.recycle_esim(sub.iccid)

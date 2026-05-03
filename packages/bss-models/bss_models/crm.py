@@ -268,3 +268,48 @@ class SlaPolicy(Base, TenantMixin, TimestampMixin):
     ticket_type: Mapped[str] = mapped_column(Text, nullable=False)
     priority: Mapped[str] = mapped_column(Text, nullable=False)
     target_resolution_minutes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class PortRequest(Base, TenantMixin, TimestampMixin):
+    """v0.17 MNP — operator-driven port-in / port-out request.
+
+    Lives in the CRM schema (operator-touched) but is its own aggregate
+    distinct from Case: a Case is a customer-incident container that
+    parents Tickets; a PortRequest is an operational state machine over
+    a single donor MSISDN with a fixed FSM
+    (``requested → validated → completed | rejected``).
+
+    Doctrine (CLAUDE.md v0.17+):
+      * Customer-self-serve writes are forbidden — operator only.
+      * On port-out approve, the carrier's MSISDN flips to terminal
+        ``ported_out`` (NOT ``available``) so reserve-next never
+        re-issues a number we've handed away.
+    """
+
+    __tablename__ = "port_request"
+    __table_args__ = (
+        Index(
+            "uq_port_request_donor_pending",
+            "donor_msisdn",
+            "tenant_id",
+            unique=True,
+            postgresql_where="state IN ('requested','validated')",
+        ),
+        Index(
+            "ix_port_request_state_direction",
+            "state",
+            "direction",
+        ),
+        {"schema": SCHEMA},
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    direction: Mapped[str] = mapped_column(Text, nullable=False)
+    donor_carrier: Mapped[str] = mapped_column(Text, nullable=False)
+    donor_msisdn: Mapped[str] = mapped_column(Text, nullable=False)
+    target_subscription_id: Mapped[str | None] = mapped_column(Text)
+    requested_port_date: Mapped[date] = mapped_column(Date, nullable=False)
+    state: Mapped[str] = mapped_column(
+        Text, nullable=False, default="requested", server_default="requested"
+    )
+    rejection_reason: Mapped[str | None] = mapped_column(Text)

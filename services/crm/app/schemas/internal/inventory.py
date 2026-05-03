@@ -35,6 +35,20 @@ class AssignMsisdnRequest(BaseModel):
     msisdn: str
 
 
+class AddRangeRequest(BaseModel):
+    prefix: str
+    count: int
+
+
+class AddRangeResponse(BaseModel):
+    prefix: str
+    count: int
+    inserted: int
+    skipped: int
+    first: str
+    last: str
+
+
 def to_msisdn_response(m) -> MsisdnResponse:
     return MsisdnResponse(
         msisdn=m.msisdn,

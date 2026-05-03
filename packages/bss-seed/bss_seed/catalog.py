@@ -57,19 +57,24 @@ async def seed(session: AsyncSession) -> None:
 
     # ── Bundle Allowances ────────────────────────────────────────────
     # quantity in base units: data=MB, voice=minutes, SMS=count. -1 = unlimited.
+    # data_roaming (v0.17) is additive: an exhausted roaming bucket
+    # blocks roaming usage but does NOT block the subscription itself.
     allowances = [
-        # PLAN_S: 5GB data, 100min voice, 100 SMS
+        # PLAN_S: 5GB data, 100min voice, 100 SMS, no roaming included
         ("BA_S_DATA", "PLAN_S", "data", 5120, "mb"),
         ("BA_S_VOICE", "PLAN_S", "voice", 100, "minutes"),
         ("BA_S_SMS", "PLAN_S", "sms", 100, "count"),
-        # PLAN_M: 30GB data, unlimited voice, unlimited SMS
+        ("BA_S_ROAM", "PLAN_S", "data_roaming", 0, "mb"),
+        # PLAN_M: 30GB data, unlimited voice/SMS, 500MB roaming
         ("BA_M_DATA", "PLAN_M", "data", 30720, "mb"),
         ("BA_M_VOICE", "PLAN_M", "voice", -1, "minutes"),
         ("BA_M_SMS", "PLAN_M", "sms", -1, "count"),
-        # PLAN_L: 150GB data, unlimited voice, unlimited SMS
+        ("BA_M_ROAM", "PLAN_M", "data_roaming", 500, "mb"),
+        # PLAN_L: 150GB data, unlimited voice/SMS, 2GB roaming
         ("BA_L_DATA", "PLAN_L", "data", 153600, "mb"),
         ("BA_L_VOICE", "PLAN_L", "voice", -1, "minutes"),
         ("BA_L_SMS", "PLAN_L", "sms", -1, "count"),
+        ("BA_L_ROAM", "PLAN_L", "data_roaming", 2048, "mb"),
     ]
     for aid, oid, atype, qty, unit in allowances:
         await session.execute(text("""
@@ -83,6 +88,7 @@ async def seed(session: AsyncSession) -> None:
         ("VAS_DATA_1GB", "Data Top-Up 1GB", 3.00, "SGD", "data", 1024, "mb", None),
         ("VAS_DATA_5GB", "Data Top-Up 5GB", 12.00, "SGD", "data", 5120, "mb", None),
         ("VAS_UNLIMITED_DAY", "Unlimited Data Day Pass", 5.00, "SGD", "data", -1, "mb", 24),
+        ("VAS_ROAMING_1GB", "Roaming Data 1GB", 8.00, "SGD", "data_roaming", 1024, "mb", None),
     ]
     for vid, name, price, cur, atype, qty, unit, expiry in vas:
         await session.execute(text("""

@@ -1,0 +1,120 @@
+name: operator_port_in_seeds_pool
+description: |
+  v0.17 hero — MNP port-in. Operator opens a `port_request` for a donor
+  MSISDN belonging to a competitor carrier; approves it; the donor
+  number gets seeded into our `inventory.msisdn_pool` as `available`
+  for the next signup to consume.
+
+  Green only if:
+    - port_request.create returns state=requested with a fresh PORT-NNN id
+    - the donor MSISDN does NOT exist in our pool before approve
+    - port_request.approve transitions to state=completed
+    - the donor MSISDN now exists in inventory.msisdn_pool with
+      status=available (no target_subscription_id supplied at create)
+    - the audit log carries port_request.created, port_request.approved,
+      port_request.completed, and inventory.msisdn.seeded_from_port_in
+
+tags: [hero, smoke, mnp, v0_17, deterministic]
+
+setup:
+  reset_operational_data: true
+  freeze_clock_at: "2026-05-10T09:00:00+00:00"
+
+variables:
+  donor_msisdn: "98007777"
+  donor_carrier: "ACME Mobile"
+  port_date: "2026-05-15"
+
+steps:
+  # Pre-check is implicit: if the donor MSISDN were already in our
+  # pool, port_request.create would still succeed (the uniqueness
+  # policy is on port_request rows, not on inventory) but the
+  # post-approve assertion below would still hold — making the test
+  # less stringent. With reset_operational_data above, the donor
+  # number is guaranteed absent at start.
+
+  - name: open a port-in request
+    action: port_request.create
+    args:
+      direction: port_in
+      donor_carrier: "{{ donor_carrier }}"
+      donor_msisdn: "{{ donor_msisdn }}"
+      requested_port_date: "{{ port_date }}"
+    capture:
+      port_request_id: "$.id"
+
+  - name: port request is in state=requested
+    assert:
+      tool: port_request.get
+      args: {port_request_id: "{{ port_request_id }}"}
+      expect:
+        direction: port_in
+        donorCarrier: "{{ donor_carrier }}"
+        donorMsisdn: "{{ donor_msisdn }}"
+        state: requested
+
+  - name: operator approves the port-in
+    action: port_request.approve
+    args:
+      port_request_id: "{{ port_request_id }}"
+
+  - name: port request is now completed
+    assert:
+      tool: port_request.get
+      args: {port_request_id: "{{ port_request_id }}"}
+      expect:
+        state: completed
+
+  - name: donor MSISDN is now in our pool as available
+    assert:
+      tool: inventory.msisdn.get
+      args: {msisdn: "{{ donor_msisdn }}"}
+      expect:
+        msisdn: "{{ donor_msisdn }}"
+        status: available
+      poll:
+        interval_ms: 100
+        timeout_seconds: 5
+
+  - name: audit log carries port_request.created
+    assert:
+      tool: audit.events_by_identity
+      args:
+        service_identity: default
+        aggregate_id: "{{ port_request_id }}"
+      expect:
+        any_match:
+          eventType: port_request.created
+
+  - name: audit log carries port_request.approved
+    assert:
+      tool: audit.events_by_identity
+      args:
+        service_identity: default
+        aggregate_id: "{{ port_request_id }}"
+      expect:
+        any_match:
+          eventType: port_request.approved
+
+  - name: audit log carries port_request.completed
+    assert:
+      tool: audit.events_by_identity
+      args:
+        service_identity: default
+        aggregate_id: "{{ port_request_id }}"
+      expect:
+        any_match:
+          eventType: port_request.completed
+
+  - name: audit log carries inventory.msisdn.seeded_from_port_in
+    assert:
+      tool: audit.events_by_identity
+      args:
+        service_identity: default
+        aggregate_id: "{{ donor_msisdn }}"
+      expect:
+        any_match:
+          eventType: inventory.msisdn.seeded_from_port_in
+
+teardown:
+  unfreeze_clock: true

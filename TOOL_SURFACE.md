@@ -78,10 +78,23 @@ Every CLI/LLM action that hits a write tool automatically creates an `interactio
 |---|---|---|
 | `inventory.msisdn.list_available` | read | Support filters: prefix, golden patterns |
 | `inventory.msisdn.get` | read | Status of a specific MSISDN |
+| `inventory.msisdn.add_range` | write | v0.17 — operator-only bulk pool extension. Idempotent on overlap. |
 | `inventory.esim.list_available` | read | Available eSIM profiles |
 | `inventory.esim.get_activation` | read | Returns activation code + QR payload for assigned profile |
 
-MSISDN and eSIM reservation are internal SOM operations — not exposed as direct LLM tools. The LLM only reads availability; reservation happens as a side effect of `order.create`.
+MSISDN and eSIM reservation are internal SOM operations — not exposed as direct LLM tools. The LLM only reads availability; reservation happens as a side effect of `order.create`. v0.17 adds `inventory.msisdn.add_range` to the operator-only surface so the pool can be replenished from the cockpit when the low-watermark event fires.
+
+## Port request tools (v0.17 MNP, operator-only)
+
+| Tool | Type | Description |
+|---|---|---|
+| `port_request.list` | read | List port-in / port-out requests (filterable by state + direction) |
+| `port_request.get` | read | Fetch one port request by id |
+| `port_request.create` | write | Open a new port-in or port-out (donor carrier + donor MSISDN + requested date) |
+| `port_request.approve` | write | Approve — port-in seeds donor MSISDN into pool; port-out flips MSISDN to terminal `ported_out` and terminates target subscription |
+| `port_request.reject` | write | Reject with required reason |
+
+These tools are wired into the `operator_cockpit` profile only. MNP is operator-driven by spec (donor-carrier coordination, fraud-screen, regulatory clearance) — exposing port-request writes to a customer-side profile is a doctrine bug caught by `validate_profiles()`.
 
 ## Catalog tools
 

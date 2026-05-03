@@ -101,7 +101,11 @@ class SubscriptionClient(BSSClient):
         return resp.json()
 
     async def terminate(
-        self, subscription_id: str, *, reason: str | None = None
+        self,
+        subscription_id: str,
+        *,
+        reason: str | None = None,
+        release_inventory: bool = True,
     ) -> dict[str, Any]:
         """POST /subscription-api/v1/subscription/{id}/terminate — destructive.
 
@@ -110,8 +114,20 @@ class SubscriptionClient(BSSClient):
         ``"customer_requested"`` when the body is empty, preserving
         backwards compatibility with v0.x callers that pass no body.
         v0.10 portal cancel route passes ``"customer_requested"``.
+
+        v0.17 — ``release_inventory`` defaults True. The MNP port-out
+        flow passes False so the already-flipped ``ported_out`` MSISDN
+        isn't re-released.
         """
-        body = {"reason": reason} if reason is not None else None
+        body: dict[str, Any] | None
+        if reason is None and release_inventory is True:
+            body = None
+        else:
+            body = {}
+            if reason is not None:
+                body["reason"] = reason
+            if release_inventory is False:
+                body["releaseInventory"] = False
         resp = await self._request(
             "POST",
             f"/subscription-api/v1/subscription/{subscription_id}/terminate",
