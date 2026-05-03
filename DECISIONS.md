@@ -2676,3 +2676,175 @@ interaction. Works in every browser including Safari ITP-strict.
   restarting the whole signup.
 - `bss_payment_stripe_publishable_key` setting on the portal is no
   longer needed; removed.
+
+## 2026-05-03 — v0.17.0 `crm.port_request` as its own aggregate (not Case overload)
+
+**Context:** v0.17 ships MNP (port-in / port-out). Two reasonable
+storage shapes: (a) reuse `crm.case` with a `category="mnp_port_in"`
+discriminator, or (b) introduce a dedicated `crm.port_request`
+aggregate with its own FSM and audit-event family.
+
+The Case aggregate is already operator-touched, supports state
+transitions, and parents 1..N Tickets — at first glance it looks
+like a fit. But port requests carry typed fields (donor carrier,
+donor MSISDN, requested port date, target subscription id) that
+don't belong in a generic `subject + description + category` shape;
+they'd end up in JSON blobs the policy layer can't reason about
+without re-parsing. And Case's FSM (`open → in_progress → resolved
+→ closed`) is customer-incident-shaped, not operational-state-machine-
+shaped — port requests have no `pending_customer` or `take` state.
+
+**Decision:** New `crm.port_request` aggregate with its own FSM
+(`requested → validated → completed | rejected`), its own typed
+columns, and its own audit-event family (`port_request.*`).
+
+- One row per request. Partial unique index on
+  `(donor_msisdn, tenant_id) WHERE state IN ('requested','validated')`
+  prevents two live ports of the same donor MSISDN from coexisting.
+- Approve dispatches to `_approve_port_in` (seed donor MSISDN into
+  `inventory.msisdn_pool`) or `_approve_port_out` (flip to terminal
+  `ported_out` + terminate target subscription with the new
+  `release_inventory=False` kwarg).
+- Operator-only: registered in `operator_cockpit` profile only
+  (CLAUDE.md v0.17+ anti-pattern). MNP requires donor-carrier
+  coordination, fraud screening, and regulatory clearance —
+  customer self-serve is wrong by spec, not just by current scope.
+
+**Alternatives rejected:**
+
+- **Reuse Case with category=mnp_port_in/out.** Rejected — typed
+  fields end up in JSON blobs; FSM is wrong shape; mixes
+  customer-incident and operational-state-machine semantics in
+  the audit log; blocks the (post-v0.17) path to a real TMF629/
+  TMF641 customer-port handoff that would want the structured data.
+- **Two separate tables (`port_in_request`, `port_out_request`).**
+  Rejected — the FSM and 90% of the columns are shared; the
+  `direction` column + a single dispatch in approve is cleaner
+  than two near-duplicate aggregates.
+
+**Consequences:**
+
+- New table, new repo, new domain FSM module, new policies module,
+  new service, new HTTP routes, new bss-clients methods, new
+  cockpit tools — all mirroring the Case shape so the next operator
+  who looks for a CRM aggregate finds the same pattern.
+- `validated` FSM state is a hook for an automated donor-carrier
+  check; v0.17 ships only the operator-driven `requested →
+  completed | rejected` path.
+- The `bss_models.crm.PortRequest` model lives in the CRM schema
+  (operator-touched) but the aggregate is distinct from Case at
+  every layer.
+
+## 2026-05-03 — v0.17.0 `data_roaming` as additive bucket (independence doctrine)
+
+**Context:** v0.17 ships roaming as a product. The catalog/balance
+model is already typed-row (one `BundleAllowance` per (offering,
+allowance_type), one `BundleBalance` per (subscription,
+allowance_type)). Adding an allowance_type is a clean fit; adding
+a flag would require walking every consumer of the balance model
+and threading the flag through.
+
+**Decision:** New `data_roaming` allowance type. **Additive,
+never primary.** Block-on-exhaust applies independently — if
+`data_roaming` is 0, roaming usage is rejected by the policy
+`subscription.usage_rated.roaming_balance_required` but the
+subscription stays `active` and home `data` keeps flowing.
+
+- `is_exhausted()` continues to consider only `primary_type='data'`
+  by default. Doctrine: callers must NOT pass `primary_type='data_roaming'`.
+- New policy gates `handle_usage_rated` for `data_roaming` decrements:
+  missing row OR `remaining ≤ 0` → emit `usage.rejected` with the
+  rule, return without touching subscription state.
+- `purchase_vas` materializes a missing `data_roaming` balance row
+  from the VAS spec (generic fix, not roaming-specific) so PLAN_S
+  customers can buy `VAS_ROAMING_1GB` even though their subscription
+  has no roaming row.
+
+**Alternatives rejected:**
+
+- **Cascade roaming exhaustion to subscription block.** Rejected —
+  customers stuck overseas with no home data because their roaming
+  bucket emptied is an obvious UX cliff. The whole point of
+  roaming-as-additive is that it's an *extra* bucket; running out
+  of extra is not a reason to block the basic.
+- **Rolling roaming bucket independent of period.** Rejected for
+  v0.17 — the `period_end` on the roaming top-up balance row
+  deliberately tracks the subscription period (top-up consumed
+  within the period, not granted indefinitely). Operationally
+  simpler; matches the "bundled prepaid" motto.
+- **Per-country tariffs.** Rejected for v0.17 — would require
+  `serving_plmn` on `UsageEvent` plus a tariff lookup. Single
+  global roaming bucket is the v0.17 simplification; per-country
+  is post-v0.x.
+
+**Consequences:**
+
+- Plans seed: PLAN_S=0 mb, PLAN_M=500 mb, PLAN_L=2048 mb. Zero on
+  PLAN_S explicitly so the snapshot doctrine still holds at
+  create-time (the BundleBalance row exists, just at total=0); the
+  portal line_card filter hides the bar when `total=0 AND
+  remaining=0`.
+- Cockpit cards (catalog show, /plans portal page) show roaming
+  inclusion alongside data/voice/SMS — comparison views always
+  render the row for alignment ("—" when absent), single-line
+  summaries suppress when absent (no "0 mb roaming" noise).
+
+## 2026-05-03 — v0.17.0 `roaming_indicator: bool` on UsageEvent (not a new event_type)
+
+**Context:** Mediation's `VALID_EVENT_TYPES` set is `{data, voice,
+voice_minutes, sms}` and every existing scenario YAML + rating
+fixture posts usage events shaped against it. v0.17 needs to mark
+some usage events as having occurred on a visited (roaming) network
+so rating routes the decrement to `data_roaming` instead of `data`.
+
+**Decision:** Per-event boolean attribute (`roaming_indicator: bool`
+on `mediation.usage_event`). The pure `rate_usage` function stays
+unaware of roaming; routing happens in the rating **consumer**,
+after `rate_usage` returns.
+
+```python
+# services/rating/app/events/consumer.py — after rate_usage returns:
+if bool(body.get("roamingIndicator", False)) and result.allowance_type == "data":
+    has_roaming = any(
+        a.get("allowanceType") == "data_roaming"
+        for a in (tariff.get("bundleAllowance") or [])
+    )
+    if not has_roaming:
+        # publish usage.rejected with reason="rating.no_roaming_allowance"
+        return
+    allowance_type = "data_roaming"
+```
+
+Server-default `false` on `mediation.usage_event.roaming_indicator`
+preserves backwards compat — every pre-v0.17 caller posts unchanged
+and rows land with the column populated automatically.
+
+**Alternatives rejected:**
+
+- **New `event_type='data_roaming'`.** Rejected — would force every
+  existing usage poster (every scenario YAML, every rating fixture,
+  every CDR ingest path post-v1.0) to learn about roaming. The
+  v0.17 hygiene release explicitly avoids breaking pre-v0.17
+  callers.
+- **`roaming_indicator` on the rating `UsageInput` dataclass
+  (pure function).** Rejected — `rate_usage` is intentionally pure
+  and the v0.6 doctrine guard keeps it that way. Routing on a
+  per-event attribute is a consumer concern, not a tariff-evaluation
+  concern. Doctrine guard added: `data_roaming` must NOT appear in
+  `services/rating/app/domain/rating.py`.
+- **`serving_plmn: str` carrying the visited network code.** Deferred
+  for post-v0.17. Per-country tariffs would justify the extra field;
+  v0.17's single-bucket roaming model doesn't need it.
+
+**Consequences:**
+
+- One column added to one table (`mediation.usage_event`). Single
+  Alembic migration.
+- One field added to one Pydantic schema (`UsageCreateRequest`)
+  with `default=False` so backwards compat is the schema's
+  responsibility, not every caller's.
+- Rating override sits at one site (`_handle_usage_recorded`), not
+  scattered across the consumer + the pure function + tests.
+- The orchestrator's `usage.simulate` cockpit tool gains a
+  `roaming_indicator: bool = False` kwarg so scenarios + the LLM
+  can drive roaming usage without leaving the existing tool surface.

@@ -182,6 +182,31 @@ Seed: 5 agents (Alice, Bob, Carol, Dave, System).
 
 Seed: 12 rows (3 ticket types × 4 priorities for core types).
 
+### `crm.port_request` (v0.17)
+
+Operator-driven MNP request. Distinct aggregate from `crm.case` by doctrine
+(CLAUDE.md v0.17+ anti-pattern) — port requests have a fixed FSM and a
+specific data shape that doesn't fit Case's customer-incident semantics.
+
+| column | type | notes |
+|---|---|---|
+| id | TEXT PK | `PORT-NNNN` (uuid4 hex slice) |
+| direction | TEXT | CHECK in (`port_in`, `port_out`) |
+| donor_carrier | TEXT NOT NULL | free-text carrier name |
+| donor_msisdn | TEXT NOT NULL | the number being ported |
+| target_subscription_id | TEXT | NULL OK for port-in pre-activation; required for port-out |
+| requested_port_date | DATE NOT NULL | |
+| state | TEXT | CHECK in (`requested`, `validated`, `completed`, `rejected`); default `requested` |
+| rejection_reason | TEXT | populated on reject |
+| created_at, updated_at | TIMESTAMPTZ | |
+| tenant_id | TEXT | default `'DEFAULT'` |
+
+Indexes:
+- `uq_port_request_donor_pending` — partial unique on `(donor_msisdn, tenant_id) WHERE state IN ('requested','validated')`. Mirrors the policy `port_request.create.donor_msisdn_unique_among_pending` so two live ports of the same donor MSISDN can never coexist; completed/rejected rows can stack without blocking a future re-port.
+- `ix_port_request_state_direction` — backs the `/ports` list page.
+
+FSM: `services/crm/app/domain/port_request_state.py`. v0.17 ships only the operator-driven `requested → completed | rejected` path; `validated` is a hook for a future automated donor-carrier check.
+
 ---
 
 ## Schema: `inventory`
@@ -190,12 +215,12 @@ Seed: 12 rows (3 ticket types × 4 priorities for core types).
 | column | type | notes |
 |---|---|---|
 | msisdn | TEXT PK | `90000000` |
-| status | TEXT | `available`, `reserved`, `assigned`, `quarantine` |
+| status | TEXT | `available`, `reserved`, `assigned`, `quarantine`, `ported_out` (v0.17, terminal) |
 | reserved_at | TIMESTAMPTZ | |
 | assigned_to_subscription_id | TEXT | nullable |
-| quarantine_until | TIMESTAMPTZ | 90 days after termination |
+| quarantine_until | TIMESTAMPTZ | 90 days after termination; v0.17 also `'9999-12-31'` for `ported_out` |
 
-Seed: 1000 numbers `90000000`-`90000999`, all `available`.
+Seed: 1000 numbers `90000000`-`90000999`, all `available`. Operator-driven replenishment (v0.17): `bss inventory msisdn add-range <prefix> <count>` bulk-inserts via `INSERT ... ON CONFLICT DO NOTHING`. Doctrine v0.17+: `ported_out` is terminal — port-out approve flips the row and reserve-next never selects it again (predicate is `status='available'`).
 
 ### `inventory.esim_profile`
 
@@ -288,9 +313,11 @@ emit per-subscription `notification.requested` events.
 |---|---|---|
 | id | TEXT PK | |
 | offering_id | TEXT FK | |
-| allowance_type | TEXT | `data`, `voice`, `sms` |
+| allowance_type | TEXT | `data`, `voice`, `sms`, `data_roaming` (v0.17) |
 | quantity | BIGINT | -1 = unlimited |
 | unit | TEXT | `mb`, `minutes`, `count` |
+
+v0.17 — `data_roaming` is an **additive** allowance type. PLAN_S has 0 mb, PLAN_M has 500 mb, PLAN_L has 2048 mb. Unlike `data`, exhaustion of `data_roaming` does NOT block the subscription — the policy `subscription.usage_rated.roaming_balance_required` rejects roaming usage independently while home `data` keeps flowing.
 
 ### `catalog.vas_offering`
 | column | type | notes |
@@ -487,13 +514,15 @@ Seed: 6 rules covering HLR_PROVISION, PCRF_POLICY_PUSH, OCS_BALANCE_INIT, ESIM_P
 |---|---|---|
 | id | TEXT PK | |
 | subscription_id | TEXT FK→subscription.id | |
-| allowance_type | TEXT | |
+| allowance_type | TEXT | `data`, `voice`, `sms`, `data_roaming` (v0.17) |
 | total | BIGINT | |
 | consumed | BIGINT | |
 | remaining | BIGINT GENERATED ALWAYS AS (total - consumed) STORED | |
 | unit | TEXT | |
 | period_start | TIMESTAMPTZ | |
 | period_end | TIMESTAMPTZ | |
+
+Typed-row model — one row per (subscription, allowance_type). New subscriptions on PLAN_M / PLAN_L get a `data_roaming` row materialized from `catalog.bundle_allowance`; PLAN_S gets a row with `total=0` (so the snapshot doctrine still holds at create-time) but the portal line_card filter hides the bar when `total=0 AND remaining=0`. v0.17 — `purchase_vas` materializes a missing balance row from the VAS spec rather than silently no-op'ing, so VAS_ROAMING_1GB top-up against a roaming-less subscription works without pre-seeding.
 
 ### `subscription.vas_purchase`
 | column | type | notes |
@@ -520,7 +549,7 @@ Standard state history shape.
 | id | TEXT PK | `UE-xxx` |
 | msisdn | TEXT | |
 | subscription_id | TEXT | enriched |
-| event_type | TEXT | `data`, `voice`, `sms` |
+| event_type | TEXT | `data`, `voice`, `voice_minutes`, `sms` |
 | event_time | TIMESTAMPTZ | |
 | quantity | BIGINT | |
 | unit | TEXT | |
@@ -528,6 +557,7 @@ Standard state history shape.
 | raw_cdr_ref | TEXT | |
 | processed | BOOL DEFAULT FALSE | |
 | processing_error | TEXT | |
+| roaming_indicator | BOOL NOT NULL DEFAULT FALSE | v0.17 — set by the channel/network adapter when the underlying CDR was produced on a visited network. Server-default false preserves backwards compat with pre-v0.17 callers. The rating consumer reads this from the `usage.recorded` payload and, when true with `event_type=data`, routes the decrement to the `data_roaming` BundleBalance instead of `data`. Doctrine v0.17+: roaming is a per-event *attribute*, not an event-type discriminator. |
 
 ---
 
