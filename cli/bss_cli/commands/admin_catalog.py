@@ -48,6 +48,15 @@ def add_offering(
     data_mb: Annotated[int | None, typer.Option("--data-mb")] = None,
     voice_min: Annotated[int | None, typer.Option("--voice-min")] = None,
     sms_count: Annotated[int | None, typer.Option("--sms-count")] = None,
+    data_roaming_mb: Annotated[
+        int | None,
+        typer.Option(
+            "--data-roaming-mb",
+            help="Roaming data allowance in MB. v0.17+ first-class allowance type. "
+                 "0 is permitted (plan with no included roaming; customer can still "
+                 "top up via VAS_ROAMING_*).",
+        ),
+    ] = None,
 ) -> None:
     """Add a new product offering with its recurring price + bundle allowances."""
     amount = str(Decimal(price))
@@ -63,6 +72,7 @@ def add_offering(
             data_mb=data_mb,
             voice_minutes=voice_min,
             sms_count=sms_count,
+            data_roaming_mb=data_roaming_mb,
         )
         rprint(f"[green]✓[/] Added offering [bold]{result['id']}[/] — {result['name']}")
 

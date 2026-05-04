@@ -102,6 +102,7 @@ class CatalogClient(BSSClient):
         data_mb: int | None = None,
         voice_minutes: int | None = None,
         sms_count: int | None = None,
+        data_roaming_mb: int | None = None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
             "offeringId": offering_id,
@@ -122,6 +123,8 @@ class CatalogClient(BSSClient):
             body["voiceMinutes"] = voice_minutes
         if sms_count is not None:
             body["smsCount"] = sms_count
+        if data_roaming_mb is not None:
+            body["dataRoamingMb"] = data_roaming_mb
         resp = await self._request("POST", "/admin/catalog/offering", json=body)
         return resp.json()
 

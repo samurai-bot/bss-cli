@@ -63,6 +63,7 @@ class CatalogAdminService:
         data_mb: int | None = None,
         voice_minutes: int | None = None,
         sms_count: int | None = None,
+        data_roaming_mb: int | None = None,
     ) -> ProductOffering:
         """Insert offering + recurring price + bundle allowances atomically."""
         _check_admin(self._actor)
@@ -125,6 +126,14 @@ class CatalogAdminService:
                 allowance_type="sms",
                 quantity=sms_count,
                 unit="count",
+            ))
+        if data_roaming_mb is not None:
+            self._session.add(BundleAllowance(
+                id=f"BA_{offering_id}_ROAM",
+                offering_id=offering_id,
+                allowance_type="data_roaming",
+                quantity=data_roaming_mb,
+                unit="mb",
             ))
 
         await self._session.commit()

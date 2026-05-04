@@ -37,54 +37,30 @@ bss catalog list                # Customer-facing read
 
 ## Roaming (v0.17+)
 
-> [!warning] **CLI gap (acknowledged).** `bss admin catalog add-offering` does **not** yet expose a `--data-roaming-mb` flag. Server-side support exists (the catalog service writes `data_roaming` rows from seed; subscription materializes balances on top-up; rating routes by `roaming_indicator`), but the admin HTTP endpoint and CLI haven't been extended. This will be fixed in a future minor release.
-
 Roaming is a first-class allowance type alongside `data`, `voice`, `sms`. Two facts about roaming worth knowing before adding an offering:
 
 1. **Roaming is additive.** A subscription's `is_exhausted` predicate considers only the *primary* allowance set (`data`, `voice`, `sms`). An exhausted `data_roaming` balance rejects roaming usage with rule `subscription.usage_rated.roaming_balance_required` but the subscription itself stays `active` (home data still works).
 2. **A plan with zero included roaming can still accept a roaming top-up.** When the customer purchases `VAS_ROAMING_1GB`, the subscription synthesizes a fresh `data_roaming` `BundleBalance` row.
 
-### Path A — Add the offering, then attach a `data_roaming` allowance via SQL
+### Adding a roaming-included offering (v0.20+)
 
 ```bash
-# 1. Create the offering with primary allowances.
 bss admin catalog add-offering \
     --id PLAN_XS_ROAM \
     --name "Mini + Roaming" \
     --price 8.00 \
     --currency SGD \
-    --data-mb 5120
-
-# 2. Attach the roaming allowance directly via SQL.
-psql "$BSS_DB_URL" <<'SQL'
-INSERT INTO catalog.bundle_allowance (id, offering_id, allowance_type, quantity, unit)
-VALUES ('BA_PLAN_XS_ROAM_ROAM', 'PLAN_XS_ROAM', 'data_roaming', 1024, 'mb');
-SQL
-
-# 3. Verify — the offering now lists 4 allowance lines: data, data_roaming, voice if any, sms if any.
-bss admin catalog show
+    --data-mb 5120 \
+    --data-roaming-mb 1024
 ```
 
-The id pattern `BA_<OFFERING_ID>_ROAM` mirrors the seed convention (`BA_M_ROAM`, `BA_L_ROAM`).
-
-### Path B — Extend the seed module and re-seed (recommended for permanent additions)
-
-Edit `packages/bss-seed/bss_seed/catalog.py`. The `allowances` list (~line 62) carries the seeded plans + their `data_roaming` rows in a stable 4-row pattern:
-
-```python
-allowances = [
-    # PLAN_XS_ROAM — 5GB data, 1GB roaming, no voice/SMS.
-    ("BA_XS_ROAM_DATA", "PLAN_XS_ROAM", "data", 5120, "mb"),
-    ("BA_XS_ROAM_ROAM", "PLAN_XS_ROAM", "data_roaming", 1024, "mb"),
-    # ... existing seeded plans below ...
-]
-```
-
-`make seed` is idempotent (`ON CONFLICT DO NOTHING`); rows already in DB are untouched, new rows land. Recommended for permanent additions because the seed is the documented source of truth and reads sensibly in code review.
+The command writes a fourth `bundle_allowance` row (`BA_<offering>_ROAM`, `allowance_type='data_roaming'`, `unit='mb'`) atomically alongside the data / voice / SMS rows. `--data-roaming-mb 0` is permitted and means "this plan has no included roaming, but the customer can still top up via `VAS_ROAMING_*`" — same as the seeded `PLAN_S`.
 
 ### Customers without included roaming can still top up
 
 A customer on `PLAN_S` (which carries `data_roaming = 0 mb`) can still purchase `VAS_ROAMING_1GB`. The subscription's `purchase_vas` materializes a `data_roaming` `BundleBalance` row on demand. After exhaustion, roaming usage is rejected with `subscription.usage_rated.roaming_balance_required` while home data keeps working — see [`docs/HANDBOOK.md` §7.6](../HANDBOOK.md#76-roaming-v017).
+
+> [!info] **(v0.17–v0.19 historical.)** Earlier releases lacked the `--data-roaming-mb` flag and required either a SQL `INSERT INTO catalog.bundle_allowance` or an edit + re-seed of `packages/bss-seed/bss_seed/catalog.py`. v0.20 closes that gap; the workaround is no longer needed. The seed module continues to use raw inserts for determinism — that's the seed's contract, not an operator path.
 
 ## Time-window an offering at creation
 
