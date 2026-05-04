@@ -743,7 +743,7 @@ v0.1 ships **without a billing service**. Phase 0 planned one as service #9 (TMF
 
 ### Default deployment: BYOI (bring your own infrastructure)
 
-**BSS-CLI has been developed in BYOI mode from Phase 1 onwards.** The default `docker-compose.yml` contains only the 9 BSS services and assumes PostgreSQL 16 and RabbitMQ 3.13 are reachable via env-configured connection strings. Most operators already have managed Postgres (RDS, Cloud SQL) and managed MQ (Amazon MQ, CloudAMQP), so bundling an unused Postgres container would be wasteful.
+**BSS-CLI has been developed in BYOI mode from Phase 1 onwards.** The default `docker-compose.yml` contains only the 9 BSS services and assumes PostgreSQL 16 (with the `pgvector` extension installed; v0.20+ requirement) and RabbitMQ 3.13 are reachable via env-configured connection strings. Most operators already have managed Postgres (RDS, Cloud SQL) and managed MQ (Amazon MQ, CloudAMQP), so bundling an unused Postgres container would be wasteful. Managed Postgres offerings (RDS, Cloud SQL, Aiven, Neon) ship pgvector as a switch-on-able extension; run `CREATE EXTENSION IF NOT EXISTS vector` once per BSS database before `make migrate`.
 
 ```yaml
 # docker-compose.yml
@@ -770,7 +770,7 @@ Each service reads `BSS_DB_URL` and `BSS_MQ_URL` from env. No assumptions about 
 # docker-compose.infra.yml
 services:
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16   # v0.20+ — was postgres:16-alpine; pgvector required
     environment:
       POSTGRES_USER: bss
       POSTGRES_PASSWORD: bss
@@ -945,20 +945,32 @@ BYOI mode fits on a t3.small; all-in-one fits on a t3.medium. The motto-#6 4 GB 
 ### v0.1: single instance, schema-per-domain
 
 ```
-PostgreSQL 16 (one instance)
+PostgreSQL 16 + pgvector (one instance)
 ├── schema crm
 ├── schema catalog
-├── schema inventory        ← MSISDN + eSIM pools
+├── schema inventory         ← MSISDN + eSIM pools
 ├── schema payment
-├── schema order_mgmt       ← COM
+├── schema order_mgmt        ← COM
 ├── schema service_inventory ← SOM output
-├── schema provisioning     ← simulator
+├── schema provisioning      ← simulator
 ├── schema subscription
 ├── schema mediation
 ├── schema billing
-├── schema audit            ← domain event log
-└── schema knowledge        ← post-v0.1 (pgvector for runbook RAG)
+├── schema audit             ← domain event log
+├── schema integrations      ← v0.14+ external_call + webhook_event + kyc corroboration
+├── schema cockpit           ← v0.13 operator cockpit Conversation store
+├── schema portal_auth       ← v0.8 self-serve portal sessions
+└── schema knowledge         ← v0.20+ doc corpus (FTS + optional pgvector embeddings)
 ```
+
+> **Postgres image — pgvector required from v0.20.** The bundled
+> `docker-compose.infra.yml` ships `pgvector/pgvector:pg16` (drop-in
+> same-major replacement for stock `postgres:16-alpine`; data dir
+> format identical). BYOI deployments must run
+> `CREATE EXTENSION IF NOT EXISTS vector` once on the target Postgres
+> before `make migrate`. Migration `0022` activates the extension and
+> creates the `knowledge.doc_chunk` table. See
+> [`docs/runbooks/knowledge-indexer.md`](docs/runbooks/knowledge-indexer.md).
 
 **Services NEVER read each other's schemas directly.** Cross-service queries go through `bss-clients` HTTP. The shared Postgres instance is a deployment convenience, not a coupling — you can verify this by running `grep -r "schema=" services/` and confirming each service only references its own schema.
 
