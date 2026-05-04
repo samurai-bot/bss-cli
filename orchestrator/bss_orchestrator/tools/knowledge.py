@@ -102,12 +102,24 @@ async def knowledge_search(
     """Search the BSS-CLI documentation corpus (handbook, doctrine, runbooks,
     architecture, decisions, tool surface, roadmap, contributing).
 
-    Use this when the operator asks a how-to / what-is / is-this-allowed
-    question that no other tool can answer. ALWAYS cite the returned
-    ``anchor`` and ``source_path`` in your reply, e.g.
-    ``[HANDBOOK §8.4](docs/HANDBOOK.md#84-rotate-api-tokens)``. Do NOT
-    paraphrase handbook content without citing — the citation guard
-    will replace your answer with a templated fallback.
+    CALL THIS FIRST for every operator question that isn't a direct
+    list/show/get of platform data. That includes:
+      - "how do I X" / "how does X work" / "what's the procedure for X"
+      - "what is X" / "what does X mean" / "what's the difference between X and Y"
+      - "where do I find X" / "what file/section covers X"
+      - "is X allowed" / "what's the rule on X" / "what's the doctrine on X"
+      - "what env var / setting / flag controls X"
+      - "what command do I run to X"
+
+    Your training data is months stale and frequently wrong about
+    post-v0.x doctrine. The corpus IS the authoritative source. If
+    you are about to write prose explaining something rather than
+    rendering tool output, you should have called this tool first.
+
+    Cite the returned ``anchor`` + ``source_path`` in your reply, e.g.
+    ``[HANDBOOK §8.4](docs/HANDBOOK.md#84-rotate-api-tokens)``. The
+    citation guard at the REPL + browser surface replaces un-cited
+    first-person handbook claims with a templated fallback.
 
     Args:
         query: Natural-language search query, e.g. "rotate cockpit token",

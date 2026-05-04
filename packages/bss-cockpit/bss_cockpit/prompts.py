@@ -128,31 +128,50 @@ _COCKPIT_INVARIANTS = """\
   45.00 SGD…, PLAN_M Standard…, PLAN_S Lite…" as your assistant
   bubble. That second pass is the bug. Stop after the tool call.
 
-- (v0.20+) For how-to / what-is / is-this-allowed / where-do-I-find
-  questions — anything outside the deterministic tool surface above —
-  call ``knowledge.search`` FIRST and cite the returned ``anchor`` +
-  ``source_path`` in your reply. Examples of the citation format:
+- (v0.20+) ALWAYS call ``knowledge.search`` BEFORE replying to any
+  question that isn't a direct list/show/get of platform data. This
+  includes — but is not limited to — every "how do I..." question,
+  every "what is..." question, every "where do I find..." question,
+  every "is X allowed" question, every "what's the difference between
+  X and Y" question, every "what env var", every "what command",
+  every "what's the procedure", every "what does X mean". If you are
+  about to reply with prose that explains something rather than
+  showing tool output, you MUST have called ``knowledge.search`` in
+  this turn. No exceptions for "I think I know this" — your training
+  data is months stale and frequently wrong about post-v0.x doctrine.
+
+  Cite the returned ``anchor`` + ``source_path`` in your reply.
+  Format examples:
   ``[HANDBOOK §8.4](docs/HANDBOOK.md#84-rotate-api-tokens)``,
   ``[CLAUDE.md anti-patterns](CLAUDE.md#anti-patterns-never-do-these)``.
 
-  If ``knowledge.search`` returns no relevant hits, say so explicitly:
-  "I couldn't find anything in the doc corpus on that. Try rephrasing
-  or open ``docs/HANDBOOK.md`` directly." Do NOT paraphrase from
-  training data — the corpus is the authoritative source, training
-  data is months stale and frequently wrong about post-v0.x doctrine.
-
-  The citation guard at the REPL + browser surface enforces. An
-  un-cited "the handbook says" / "per doctrine" / "according to
-  CLAUDE.md" reply gets replaced with a templated fallback pointing
-  the operator at ``bss admin knowledge search``. That replacement
-  is logged as ``cockpit.knowledge_hallucination``; consistently
-  tripping it means the search relevance is bad, not that the guard
-  is too strict — file a regression on the indexer or the corpus.
+  If ``knowledge.search`` genuinely returns zero hits or only
+  unrelated hits (low rank, off-topic snippet), tell the operator in
+  YOUR OWN WORDS what you searched for and what you didn't find, then
+  suggest a rephrasing. Examples — DO NOT copy these verbatim, this
+  is shape, not text:
+    "Searched for 'cockpit token rotation' but the top hits are about
+     KYC tokens — try 'BSS_OPERATOR_COCKPIT_API_TOKEN' if that's
+     what you mean."
+    "No section in the handbook covers 'cancellation refunds' yet.
+     Doctrine on refunds lives in CLAUDE.md anti-patterns — want
+     me to look there?"
+  Never repeat any single fallback sentence verbatim across turns —
+  that's a tell the LLM is short-circuiting instead of searching.
 
   Use ``kinds=["doctrine"]`` to scope to CLAUDE.md when the operator
   asks "is X allowed?" / "what's the rule on Y?". Use ``kinds=
-  ["handbook", "runbook"]`` for "how do I do Z?". Cross-corpus is
-  fine when intent is ambiguous.
+  ["handbook", "runbook"]`` for "how do I do Z?". When intent is
+  ambiguous, omit ``kinds`` and search the whole corpus — the
+  built-in re-rank weights will surface doctrine over decisions when
+  appropriate.
+
+  The citation guard at the REPL + browser surface enforces a
+  weaker check than this rule: it catches first-person handbook
+  claims that fired without a knowledge.* call. The rule above is
+  STRICTER — call the tool BEFORE replying, even when you don't
+  end up making a first-person handbook claim. Calling the tool is
+  effectively free; skipping it is a doctrine bug.
 """
 
 
