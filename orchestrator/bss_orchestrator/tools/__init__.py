@@ -18,6 +18,7 @@ from . import (  # noqa: F401  (imports for side-effect: @register population)
     catalog,
     customer,
     inventory,
+    knowledge,
     mine_wrappers,
     ops,
     order,

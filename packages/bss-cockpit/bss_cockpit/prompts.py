@@ -127,6 +127,32 @@ _COCKPIT_INVARIANTS = """\
   three-column box → you THEN write "Product Catalog: PLAN_L Max
   45.00 SGD…, PLAN_M Standard…, PLAN_S Lite…" as your assistant
   bubble. That second pass is the bug. Stop after the tool call.
+
+- (v0.20+) For how-to / what-is / is-this-allowed / where-do-I-find
+  questions — anything outside the deterministic tool surface above —
+  call ``knowledge.search`` FIRST and cite the returned ``anchor`` +
+  ``source_path`` in your reply. Examples of the citation format:
+  ``[HANDBOOK §8.4](docs/HANDBOOK.md#84-rotate-api-tokens)``,
+  ``[CLAUDE.md anti-patterns](CLAUDE.md#anti-patterns-never-do-these)``.
+
+  If ``knowledge.search`` returns no relevant hits, say so explicitly:
+  "I couldn't find anything in the doc corpus on that. Try rephrasing
+  or open ``docs/HANDBOOK.md`` directly." Do NOT paraphrase from
+  training data — the corpus is the authoritative source, training
+  data is months stale and frequently wrong about post-v0.x doctrine.
+
+  The citation guard at the REPL + browser surface enforces. An
+  un-cited "the handbook says" / "per doctrine" / "according to
+  CLAUDE.md" reply gets replaced with a templated fallback pointing
+  the operator at ``bss admin knowledge search``. That replacement
+  is logged as ``cockpit.knowledge_hallucination``; consistently
+  tripping it means the search relevance is bad, not that the guard
+  is too strict — file a regression on the indexer or the corpus.
+
+  Use ``kinds=["doctrine"]`` to scope to CLAUDE.md when the operator
+  asks "is X allowed?" / "what's the rule on Y?". Use ``kinds=
+  ["handbook", "runbook"]`` for "how do I do Z?". Cross-corpus is
+  fine when intent is ambiguous.
 """
 
 

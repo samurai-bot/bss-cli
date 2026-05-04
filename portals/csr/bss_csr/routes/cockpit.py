@@ -145,6 +145,31 @@ _RE_RECAP_HEADERED = _re.compile(
     _re.IGNORECASE,
 )
 
+# v0.20+ — citation guard. Mirror of REPL's _RE_KNOWLEDGE_CLAIM. If
+# the assistant claims handbook/runbook/doctrine and no knowledge.*
+# tool fired this turn, replace with the safe fallback. Browser
+# surface fallback is markdown, not Rich, but the message is identical.
+_RE_KNOWLEDGE_CLAIM = _re.compile(
+    r"\b(?:"
+    r"(?:per|according\s+to|as\s+per)\s+(?:the\s+)?"
+    r"(?:handbook|runbook|doctrine|"
+    r"CLAUDE\.md|ARCHITECTURE\.md|DECISIONS\.md|TOOL_SURFACE\.md|HANDBOOK\.md)"
+    r"|(?:the|in\s+the)\s+(?:handbook|runbook|doctrine)\s+"
+    r"(?:says|states|specifies|mentions|requires|forbids|allows)"
+    r"|the\s+docs?\s+(?:say|state|specify|mention|require|forbid)"
+    r")\b",
+    _re.IGNORECASE,
+)
+_KNOWLEDGE_HALLUCINATION_FALLBACK = (
+    "I don't have a citation for that. Run `bss admin knowledge search "
+    '"<your query>"` or open `docs/HANDBOOK.md` for the authoritative '
+    "answer."
+)
+
+
+def _claims_handbook(text: str) -> bool:
+    return bool(_RE_KNOWLEDGE_CLAIM.search(text or ""))
+
 
 def _looks_like_tool_recap(text: str) -> bool:
     """True when the assistant bubble is mimicking a tool result.
@@ -825,6 +850,25 @@ async def cockpit_events(
                     # card already showed; the operator doesn't need
                     # the LLM's prose copy.
                     text = _suppress_tool_recap(text, captured_tool_calls)
+                    # v0.20+ citation guard. Un-cited handbook claims →
+                    # safe fallback. See REPL _RE_KNOWLEDGE_CLAIM mirror.
+                    called_tool_names = {
+                        tc["name"] for tc in captured_tool_calls
+                    }
+                    knowledge_called = any(
+                        n.startswith("knowledge.") for n in called_tool_names
+                    )
+                    if (
+                        text
+                        and _claims_handbook(text)
+                        and not knowledge_called
+                    ):
+                        log.warning(
+                            "cockpit.knowledge_hallucination",
+                            session_id=session_id,
+                            called_tools=sorted(called_tool_names),
+                        )
+                        text = _KNOWLEDGE_HALLUCINATION_FALLBACK
                     asst_id = await conv.append_assistant_turn(
                         text, tool_calls_json=captured_tool_calls or None
                     )

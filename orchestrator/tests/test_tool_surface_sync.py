@@ -23,11 +23,14 @@ from bss_orchestrator.tools import TOOL_REGISTRY
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _TOOL_SURFACE = _REPO_ROOT / "TOOL_SURFACE.md"
 
-# Namespaces documented but not v0.1 LLM-exposed.
+# Namespaces documented but not in the v0.1 LLM-exposed set we sync-check.
 # - admin.*: CLI-only, not exposed to the LLM
-# - knowledge.*: post-v0.1 (Phase 11 pgvector RAG)
 # - billing.*: deferred to v0.2 (see DECISIONS.md 2026-04-13)
-_EXCLUDED_NAMESPACES = ("admin.", "knowledge.", "billing.")
+#
+# v0.20 update: knowledge.* WAS excluded as "post-v0.1 / Phase 11 not
+# implemented" but shipped activated in v0.20. Removed from the
+# exclusion list so sync drift is caught both ways.
+_EXCLUDED_NAMESPACES = ("admin.", "billing.")
 
 
 def _markdown_tools() -> set[str]:
@@ -41,7 +44,7 @@ def _markdown_tools() -> set[str]:
 
 def test_registry_matches_tool_surface_md() -> None:
     doc_tools = _markdown_tools()
-    reg_tools = set(TOOL_REGISTRY.keys())
+    reg_tools = {t for t in TOOL_REGISTRY.keys() if not t.startswith(_EXCLUDED_NAMESPACES)}
 
     missing_in_registry = doc_tools - reg_tools
     extra_in_registry = reg_tools - doc_tools

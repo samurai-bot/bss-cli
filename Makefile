@@ -1,20 +1,23 @@
-.PHONY: help up up-all up-minimal up-core down build test fmt lint migrate seed reset-db check-clock doctrine-check python-check scenarios scenarios-hero
+.PHONY: help up up-all up-minimal up-core down build test fmt lint migrate seed knowledge-reindex reset-db check-clock doctrine-check python-check scenarios scenarios-hero
 
 help:
-	@echo "  up               — 10 BSS services (BYOI Postgres/RabbitMQ)"
-	@echo "  up-all           — services + Postgres + RabbitMQ + Metabase"
-	@echo "  up-minimal       — catalog + crm + payment only"
-	@echo "  up-core          — minimal + com + som + subscription + provisioning-sim"
-	@echo "  down             — stop everything"
-	@echo "  build            — build all service images"
-	@echo "  test             — run pytest"
-	@echo "  fmt              — format with ruff"
-	@echo "  lint             — lint with ruff + mypy"
-	@echo "  scenarios        — run every scenario in ./scenarios (including LLM ask: steps)"
-	@echo "  scenarios-hero   — run only the three hero ship-gate scenarios"
-	@echo "  check-clock      — grep guard: all datetime.now sites route through bss-clock"
-	@echo "  doctrine-check   — run all v0.6+ grep guards (clock, channel, portals, no-bypass)"
-	@echo "  python-check     — warn if active Python is outside the supported 3.12 range"
+	@echo "  up                  — 10 BSS services (BYOI Postgres/RabbitMQ)"
+	@echo "  up-all              — services + Postgres + RabbitMQ + Metabase"
+	@echo "  up-minimal          — catalog + crm + payment only"
+	@echo "  up-core             — minimal + com + som + subscription + provisioning-sim"
+	@echo "  down                — stop everything"
+	@echo "  build               — build all service images"
+	@echo "  migrate             — alembic upgrade head"
+	@echo "  seed                — seed reference data (3 plans + 4 VAS + 1000 MSISDNs + 1000 eSIMs)"
+	@echo "  knowledge-reindex   — v0.20+ reindex doc corpus into knowledge.doc_chunk"
+	@echo "  test                — run pytest"
+	@echo "  fmt                 — format with ruff"
+	@echo "  lint                — lint with ruff + mypy"
+	@echo "  scenarios           — run every scenario in ./scenarios (including LLM ask: steps)"
+	@echo "  scenarios-hero      — run only the three hero ship-gate scenarios"
+	@echo "  check-clock         — grep guard: all datetime.now sites route through bss-clock"
+	@echo "  doctrine-check      — run all v0.6+ grep guards (clock, channel, portals, no-bypass)"
+	@echo "  python-check        — warn if active Python is outside the supported 3.12 range"
 
 up: dev-mailbox-dir
 	docker compose up -d
@@ -289,6 +292,40 @@ doctrine-check: check-clock
 		exit 1; \
 	fi; \
 	echo "✓ all service versions sourced from BSS_RELEASE"
+	@# v0.20+ — knowledge tools live in operator_cockpit profile only.
+	@# Customer chat must NOT receive RAG over operator runbooks (would
+	@# leak destructive-flow hints + perimeter posture). The profile
+	@# entry block in tools/_profiles.py is the source of truth; any
+	@# `knowledge.search` / `knowledge.get` literal outside that file +
+	@# tests + the tool module itself is drift.
+	@hits=$$(grep -rnE '"knowledge\.(search|get)"' \
+		--include='*.py' \
+		orchestrator/ portals/ cli/ packages/ 2>/dev/null \
+		| grep -v 'orchestrator/bss_orchestrator/tools/_profiles\.py' \
+		| grep -v 'orchestrator/bss_orchestrator/tools/knowledge\.py' \
+		| grep -v '/tests/' \
+		| grep -v 'cli/bss_cli/commands/admin_knowledge\.py' \
+		|| true); \
+	if [ -n "$$hits" ]; then \
+		echo "✗ knowledge tool literal referenced outside profile / tool / tests:"; \
+		echo "$$hits"; \
+		exit 1; \
+	fi; \
+	echo "✓ knowledge tools stay in operator_cockpit profile only"
+	@# v0.20+ — phases/V0_*.md must NOT appear as a quoted entry in the
+	@# indexer allowlist. Phase docs are historical build plans and
+	@# mislead the LLM. The allowlist (INDEXED_PATHS) is in
+	@# packages/bss-knowledge/bss_knowledge/paths.py — quoted string
+	@# entries only; doc-references in docstrings/comments are fine.
+	@hits=$$(grep -nE '"phases/V0_' \
+		packages/bss-knowledge/bss_knowledge/paths.py 2>/dev/null \
+		|| true); \
+	if [ -n "$$hits" ]; then \
+		echo "✗ phases/V0_*.md leaked into knowledge indexer allowlist:"; \
+		echo "$$hits"; \
+		exit 1; \
+	fi; \
+	echo "✓ phases/V0_*.md stays out of the knowledge index"
 
 fmt:
 	uv run ruff format .
@@ -307,6 +344,12 @@ migrate:
 
 seed:
 	@$(ENV_SOURCE); uv run --package bss-seed python -m bss_seed.main
+
+# v0.20+ — operator-driven doc-corpus reindex into knowledge.doc_chunk.
+# Runs on-demand (no file-watcher in containers). Idempotent —
+# unchanged sections skip via mtime + content_hash dedup.
+knowledge-reindex:
+	@$(ENV_SOURCE); uv run --package bss-cli bss admin knowledge reindex
 
 # Hero / general scenarios drive auth flows by reading OTPs from the
 # dev-mailbox file that LoggingEmailAdapter writes. They also run
