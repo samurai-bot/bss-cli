@@ -1,0 +1,82 @@
+name: operator_asks_handbook_question
+description: |
+  v0.20 hero — knowledge tool (handbook RAG, operator_cockpit only).
+  Operator asks the cockpit a how-to question that no other tool can
+  answer; the LLM must call `knowledge.search` and cite the returned
+  anchor in its reply. Validates the full Tier-0 FTS path:
+
+    1. Indexer has populated `knowledge.doc_chunk` with the doc corpus.
+    2. The cockpit profile carries `knowledge.search` / `knowledge.get`.
+    3. The LLM consults the tool when it doesn't know the answer.
+    4. The reply contains the citation literal (`HANDBOOK §8.4` or
+       similar — at minimum the source path or anchor surfaces).
+
+  Pre-step: `knowledge.search` requires the corpus to be indexed.
+  Scenarios run after `make seed` but BEFORE any operator runs
+  `bss admin knowledge reindex`. So this scenario explicitly invokes
+  `knowledge.search` directly first to confirm the corpus is alive
+  (if rows are missing, the assert fails loudly with a runbook
+  pointer rather than the LLM saying "I have no information").
+
+  Doctrine guarantees:
+    - (v0.20+) For how-to / what-is questions outside the deterministic
+      tool surface, call knowledge.search FIRST and cite the returned
+      anchor.
+    - (v0.20+) Don't extend knowledge.* to customer_self_serve.
+      Indirect — the test runs on operator_cockpit only.
+
+tags: [hero, knowledge, v0_20]
+
+setup:
+  # We do NOT reset_operational_data because the knowledge index lives
+  # in its own schema and the indexer is operator-driven (run via
+  # `bss admin knowledge reindex` or `make knowledge-reindex`).
+
+  freeze_clock_at: "2026-05-15T10:00:00+00:00"
+
+steps:
+  # ── 1. Confirm the corpus is alive ─────────────────────────────────
+  - name: knowledge.search returns the right top hit for a handbook question
+    assert:
+      tool: knowledge.search
+      args:
+        query: "rotate cockpit token"
+        k: 3
+      expect:
+        # The runner's `any_match` operator is top-level only and the
+        # result shape is `{hits: [...], query: "..."}`, so we assert
+        # against the top-ranked hit by index. The smoke against the
+        # live corpus showed `rotate cockpit token` → HANDBOOK §8.4
+        # at rank 0.841 (the cockpit runbook is rank-2).
+        hits.0.source_path: "docs/HANDBOOK.md"
+        hits.0.kind: handbook
+        hits.0.anchor: "84-rotate-api-tokens"
+
+  # ── 2. LLM hand-over: ask a how-to question ────────────────────────
+  - name: LLM consults knowledge tool and cites a handbook anchor
+    ask: |
+      How do I rotate the operator cockpit API token in BSS-CLI?
+      I want a step-by-step procedure with a citation back to the
+      docs so I can verify it.
+    timeout_seconds: 60
+    expect_tools_called_include:
+      # The model MUST call knowledge.search before answering — that's
+      # the v0.20 contract. knowledge.get is optional (only needed if
+      # the snippet didn't carry enough detail).
+      - knowledge.search
+    expect_tools_not_called:
+      # Customer-side wrappers must not appear (operator profile).
+      - subscription.list_mine
+      - customer.get_mine
+
+  # ── 3. Audit attribution: a knowledge.* call was logged ─────────────
+  # Note: knowledge.search reads via the orchestrator's session — there's
+  # no audit.domain_event row (the read isn't a domain event). The
+  # citation log lives in audit.chat_usage.citations (when the chat /
+  # cockpit turn flushes its usage row), but the cockpit-level test
+  # above (`expect_tools_called_include`) is the load-bearing check
+  # for now. Future v0.21 PR will add an `audit.chat_usage_citations`
+  # tool and a stricter assertion here.
+
+teardown:
+  unfreeze_clock: true

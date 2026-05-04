@@ -145,6 +145,7 @@ async def catalog_add_offering(
     data_mb: int | None = None,
     voice_minutes: int | None = None,
     sms_count: int | None = None,
+    data_roaming_mb: int | None = None,
 ) -> dict[str, Any]:
     """Admin: add a new product offering with price + allowances. Hidden from LLM.
 
@@ -158,6 +159,9 @@ async def catalog_add_offering(
         data_mb: Optional data allowance.
         voice_minutes: Optional voice allowance.
         sms_count: Optional SMS allowance.
+        data_roaming_mb: Optional roaming-data allowance (v0.20+). 0 is
+            permitted (plan with no included roaming, customer can still
+            top up via VAS_ROAMING_*).
 
     Returns:
         TMF620 offering dict.
@@ -176,6 +180,7 @@ async def catalog_add_offering(
         data_mb=data_mb,
         voice_minutes=voice_minutes,
         sms_count=sms_count,
+        data_roaming_mb=data_roaming_mb,
     )
 
 

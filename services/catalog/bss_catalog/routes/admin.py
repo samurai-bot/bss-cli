@@ -43,6 +43,7 @@ class AddOfferingRequest(_CamelBase):
     data_mb: int | None = None
     voice_minutes: int | None = None
     sms_count: int | None = None
+    data_roaming_mb: int | None = None
 
 
 class WindowOfferingRequest(_CamelBase):
@@ -79,6 +80,7 @@ async def add_offering(
         data_mb=body.data_mb,
         voice_minutes=body.voice_minutes,
         sms_count=body.sms_count,
+        data_roaming_mb=body.data_roaming_mb,
     )
     return to_tmf620_offering(offering)
 

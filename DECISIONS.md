@@ -2947,3 +2947,129 @@ sweep sees the marked dedup column the instant the lock is gone.
 - Two new doctrine guards: `_renewal_tick_loop` / `_sweep_due` /
   `_sweep_skipped` references are confined to the worker module +
   lifespan + admin endpoint via `make doctrine-check` grep.
+
+
+## 2026-05-04 — v0.20.0 Knowledge tool (handbook RAG) activates the long-reserved `knowledge` schema
+
+**Context.** The cockpit's failure mode at v0.19 was that an operator
+asks "how do I rotate the cockpit token?" or "what's the prebaked-KYC
+env flag?" and the LLM either confidently paraphrased an outdated
+answer from training data or admitted it didn't know. The substrate to
+fix this has been listed as frozen tech-stack in CLAUDE.md since v0.1
+(`pgvector` extension on the same Postgres instance, schema
+`knowledge`) and reserved as planned in TOOL_SURFACE.md ("Knowledge
+tools (planned, Phase 11)"). v0.19 docs work consolidated the corpus
+into `docs/HANDBOOK.md` + per-runbook files; v0.20 wires the cockpit
+to read them.
+
+**Decision.** Activate the reserved `knowledge` schema with a Tier-0
+FTS shape (Postgres `tsvector` + GIN index, no embeddings) and ship
+the Tier-1 hybrid (pgvector cosine + FTS re-rank) path in the same
+release behind a backend-toggle env (`BSS_KNOWLEDGE_BACKEND=fts`
+default, `=hybrid` opt-in).
+
+Two tools register in `TOOL_REGISTRY`:
+- `knowledge.search(query, k=3, kinds?)` — returns ranked hits.
+- `knowledge.get(anchor, source_path)` — full chunk content.
+
+Both live in the `operator_cockpit` profile only. Customer chat is
+explicitly excluded by doctrine — handbook + runbooks describe
+destructive operator flows + perimeter posture; leaking them would
+teach a prompt-injected LLM which flag to ask about.
+
+**Citation guard.** A new `_RE_KNOWLEDGE_CLAIM` regex at the REPL +
+browser cockpit catches first-person handbook/doctrine claims and
+replaces them with a templated fallback when no `knowledge.*` tool
+fired this turn. Mirrors the v0.12 escalation hallucination guard.
+Doctrine: prompt is the contract, code is enforcement.
+
+**Indexer is operator-initiated.** No file-watcher in the cockpit
+container; doc corpus changes with PRs and reindex runs on demand
+via `bss admin knowledge reindex` or `make knowledge-reindex`. Three
+idempotency layers (mtime cache → content_hash dedup → deterministic
+chunk id from `sha256(source_path|anchor)`) keep re-runs cheap.
+
+**Phase docs intentionally NOT indexed.** `phases/V0_*.md` are
+historical build plans and mislead the LLM ("the v0.13 phase doc
+describes a draft env var that was renamed"). Doctrine guard 16 in
+`make doctrine-check` enforces.
+
+**Postgres prereq.** Migration 0022 runs `CREATE EXTENSION IF NOT
+EXISTS vector`. Stock `postgres:16` and `postgres:16-alpine` images
+don't include pgvector; activation requires the bundled-mode image
+swap to `pgvector/pgvector:pg16` (drop-in same-major; data dir
+preserved) or a one-time `CREATE EXTENSION` on a BYOI host. The
+swap is reversible in 30 seconds. Documented in
+`docs/runbooks/knowledge-indexer.md`.
+
+**Why both tiers in one release** (vs. ship FTS first, embeddings
+later): the `vector(1024)` column lands in migration 0022 alongside
+the FTS infrastructure, so flipping `BSS_KNOWLEDGE_BACKEND=hybrid`
+later doesn't need a second migration. Operators who never need
+embeddings pay zero cost (the HNSW index is partial — only on rows
+where `embedding IS NOT NULL`, which is 0 in FTS-only deployments).
+
+**Two new doctrine guards** in `make doctrine-check` (16 total):
+- Guard 15: `knowledge.{search,get}` literals confined to `_profiles.py`,
+  `tools/knowledge.py`, `cli/.../admin_knowledge.py`, and tests.
+- Guard 16: `phases/V0_*.md` never appears as a quoted entry in the
+  indexer allowlist.
+
+
+## 2026-05-04 — v0.20.0 Catalog `--data-roaming-mb` flag closes the v0.17 admin gap
+
+**Context.** v0.17 added `data_roaming` as a first-class allowance
+type (rating routes by `roaming_indicator`; subscription's
+`is_exhausted` ignores roaming; VAS materializes a balance row on
+top-up). Seed data uses it correctly. But `bss admin catalog
+add-offering` only exposed `--data-mb` / `--voice-min` /
+`--sms-count`, so adding a new roaming-included plan required either
+a `psql INSERT INTO catalog.bundle_allowance` or an edit + re-seed
+of `packages/bss-seed/bss_seed/catalog.py`. v0.19's runbook refresh
+documented the gap and the SQL workaround as v0.17–v0.19 historical.
+
+**Decision.** Add `--data-roaming-mb` to `bss admin catalog
+add-offering`. Surface change is purely additive — the flag is
+optional, existing invocations are unchanged. `--data-roaming-mb 0`
+is permitted and mirrors seeded `PLAN_S` (no included roaming, but
+the customer can still top up via `VAS_ROAMING_*` because subscription
+materializes the balance row on first VAS purchase).
+
+**Why this lands with v0.20 knowledge work** (vs. its own minor
+release): the v0.20 refresh of `docs/runbooks/add-product-offering.md`
+needs to reference the flag, and the docs are indexed by the v0.20
+knowledge tool. Shipping flag + docs together avoids a window where
+the cockpit cites stale instructions.
+
+**The seed module is unchanged.** `packages/bss-seed/bss_seed/catalog.py`
+keeps emitting raw `INSERT` statements because that's the seed's
+contract (deterministic, idempotent on `(id)`). The flag is the
+operator path; the seed is the deterministic-baseline path.
+
+
+## 2026-05-04 — v0.20.0 Bundled Postgres image swap to `pgvector/pgvector:pg16`
+
+**Context.** The bundled `docker-compose.infra.yml` ships
+`postgres:16-alpine` (or whatever the operator's `image:` line
+specifies). v0.20 migration 0022 runs `CREATE EXTENSION IF NOT EXISTS
+vector` and fails on stock Postgres images.
+
+**Decision.** Recommend swapping the bundled image to
+`pgvector/pgvector:pg16` — drop-in same-major replacement with
+identical data-directory format, preserved volume, and reversible
+rollback (point `image:` back to stock; pgvector becomes unavailable,
+that's fine because Tier-0 FTS doesn't need it).
+
+The swap is documented end-to-end in `docs/runbooks/knowledge-indexer.md`
+under "Prerequisites — pgvector on Postgres" with a backup step,
+verification steps, and the post-swap container-bounce that the
+BSS service connection pools need. Same procedure works for BYOI
+operators who run their own Postgres (one-time `CREATE EXTENSION`
+instead of an image swap).
+
+**Why we don't ship the swap automatically** (e.g. via a build script
+or post-migrate hook): operators on BYOI Postgres or shared-host
+Postgres need to make the call themselves — installing an extension
+on a database used by other tenants is the operator's call, not the
+deployer's. The migration's failure is loud and the runbook is the
+first hit on the error.

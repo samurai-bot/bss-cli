@@ -234,6 +234,44 @@ def _render_banner(
 
 import re as _re
 
+# v0.20+ — citation guard. The cockpit's contract is "knowledge.search →
+# cite anchor, OR say I don't have a citation for that." If the
+# assistant claims handbook/runbook/doctrine in its reply but no
+# knowledge.* tool call fired this turn, replace with the fallback.
+# Mirrors the v0.12 _RE_ESCALATION_CLAIM pattern on the customer chat.
+#
+# The regex catches first-person phrasings of "the docs say X". We
+# DON'T catch every phrasing the LLM might use — that would be
+# adversarial. We catch the most common false-confident phrasings
+# and let the rest through (the indexer + search results are the
+# primary defence; the guard is a backstop for false claims).
+_RE_KNOWLEDGE_CLAIM = _re.compile(
+    r"\b(?:"
+    # "per (the) handbook", "according to the runbook", "as per CLAUDE.md"
+    r"(?:per|according\s+to|as\s+per)\s+(?:the\s+)?"
+    r"(?:handbook|runbook|doctrine|"
+    r"CLAUDE\.md|ARCHITECTURE\.md|DECISIONS\.md|TOOL_SURFACE\.md|HANDBOOK\.md)"
+    # "the handbook says", "in the runbook it says" — explicit claim verb
+    r"|(?:the|in\s+the)\s+(?:handbook|runbook|doctrine)\s+"
+    r"(?:says|states|specifies|mentions|requires|forbids|allows)"
+    # "the docs say"
+    r"|the\s+docs?\s+(?:say|state|specify|mention|require|forbid)"
+    r")\b",
+    _re.IGNORECASE,
+)
+_KNOWLEDGE_HALLUCINATION_FALLBACK = (
+    "I don't have a citation for that. Run `bss admin knowledge search "
+    '"<your query>"` or open `docs/HANDBOOK.md` for the authoritative '
+    "answer."
+)
+
+
+def _claims_handbook(text: str) -> bool:
+    """True if the assistant's reply cites handbook/runbook/doctrine
+    without a knowledge.* tool actually firing this turn."""
+    return bool(_RE_KNOWLEDGE_CLAIM.search(text or ""))
+
+
 _INTENT_RULES: list[tuple[Any, str, Callable[[str], dict] | None]] = [
     # Customers
     (_re.compile(r"\b(list|show)( me| us)?( all| every| the)? customers?\b", _re.I),
@@ -623,6 +661,20 @@ async def _drive_turn(
             f"(error: {error})", tool_calls_json=captured_tool_calls or None
         )
         return
+
+    # v0.20+ citation guard. If the reply claims handbook/runbook/
+    # doctrine but no knowledge.* tool fired this turn, replace the
+    # text. Doctrine: never paraphrase doctrine without citing.
+    called_tool_names = {tc["name"] for tc in captured_tool_calls}
+    knowledge_called = any(
+        n.startswith("knowledge.") for n in called_tool_names
+    )
+    if final_text and _claims_handbook(final_text) and not knowledge_called:
+        rprint(
+            "[yellow]⚠ citation guard tripped — replacing un-cited "
+            "handbook/doctrine claim with safe fallback.[/]"
+        )
+        final_text = _KNOWLEDGE_HALLUCINATION_FALLBACK
 
     # Persist the assistant's reply so the next turn's transcript sees
     # it. Even when cards rendered (and the prose was suppressed for

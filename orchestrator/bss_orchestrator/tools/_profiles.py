@@ -14,9 +14,22 @@ the tool is a public catalog read with no customer-bound output).
 Greppable: every name in this module's value sets must resolve in
 ``TOOL_REGISTRY`` at startup. ``validate_profiles()`` enforces this
 plus the "no customer_id parameter" rule for ``*.mine`` wrappers.
+
+v0.20+: knowledge.* entries are gated on BSS_KNOWLEDGE_ENABLED. When
+the env var is false, the entries are absent from TOOL_PROFILES so
+validate_profiles() doesn't trip on a missing-from-registry tool.
+The env read is at import time (consistent with token / provider
+patterns); flip the env + restart to toggle.
 """
 
 from __future__ import annotations
+
+import os as _os
+
+_KNOWLEDGE_ENABLED = (
+    _os.environ.get("BSS_KNOWLEDGE_ENABLED", "true").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
 
 import inspect
 
@@ -209,6 +222,20 @@ TOOL_PROFILES: dict[str, set[str]] = {
         "usage.simulate",
     },
 }
+
+# v0.20+ — knowledge tools (operator_cockpit only). Customer chat does
+# NOT get these by doctrine: handbook + runbooks describe destructive
+# operator flows + perimeter posture, neither belongs in customer chat.
+# validate_profiles() enforces customer_self_serve excludes them.
+# Gated on BSS_KNOWLEDGE_ENABLED so disabled deployments don't trip
+# the "tool in profile but not in TOOL_REGISTRY" assertion.
+if _KNOWLEDGE_ENABLED:
+    TOOL_PROFILES["operator_cockpit"].update(
+        {
+            "knowledge.search",
+            "knowledge.get",
+        }
+    )
 
 
 def get_profile(name: str) -> set[str]:

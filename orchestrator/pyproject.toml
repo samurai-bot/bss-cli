@@ -6,6 +6,7 @@ description = "LangGraph supervisor + tool registry for the BSS-CLI LLM-native i
 dependencies = [
     "bss-clients",
     "bss-clock",
+    "bss-knowledge",
     "bss-telemetry",
     "bss-middleware",
     "httpx>=0.27",
@@ -28,6 +29,7 @@ dev = [
 [tool.uv.sources]
 bss-clients = { workspace = true }
 bss-clock = { workspace = true }
+bss-knowledge = { workspace = true }
 bss-telemetry = { workspace = true }
 bss-middleware = { workspace = true }
 

@@ -201,14 +201,30 @@ Reserved namespace; deferred from v0.2 to a future minor — see `DECISIONS.md` 
 | `billing.get_bill` | read | `(planned)` Single statement |
 | `billing.get_current_period` | read | `(planned)` Current-period receipt summary |
 
-## Knowledge tools — `(planned, Phase 11)`
+## Knowledge tools — `(v0.20+, operator_cockpit only)`
 
-Reserved namespace for the RAG-over-runbooks surface. Not in `TOOL_REGISTRY`.
+Activated in v0.20.0. Backs the cockpit's "look this up in the
+handbook" pattern. Reads `knowledge.doc_chunk` (Postgres FTS, optional
+pgvector hybrid) over the indexed doc corpus (HANDBOOK + CLAUDE +
+runbooks + ARCHITECTURE + DECISIONS + TOOL_SURFACE + ROADMAP +
+CONTRIBUTING). Operator-initiated reindex via `bss admin knowledge
+reindex` or `make knowledge-reindex`.
+
+**Operator-cockpit only** — customer chat does NOT receive these by
+doctrine: handbook + runbooks describe destructive operator flows +
+perimeter posture; leaking them to a prompt-injected LLM would teach
+it which flag to ask the operator about. `validate_profiles()`
+enforces the exclusion. Doctrine guard `make doctrine-check` (rule 15)
+catches drift.
+
+The citation guard at the REPL + browser cockpit (`_RE_KNOWLEDGE_CLAIM`)
+replaces un-cited handbook/doctrine claims with a templated fallback
+pointing at `bss admin knowledge search`.
 
 | Tool | Type | Description |
 |---|---|---|
-| `knowledge.search` | read | `(planned, Phase 11)` RAG over `docs/runbooks/` indexed into pgvector |
-| `knowledge.get_document` | read | `(planned, Phase 11)` Full runbook by slug |
+| `knowledge.search` | read | FTS / hybrid search; returns `[{anchor, source_path, heading_path, kind, snippet}]`. Cite the anchor in the reply. |
+| `knowledge.get` | read | Full content of one chunk by `(anchor, source_path)`. Use after `knowledge.search` when the snippet doesn't carry enough detail. |
 
 ## Customer-scoped wrappers — `(v0.12 chat profile)`
 
