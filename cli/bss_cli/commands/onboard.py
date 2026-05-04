@@ -95,7 +95,7 @@ def onboard_callback(
         return
 
     target = env_path or _ENV_PATH
-    rprint(f"[cyan]Welcome to BSS-CLI.[/] Configuring [bold]{target}[/].\n")
+    rprint(f"[green]Welcome to BSS-CLI.[/] Configuring [bold]{target}[/].\n")
 
     domains = _domains_to_configure(domain)
     env = read_env_file(target)
@@ -134,7 +134,7 @@ def _configure_email(env: dict[str, str]) -> None:
     current = env.get("BSS_PORTAL_EMAIL_PROVIDER", "") or env.get(
         "BSS_PORTAL_EMAIL_ADAPTER", ""
     )
-    rprint(f"  Current provider: [cyan]{current or '(unset; defaults to logging)'}[/]")
+    rprint(f"  Current provider: [green]{current or '(unset; defaults to logging)'}[/]")
     mode = Prompt.ask(
         "  Mode",
         choices=["test", "production"],
@@ -146,7 +146,7 @@ def _configure_email(env: dict[str, str]) -> None:
         # Drop any stale Resend creds — leaving them around is a
         # foot-gun ("why did email send to a real user from staging?").
         env.pop("BSS_PORTAL_EMAIL_RESEND_API_KEY", None)
-        rprint("  [green]✓[/] Mode set to [cyan]logging[/] — emails write to dev mailbox.")
+        rprint("  [green]✓[/] Mode set to [green]logging[/] — emails write to dev mailbox.")
         return
 
     # production = Resend
@@ -201,7 +201,7 @@ def _configure_kyc(env: dict[str, str]) -> None:
     to verify end-to-end. The webhook + JWS verification round runs at
     `make scenarios-hero --tag didit-sandbox` post-onboard, not here."""
     current = env.get("BSS_PORTAL_KYC_PROVIDER", "")
-    rprint(f"  Current provider: [cyan]{current or '(unset; defaults to prebaked)'}[/]")
+    rprint(f"  Current provider: [green]{current or '(unset; defaults to prebaked)'}[/]")
     mode = Prompt.ask(
         "  Mode",
         choices=["test", "production"],
@@ -215,7 +215,7 @@ def _configure_kyc(env: dict[str, str]) -> None:
         env.pop("BSS_PORTAL_KYC_DIDIT_WORKFLOW_ID", None)
         env.pop("BSS_PORTAL_KYC_DIDIT_WEBHOOK_SECRET", None)
         rprint(
-            "  [green]✓[/] Mode set to [cyan]prebaked[/] — "
+            "  [green]✓[/] Mode set to [green]prebaked[/] — "
             "deterministic per-customer attestation, no external calls."
         )
         return
@@ -313,9 +313,9 @@ def _probe_didit_session(*, api_key: str, workflow_id: str) -> bool:
         return False
 
     rprint(
-        f"    Didit accepted: session_id=[cyan]{body.get('session_id')}[/]\n"
+        f"    Didit accepted: session_id=[green]{body.get('session_id')}[/]\n"
         f"    Open this URL to walk the hosted UI:\n"
-        f"    [cyan]{body.get('url')}[/]"
+        f"    [green]{body.get('url')}[/]"
     )
     return True
 
@@ -326,7 +326,7 @@ def _configure_payment(env: dict[str, str]) -> None:
     Account.retrieve — confirms the key works without spending money or
     creating customers."""
     current = env.get("BSS_PAYMENT_PROVIDER", "")
-    rprint(f"  Current provider: [cyan]{current or '(unset; defaults to mock)'}[/]")
+    rprint(f"  Current provider: [green]{current or '(unset; defaults to mock)'}[/]")
     mode = Prompt.ask(
         "  Mode",
         choices=["test", "production"],
@@ -343,7 +343,7 @@ def _configure_payment(env: dict[str, str]) -> None:
         env.pop("BSS_PAYMENT_STRIPE_WEBHOOK_SECRET", None)
         env.pop("BSS_PAYMENT_ALLOW_TEST_CARD_REUSE", None)
         rprint(
-            "  [green]✓[/] Mode set to [cyan]mock[/] — "
+            "  [green]✓[/] Mode set to [green]mock[/] — "
             "in-process tokenizer, no external calls. "
             "Hero scenarios use this mode."
         )
@@ -449,7 +449,7 @@ def _configure_payment(env: dict[str, str]) -> None:
 
     rprint(
         "  [dim]Reminder: cut over saved cards before flipping the env "
-        "var in production — see [cyan]docs/runbooks/stripe-cutover.md[/].[/]"
+        "var in production — see [green]docs/runbooks/stripe-cutover.md[/].[/]"
     )
 
 
@@ -475,7 +475,7 @@ def _probe_stripe(*, api_key: str) -> bool:
         if isinstance(account, dict)
         else getattr(account, "id", "?")
     )
-    rprint(f"    Stripe account: id=[cyan]{acct_id}[/]")
+    rprint(f"    Stripe account: id=[green]{acct_id}[/]")
     return True
 
 
@@ -504,7 +504,7 @@ def _probe_resend(*, api_key: str, from_addr: str, recipient: str) -> bool:
     msg_id = (
         result.get("id") if isinstance(result, dict) else getattr(result, "id", "?")
     )
-    rprint(f"    Resend accepted: id=[cyan]{msg_id}[/]")
+    rprint(f"    Resend accepted: id=[green]{msg_id}[/]")
     return True
 
 

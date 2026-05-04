@@ -200,7 +200,7 @@ async def _run_query(
         t = Table(
             title=f"External calls (month to date, ≤{limit} rows scanned)"
         )
-        t.add_column("provider", style="cyan")
+        t.add_column("provider", style="green")
         t.add_column("calls", justify="right")
         t.add_column("failures", justify="right", style="red")
         for p in sorted(by_provider):
@@ -216,7 +216,7 @@ async def _run_query(
 
     t = Table(title=f"External calls (last {len(rows)})")
     t.add_column("when", style="dim")
-    t.add_column("provider", style="cyan")
+    t.add_column("provider", style="green")
     t.add_column("op")
     t.add_column("ok", justify="center")
     t.add_column("ms", justify="right", style="dim")

@@ -37,4 +37,4 @@ def run_single_shot(prompt: str, *, allow_destructive: bool = False) -> None:
         rprint("[yellow](no reply)[/]")
         return
 
-    rprint(Panel(reply, title="bss ai", border_style="cyan"))
+    rprint(Panel(reply, title="bss ai", border_style="green"))

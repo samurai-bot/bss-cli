@@ -132,18 +132,18 @@ _LOGO = r"""
 
 
 _SLASH_HELP = (
-    "[cyan]/sessions[/] list  "
-    "[cyan]/new[/] [label]  "
-    "[cyan]/switch[/] SES  "
-    "[cyan]/reset[/]  "
-    "[cyan]/focus[/] CUST  "
-    "[cyan]/360[/]  "
-    "[cyan]/ports[/]  "
-    "[cyan]/confirm[/]  "
-    "[cyan]/config edit[/]  "
-    "[cyan]/operator edit[/]  "
-    "[cyan]/help[/]  "
-    "[cyan]/exit[/]"
+    "[green]/sessions[/] list  "
+    "[green]/new[/] [label]  "
+    "[green]/switch[/] SES  "
+    "[green]/reset[/]  "
+    "[green]/focus[/] CUST  "
+    "[green]/360[/]  "
+    "[green]/ports[/]  "
+    "[green]/confirm[/]  "
+    "[green]/config edit[/]  "
+    "[green]/operator edit[/]  "
+    "[green]/help[/]  "
+    "[green]/exit[/]"
 )
 
 
@@ -158,7 +158,7 @@ def _render_banner(
     customer_focus: str | None,
     allow_destructive_default: bool,
 ) -> Panel:
-    logo = Text(_LOGO, style="bold cyan", no_wrap=True)
+    logo = Text(_LOGO, style="bold green", no_wrap=True)
     tagline = Align.center(
         Text.from_markup(
             "[bold white]LLM-native Business Support System[/]   "
@@ -169,7 +169,7 @@ def _render_banner(
     focus = customer_focus or "—"
     meta_line = Align.center(
         Text.from_markup(
-            f"[dim]actor[/] [cyan]{actor}[/]   "
+            f"[dim]actor[/] [green]{actor}[/]   "
             f"[dim]·[/]   [dim]model[/] [bold magenta]{model}[/]\n"
             f"[dim]session[/] [yellow]{session_id}[/]   "
             f"[dim]·[/]   [dim]focus[/] [green]{focus}[/]"
@@ -204,9 +204,9 @@ def _render_banner(
         ]
     return Panel(
         Group(*parts),
-        border_style="cyan",
+        border_style="green",
         padding=(0, 1),
-        title="[bold cyan]bss[/] [dim]·[/] [white]cockpit[/]",
+        title="[bold green]bss[/] [dim]·[/] [white]cockpit[/]",
         title_align="left",
         subtitle="[dim]type a request or a /command[/]",
         subtitle_align="right",
@@ -362,19 +362,19 @@ def _bootstrap_store_and_config() -> tuple[ConversationStore, str, str]:
 
 async def _cmd_help() -> None:
     rprint(
-        "[cyan]/sessions[/]      list operator's cockpit sessions\n"
-        "[cyan]/new[/] [LABEL]   close current → open new (label optional)\n"
-        "[cyan]/switch[/] SES    resume specific session id\n"
-        "[cyan]/reset[/]         clear messages on current session\n"
-        "[cyan]/focus[/] CUST    pin a customer for the system prompt\n"
-        "[cyan]/focus clear[/]   unset focus\n"
-        "[cyan]/360[/] [CUST]    customer 360 (uses focus if no arg)\n"
-        "[cyan]/ports[/]         MNP queue: list / approve PORT-NNN / reject PORT-NNN <reason>\n"
-        "[cyan]/confirm[/]       flip next turn allow_destructive=True\n"
-        "[cyan]/config edit[/]   open settings.toml in $EDITOR; reload\n"
-        "[cyan]/operator edit[/] open OPERATOR.md in $EDITOR; reload\n"
-        "[cyan]/help[/]          this list\n"
-        "[cyan]/exit[/]          leave (does not close the session)"
+        "[green]/sessions[/]      list operator's cockpit sessions\n"
+        "[green]/new[/] [LABEL]   close current → open new (label optional)\n"
+        "[green]/switch[/] SES    resume specific session id\n"
+        "[green]/reset[/]         clear messages on current session\n"
+        "[green]/focus[/] CUST    pin a customer for the system prompt\n"
+        "[green]/focus clear[/]   unset focus\n"
+        "[green]/360[/] [CUST]    customer 360 (uses focus if no arg)\n"
+        "[green]/ports[/]         MNP queue: list / approve PORT-NNN / reject PORT-NNN <reason>\n"
+        "[green]/confirm[/]       flip next turn allow_destructive=True\n"
+        "[green]/config edit[/]   open settings.toml in $EDITOR; reload\n"
+        "[green]/operator edit[/] open OPERATOR.md in $EDITOR; reload\n"
+        "[green]/help[/]          this list\n"
+        "[green]/exit[/]          leave (does not close the session)"
     )
 
 
@@ -383,7 +383,7 @@ async def _cmd_sessions(actor: str) -> None:
     if not rows:
         rprint(f"[yellow]No active cockpit sessions for {actor}.[/]")
         return
-    t = Table(title=f"Cockpit sessions for [cyan]{actor}[/]")
+    t = Table(title=f"Cockpit sessions for [green]{actor}[/]")
     t.add_column("Session", style="yellow")
     t.add_column("Label")
     t.add_column("Focus")
@@ -652,7 +652,7 @@ async def _drive_turn(
     if cards_shown:
         # The card was the answer; skip the redundant prose panel.
         return
-    rprint(Panel(final_text, title="bss ai", border_style="cyan"))
+    rprint(Panel(final_text, title="bss ai", border_style="green"))
 
 
 # Tools whose mere "started" event indicates a destructive proposal.
@@ -790,7 +790,7 @@ async def _handle_slash(
         rprint(f"[dim]reloaded {path.name} (mtime-based hot reload).[/]")
         return "continue", None
 
-    rprint(f"[yellow]Unknown command: {cmd}  ([cyan]/help[/] for the list)[/]")
+    rprint(f"[yellow]Unknown command: {cmd}  ([green]/help[/] for the list)[/]")
     return "continue", None
 
 
@@ -864,7 +864,7 @@ def run_repl(
         while True:
             # ANSI-coloured prompt label rendered identically to the
             # prior Rich shape (bold "bss:" + yellow last-8 chars of
-            # session id + cyan "> ").
+            # session id + green "> ").
             prompt_label = ANSI(
                 f"\033[1mbss\033[0m:"
                 f"\033[33m{conv.session_id[-8:]}\033[0m"
