@@ -1,6 +1,14 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    # v0.20+ — pgvector required for the cockpit knowledge tool's
+    # knowledge.doc_chunk table (FTS-only deployments still work, the
+    # extension is just present and unused). Drop-in same-major
+    # replacement for stock postgres:16-alpine; data dir format
+    # identical, volume mounts unchanged. Migration 0022 runs
+    # CREATE EXTENSION IF NOT EXISTS vector. See
+    # docs/runbooks/knowledge-indexer.md for the bundled-mode swap
+    # procedure + the BYOI one-time CREATE EXTENSION alternative.
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: bss
       POSTGRES_PASSWORD: bss

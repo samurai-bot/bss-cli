@@ -6,7 +6,7 @@ A complete reference Business Support System for a small mobile prepaid MVNO tha
 
 For engineers learning telco BSS/OSS, for a small MVNO that wants a deployable MVP, and as a substrate for agentic experiments against realistic telco operations. **eSIM-only, bundled-prepaid, block-on-exhaust, card-on-file mandatory.** eKYC, real-customer UI, network elements, batch CDR, and OCS protocols are intentionally out of scope (channel-layer concerns).
 
-**Status (v0.19 baseline, soaking toward v1.0):** all three real-provider integrations are live (Resend email, Didit KYC, Stripe Checkout). Telco hygiene gaps are closed (MNP port-in/port-out, MSISDN replenishment, roaming as a product). Renewals fire automatically on their period boundary via an in-process worker; customers get a reminder email ~24h before. The operator cockpit runs single-operator-by-design behind a secure perimeter — REPL canonical, browser veneer over the same Postgres-backed `Conversation` store. The only mocked surface left for v1.0 is SM-DP+ (real eSIM provisioning is NDA-gated).
+**Status (v0.20 baseline, soaking toward v1.0):** all three real-provider integrations are live (Resend email, Didit KYC, Stripe Checkout). Telco hygiene gaps are closed (MNP port-in/port-out, MSISDN replenishment, roaming as a product). Renewals fire automatically on their period boundary via an in-process worker; customers get a reminder email ~24h before. The operator cockpit runs single-operator-by-design behind a secure perimeter — REPL canonical, browser veneer over the same Postgres-backed `Conversation` store. v0.20 adds an indexed-corpus knowledge tool so the cockpit can answer how-to questions from `docs/HANDBOOK.md` + runbooks + CLAUDE.md with cited anchors (Postgres FTS by default, optional pgvector hybrid). The only mocked surface left for v1.0 is SM-DP+ (real eSIM provisioning is NDA-gated).
 
 ## Screenshots
 
@@ -56,7 +56,7 @@ Every BSS write goes through the per-service policy layer. Three trigger paths f
 
 The audit log gets a coherent attribution on every write: `actor`, `channel` (`portal-self-serve` / `portal-csr` / `portal-chat` / `cli` / `system:renewal_worker`), and `service_identity` (`portal_self_serve` / `default` / etc. via the v0.9 named-token perimeter).
 
-## What's in the box (v0.7 → v0.18)
+## What's in the box (v0.7 → v0.20)
 
 | Release | What landed |
 |---|---|
@@ -72,6 +72,7 @@ The audit log gets a coherent attribution on every write: `actor`, `channel` (`p
 | **v0.16** | Payment (Stripe Checkout + webhook reconciliation). PCI scope guard refuses to boot in production-stripe mode if a card-number `<input>` survives in any rendered template |
 | **v0.17** | Telco hygiene release. MNP (port-in / port-out via `crm.port_request`), MSISDN replenishment (`bss inventory msisdn add-range` + low-watermark event), roaming as a product (`data_roaming` allowance type, `VAS_ROAMING_1GB` top-up) |
 | **v0.18** | Automated subscription-renewal worker. Three sweeps per tick: renew due / skip blocked-overdue / send upcoming-renewal email. Multi-replica safe via `FOR UPDATE SKIP LOCKED` from day one |
+| **v0.20** | Cockpit knowledge tool — Tier-0 FTS over `docs/HANDBOOK.md` + CLAUDE.md + runbooks; LLM cites anchors, citation guard catches un-cited claims. Catalog `--data-roaming-mb` flag closes the v0.17 admin gap. Postgres image moves to `pgvector/pgvector:pg16` |
 
 Full per-release narratives in [`phases/V0_X_Y.md`](phases/). What's left for v1.0 is in [`ROADMAP.md`](ROADMAP.md).
 
@@ -85,6 +86,13 @@ Full per-release narratives in [`phases/V0_X_Y.md`](phases/). What's left for v1
 
 ### Bring-your-own-infra (BYOI — Postgres / RabbitMQ already running)
 
+> **v0.20+ prereq.** The cockpit knowledge tool's table uses pgvector.
+> Most managed Postgres tiers (RDS, Cloud SQL, Aiven, Neon) offer it
+> as a switch-on extension. Run **`CREATE EXTENSION IF NOT EXISTS
+> vector`** once on your BSS database before `make migrate`.
+> See [`docs/runbooks/knowledge-indexer.md`](docs/runbooks/knowledge-indexer.md)
+> for the full procedure.
+
 ```bash
 git clone <repo>
 cd bss-cli
@@ -96,18 +104,28 @@ sed -i "s/^BSS_API_TOKEN=changeme$/BSS_API_TOKEN=$(openssl rand -hex 32)/" .env
 # Edit .env: BSS_DB_URL, BSS_RABBITMQ_URL, BSS_LLM_API_KEY,
 # optionally BSS_OTEL_EXPORTER_OTLP_ENDPOINT (e.g. http://tech-vm:4318)
 
-docker compose up -d         # 10 services + 2 portals
-make migrate                  # Alembic on the existing Postgres (currently at 0021)
+# v0.20+ — install pgvector once on the target Postgres:
+psql "$BSS_DB_URL" -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+docker compose up -d         # 9 services + 2 portals
+make migrate                  # Alembic on the existing Postgres (currently at 0023)
 make seed                     # 3 plans + 4 VAS offerings + 1000 MSISDNs + 1000 eSIM profiles
+make knowledge-reindex        # populate the cockpit's doc corpus (372 chunks)
 bss                           # opens the cockpit REPL
 ```
 
 ### All-in-one (bundled infra)
 
+The bundled `docker-compose.infra.yml` ships **`pgvector/pgvector:pg16`** as the
+Postgres image (v0.20+; drop-in same-major replacement for stock
+`postgres:16-alpine`). pgvector activates automatically — no manual `CREATE
+EXTENSION` needed.
+
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.infra.yml up -d
 make migrate
 make seed
+make knowledge-reindex              # populate the cockpit's doc corpus
 bss                                 # cockpit REPL
 open http://localhost:9001/         # self-serve portal
 open http://localhost:9002/         # operator cockpit (browser veneer)
@@ -118,24 +136,26 @@ open http://localhost:3000/         # Metabase (analytics)
 ### First commands worth running
 
 ```bash
-make scenarios                   # 17 hero scenarios — sanity-check the install (~95s)
-make doctrine-check              # 14 grep guards (clock, OTel, channel, renewal worker, ...)
+make scenarios                   # 19 hero scenarios — sanity-check the install (~100s)
+make doctrine-check              # 16 grep guards (clock, OTel, channel, renewal, knowledge, ...)
 bss subscription show SUB-0001
 bss inventory msisdn list --prefix 9000 --limit 5
 bss trace for-order ORD-0001
+bss admin knowledge search "rotate cockpit token"   # v0.20+ doc-corpus search
 ```
 
 ## Documentation map
 
 - [`CLAUDE.md`](CLAUDE.md) — project doctrine; read first
+- [`docs/HANDBOOK.md`](docs/HANDBOOK.md) — **v0.20+ single-file operator handbook** consolidating setup, env vars, providers, personas, domain features, and every runbook into one Obsidian-friendly reference. The cockpit knowledge tool indexes this
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — topology, call patterns, deployability matrix, AWS deployment path
 - [`DATA_MODEL.md`](DATA_MODEL.md) — schemas + tables + relationships
 - [`TOOL_SURFACE.md`](TOOL_SURFACE.md) — every LLM tool with arg shape and return shape
 - [`DECISIONS.md`](DECISIONS.md) — non-obvious architectural choices, append-only
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — phase discipline, DECISIONS pattern, test conventions
 - [`ROADMAP.md`](ROADMAP.md) — shipped + what's left for v1.0 + future + non-goals
-- [`phases/`](phases/) — per-release build plans (PHASE_01 → PHASE_10, V0_2_0 → V0_18_0)
-- [`docs/runbooks/`](docs/runbooks/) — operational procedures (Jaeger BYOI, API token rotation, snapshot regen, MNP port flows, Stripe cutover, payment idempotency, chat ownership trip, chat caps, chat-escalated case triage, chat transcript retention, three-provider sandbox soak)
+- [`phases/`](phases/) — per-release build plans (PHASE_01 → PHASE_10, V0_2_0 → V0_20_0)
+- [`docs/runbooks/`](docs/runbooks/) — operational procedures (knowledge-indexer + pgvector prereq, Jaeger BYOI, API token rotation, snapshot regen, MNP port flows, Stripe cutover, payment idempotency, chat ownership trip, chat caps, chat-escalated case triage, chat transcript retention, three-provider sandbox soak)
 
 ## Tracing with `bss trace`
 
