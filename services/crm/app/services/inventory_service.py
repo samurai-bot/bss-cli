@@ -57,6 +57,14 @@ class InventoryService:
             status=status, prefix=prefix, limit=limit, offset=offset
         )
 
+    async def count_msisdns(
+        self, *, prefix: str | None = None
+    ) -> dict[str, int]:
+        ctx = auth_context.current()
+        return await self._msisdn_repo.count_by_status(
+            tenant_id=ctx.tenant, prefix=prefix
+        )
+
     async def get_msisdn(self, msisdn: str) -> MsisdnPool | None:
         return await self._msisdn_repo.get(msisdn)
 

@@ -10,7 +10,7 @@ from bss_orchestrator.clients import get_clients
 from rich import print as rprint
 
 from .._runtime import run_async
-from ..renderers import render_prov_tasks
+from bss_cockpit.renderers import render_prov_tasks
 
 app = typer.Typer(help="Provisioning-sim: tasks + fault injection.", no_args_is_help=True)
 

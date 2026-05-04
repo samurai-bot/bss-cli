@@ -59,14 +59,10 @@
           {{ block.body_html | safe }}
         </div>
       {% elif block.role == "tool" %}
-        <details class="chat-tool-block">
-          <summary>
-            <span class="chat-tool-icon">≈</span>
-            <span class="chat-tool-name">{{ block.tool_name or "tool" }}</span>
-            <span class="chat-tool-hint">click to expand</span>
-          </summary>
-          <pre class="chat-tool-body">{{ block.body }}</pre>
-        </details>
+        {# v0.19+ — tool rows are pre-rendered as a self-contained
+           <details open> block by routes/cockpit.py:_render_tool_row_as_pre.
+           Same HTML the SSE stream emits — no template-level fork. #}
+        {{ block.body_html | safe }}
       {% endif %}
     {% endfor %}
 

@@ -12,7 +12,7 @@ Each turn streams agent events from ``astream_once`` with the cockpit
 profile (``tool_filter="operator_cockpit"``) and identity
 (``service_identity="operator_cockpit"``). Tool-call observations on
 "show-shaped" tools render via the matching
-:mod:`bss_cli.renderers` ASCII card before the model's text reply.
+:mod:`bss_cockpit.renderers` ASCII card before the model's text reply.
 
 Slash commands:
 
@@ -108,14 +108,9 @@ from rich.prompt import Prompt
 from rich.table import Table
 from rich.text import Text
 
-from .renderers import (
-    render_catalog,
-    render_catalog_show,
-    render_customer_360,
-    render_esim_activation,
-    render_order,
-    render_subscription,
-    render_vas_list,
+from bss_cockpit.renderers import (
+    RENDERER_DISPATCH,
+    render_tool_result,
 )
 
 
@@ -214,87 +209,11 @@ def _render_banner(
 
 
 # ─── Renderer dispatch ────────────────────────────────────────────────
-
-
-def _render_subscription(payload: dict) -> str:
-    return render_subscription(payload)
-
-
-def _render_subscription_list(payload: list) -> str:
-    if not payload:
-        return "(no subscriptions)"
-    return "\n".join(render_subscription(s) for s in payload)
-
-
-def _render_customer(payload: dict) -> str:
-    return render_customer_360(payload)
-
-
-def _render_customer_list(payload: list) -> str:
-    if not payload:
-        return "(no customers)"
-    rows: list[str] = ["── Customers " + "─" * 50, ""]
-    rows.append(f"  {'ID':<15}  {'Name':<24}  {'Status':<10}  Email")
-    rows.append(f"  {'─' * 15}  {'─' * 24}  {'─' * 10}  {'─' * 30}")
-    for c in payload[:25]:
-        ind = c.get("individual") or {}
-        name = " ".join(
-            s for s in [ind.get("givenName"), ind.get("familyName")] if s
-        ).strip() or c.get("name", "—")
-        email = ""
-        for cm in c.get("contactMedium") or []:
-            if cm.get("mediumType") == "email":
-                email = cm.get("value", "")
-                break
-        rows.append(
-            f"  {c.get('id', '?'):<15}  {name[:24]:<24}  "
-            f"{c.get('status', '?'):<10}  {email[:30]}"
-        )
-    if len(payload) > 25:
-        rows.append(f"  (+ {len(payload) - 25} more)")
-    return "\n".join(rows)
-
-
-def _render_order(payload: dict) -> str:
-    return render_order(payload)
-
-
-def _render_order_list(payload: list) -> str:
-    if not payload:
-        return "(no orders)"
-    rows: list[str] = ["── Orders " + "─" * 50, ""]
-    rows.append(f"  {'ID':<14}  {'State':<14}  {'Customer':<16}  Placed")
-    rows.append(f"  {'─' * 14}  {'─' * 14}  {'─' * 16}  {'─' * 19}")
-    for o in payload[:25]:
-        rows.append(
-            f"  {o.get('id', '?'):<14}  {o.get('state', '?'):<14}  "
-            f"{o.get('customerId', '—'):<16}  {(o.get('orderDate') or '')[:19]}"
-        )
-    if len(payload) > 25:
-        rows.append(f"  (+ {len(payload) - 25} more)")
-    return "\n".join(rows)
-
-
-def _render_balance(payload: dict) -> str:
-    sub_id = payload.get("subscriptionId", "—")
-    fake = {
-        "id": sub_id,
-        "state": payload.get("state", "?"),
-        "balances": payload.get("balances") or [],
-    }
-    return render_subscription(fake)
-
-
-def _render_catalog_list(payload: list) -> str:
-    return render_catalog(payload)
-
-
-def _render_catalog_show(payload: dict) -> str:
-    return render_catalog_show(payload)
-
-
-def _render_vas_list(payload: list) -> str:
-    return render_vas_list(payload)
+#
+# Single source of truth lives in `bss_cockpit.renderers.dispatch` —
+# RENDERER_DISPATCH + render_tool_result are imported above and used
+# verbatim by both the REPL and the browser veneer. There is exactly
+# ONE rendering rule for tool results, code-enforced.
 
 
 # ─── v0.19 — natural-language list intercepts ─────────────────────────
@@ -334,8 +253,18 @@ _INTENT_RULES: list[tuple[Any, str, Callable[[str], dict] | None]] = [
     (_re.compile(r"\bwhat( are the)? (vas|top.?ups?)\b", _re.I),
      "catalog.list_vas", None),
 
-    # Inventory
-    (_re.compile(r"\b(list|show)( me| us)?( all| every)? (msisdns?|numbers?|inventory)\b", _re.I),
+    # Inventory — minimal "show me the numbers" shape only. Anything
+    # nuanced ("how many", "is that all", status filters, prefix
+    # filters) flows to the LLM, which has the count + list tools.
+    # Adding more regex here is whack-a-mole; the doctrine fix is
+    # better tool docstrings + a real count tool, not more patterns.
+    # The ( all)?( the)? bigram is the bare minimum to handle
+    # "show me all the numbers" + "show me the numbers" + "show all".
+    (_re.compile(
+        r"\b(list|show)( me| us)?( all| every)?( the)? "
+        r"(msisdns?|numbers?|inventory)\b",
+        _re.I,
+     ),
      "inventory.msisdn.list_available", None),
 
     # Port requests (v0.17)
@@ -358,6 +287,8 @@ def _maybe_intent_match(line: str) -> tuple[str, dict] | None:
             kwargs = extractor(line) if extractor else {}
             return tool, kwargs
     return None
+
+
 
 
 async def _drive_intent_turn(
@@ -389,7 +320,7 @@ async def _drive_intent_turn(
         await conv.append_tool_turn(tool_name, f"ERROR: {exc}")
         return
 
-    renderer = _RENDERER_DISPATCH.get(tool_name)
+    renderer = RENDERER_DISPATCH.get(tool_name)
     rendered = renderer(result) if renderer else json.dumps(result, indent=2, default=str)
 
     rprint(rendered)
@@ -401,42 +332,10 @@ async def _drive_intent_turn(
     await conv.append_tool_turn(tool_name, rendered)
 
 
-def _render_esim(payload: dict) -> str:
-    return render_esim_activation(payload)
-
-
-_RENDERER_DISPATCH: dict[str, Callable[[Any], str]] = {
-    "subscription.get": _render_subscription,
-    "customer.get": _render_customer,
-    "customer.find_by_msisdn": _render_customer,
-    "order.get": _render_order,
-    "catalog.get_offering": _render_catalog_show,
-    "inventory.esim.get_activation": _render_esim,
-    "subscription.get_esim_activation": _render_esim,
-    "subscription.list_for_customer": _render_subscription_list,
-    "customer.list": _render_customer_list,
-    "order.list": _render_order_list,
-    "catalog.list_offerings": _render_catalog_list,
-    "catalog.list_active_offerings": _render_catalog_list,
-    "catalog.list_vas": _render_vas_list,
-    "subscription.get_balance": _render_balance,
-}
-
-
-def _maybe_render_tool_result(name: str, raw_result: str) -> str | None:
-    renderer = _RENDERER_DISPATCH.get(name)
-    if renderer is None:
-        return None
-    try:
-        payload = json.loads(raw_result)
-    except (ValueError, TypeError):
-        return None
-    if not payload:
-        return None
-    try:
-        return renderer(payload)
-    except Exception:  # noqa: BLE001
-        return None
+# Back-compat shims — internal callers still reach for `_RENDERER_DISPATCH`
+# / `_maybe_render_tool_result`. Both delegate to the shared module.
+_RENDERER_DISPATCH = RENDERER_DISPATCH
+_maybe_render_tool_result = render_tool_result
 
 
 # ─── Settings + store bootstrap ───────────────────────────────────────

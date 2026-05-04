@@ -29,9 +29,15 @@ def test_dispatch_covers_show_shaped_and_list_shaped_tools() -> None:
         "order.list",
         "catalog.list_offerings",
         # v0.19 additions — wired so the natural-language list intercept
-        # in the REPL has a renderer for the tool it dispatches.
+        # in the REPL has a renderer for the tool it dispatches, and so
+        # the LLM never needs to fall back to a markdown table when it
+        # calls one of these tools directly.
         "catalog.list_active_offerings",
         "catalog.list_vas",
+        "inventory.msisdn.list_available",
+        "inventory.msisdn.count",
+        "port_request.list",
+        "port_request.get",
         # Balance
         "subscription.get_balance",
     }
@@ -227,3 +233,164 @@ def test_renderer_exception_does_not_propagate() -> None:
     # The contract is "best-effort, never break the REPL".
     # (Verifying behaviour here is light; the not-raising part is the test.)
     assert out is None or isinstance(out, str)
+
+
+# ─── MSISDN intent rule — minimal coverage ────────────────────────────
+
+
+def test_show_me_all_the_numbers_dispatches_to_list() -> None:
+    """Regression for the original cockpit transcript: the operator
+    typed "show me all the numbers" and the LLM hallucinated rather
+    than calling ``inventory.msisdn.list_available``. Root cause:
+    the original ``( all| every)?`` alternation did not include
+    ``the``. The fix adds ``the`` to the alternation; nothing else.
+
+    Anything more nuanced ("how many", "is that all", status filters,
+    prefix filters) is left to the LLM, which has the count + list
+    tools. Adding more regex here is whack-a-mole; the doctrine fix
+    is better tool docstrings + a real count tool, not more patterns.
+    """
+    from bss_cli.repl import _maybe_intent_match
+
+    match = _maybe_intent_match("show me all the numbers")
+    assert match is not None
+    tool, kwargs = match
+    assert tool == "inventory.msisdn.list_available"
+    # No extractor — the tool's defaults handle the list. Status
+    # filters and prefix filters are LLM-driven now.
+    assert kwargs == {}
+
+
+def test_msisdn_list_renderer_handles_camel_and_snake() -> None:
+    """The CRM API returns snake_case; orchestrator clients sometimes
+    re-shape to camelCase. The renderer accepts both so the operator
+    sees the same card either way."""
+    payload = [
+        {
+            "msisdn": "88880000",
+            "status": "available",
+            "reserved_at": None,
+            "assigned_to_subscription_id": None,
+        },
+        {
+            "msisdn": "88880001",
+            "status": "reserved",
+            "reservedAt": "2026-05-04T12:00:00",
+            "assignedToSubscriptionId": "SUB-001",
+        },
+    ]
+    out = _maybe_render_tool_result(
+        "inventory.msisdn.list_available", json.dumps(payload)
+    )
+    assert out is not None
+    assert "88880000" in out
+    assert "88880001" in out
+    assert "available" in out
+    assert "reserved" in out
+    assert "SUB-001" in out
+    # The footer must surface the count + count-tool pointer so the
+    # operator never has to ask "is that all?" of the LLM.
+    assert "rows shown" in out
+    assert "inventory.msisdn.count" in out
+
+
+def test_msisdn_count_renderer_shows_every_status() -> None:
+    payload = {
+        "available": 50,
+        "reserved": 3,
+        "assigned": 12,
+        "ported_out": 1,
+        "total": 66,
+        "prefix": None,
+    }
+    out = _maybe_render_tool_result(
+        "inventory.msisdn.count", json.dumps(payload)
+    )
+    assert out is not None
+    for needle in ("available", "reserved", "assigned", "ported_out",
+                   "total", "50", "66"):
+        assert needle in out
+
+
+def test_msisdn_count_renderer_with_prefix_includes_it_in_title() -> None:
+    payload = {
+        "available": 47,
+        "reserved": 0,
+        "assigned": 3,
+        "ported_out": 0,
+        "total": 50,
+        "prefix": "8888",
+    }
+    out = _maybe_render_tool_result(
+        "inventory.msisdn.count", json.dumps(payload)
+    )
+    assert out is not None
+    assert "prefix=8888" in out
+
+
+def test_port_request_list_renderer_real_data_shape() -> None:
+    """Regression: the cockpit transcript showed the LLM rendering
+    `port_request.list` results as a markdown table because no
+    deterministic renderer was registered. Real data, fabricated
+    presentation. Registering this renderer means the REPL formats
+    the rows itself; the LLM has no opening to reach for markdown.
+    """
+    payload = [
+        {
+            "id": "PORT-93A0E81F",
+            "direction": "port_out",
+            "donorMsisdn": "90000000",
+            "donorCarrier": "BSS-CLI",
+            "state": "completed",
+            "requestedPortDate": "2026-05-04",
+        },
+        {
+            "id": "PORT-50627949",
+            "direction": "port_in",
+            "donorMsisdn": "98007777",
+            "donorCarrier": "ACME Mobile",
+            "state": "requested",
+            "requestedPortDate": "2026-05-05",
+        },
+    ]
+    out = _maybe_render_tool_result("port_request.list", json.dumps(payload))
+    assert out is not None
+    # Real ASCII table, not a markdown one — no leading "|" pipes.
+    assert "|" not in out
+    assert "PORT-93A0E81F" in out
+    assert "port_out" in out
+    assert "ACME Mobile" in out
+    assert "rows shown" in out
+
+
+def test_port_request_get_renderer_handles_camel_and_snake() -> None:
+    payload = {
+        "id": "PORT-50627949",
+        "direction": "port_in",
+        "donor_msisdn": "98007777",
+        "donor_carrier": "ACME Mobile",
+        "target_subscription_id": "SUB-001",
+        "requested_port_date": "2026-05-05",
+        "state": "requested",
+        "rejection_reason": None,
+        "created_at": "2026-05-04T12:00:00",
+        "updated_at": "2026-05-04T12:00:00",
+    }
+    out = _maybe_render_tool_result("port_request.get", json.dumps(payload))
+    assert out is not None
+    assert "|" not in out
+    assert "PORT-50627949" in out
+    assert "port_in" in out
+    assert "98007777" in out
+    assert "ACME Mobile" in out
+    assert "SUB-001" in out
+
+
+def test_msisdn_list_renderer_empty_payload() -> None:
+    out = _maybe_render_tool_result(
+        "inventory.msisdn.list_available", "[]"
+    )
+    # Empty list short-circuits to None at the helper layer (see
+    # _maybe_render_tool_result), so the REPL falls back to default
+    # rendering for the empty case.
+    assert out is None

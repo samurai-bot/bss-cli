@@ -10,7 +10,7 @@ from bss_orchestrator.clients import get_clients
 from rich import print as rprint
 
 from .._runtime import run_async
-from ..renderers import render_customer_360
+from bss_cockpit.renderers import render_customer_360
 
 app = typer.Typer(help="Manage customers (TMF629).", no_args_is_help=True)
 

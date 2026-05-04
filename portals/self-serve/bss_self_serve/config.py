@@ -71,5 +71,16 @@ class Settings(BaseSettings):
     bss_payment_stripe_api_key: str = ""
     bss_env: str = "development"
 
+    # v0.19+ — operator support email surfaced in the customer chat
+    # bot's fallback / escalation language. Previously the prompt
+    # template substituted the *customer's own* email here, which
+    # produced replies like "email support at <customer-email>"
+    # (telling the customer to email themselves). The chat route
+    # passes this through to ``build_customer_chat_prompt`` so the
+    # LLM has a real support address to mention. Operators set this
+    # in ``.env``; defaults are dev-friendly.
+    bss_operator_support_email: str = "support@bss-cli.local"
+    bss_operator_name: str = "BSS-CLI Mobile"
+
 
 settings = Settings()

@@ -22,11 +22,9 @@ positive routes:
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -34,31 +32,19 @@ from bss_csr.config import Settings
 from bss_csr.main import create_app
 
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-
-
-class _DbSettings(BaseSettings):
-    BSS_DB_URL: str = ""
-
-    model_config = SettingsConfigDict(
-        env_file=_REPO_ROOT / ".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
-
-
 @pytest.fixture
 def db_url() -> str:
-    url = _DbSettings().BSS_DB_URL or os.environ.get("BSS_DB_URL", "")
+    """Resolved DB URL — conftest's autouse fixture has already
+    populated ``BSS_DB_URL`` from ``.env`` if available."""
+    url = os.environ.get("BSS_DB_URL", "")
     if not url:
         pytest.skip("BSS_DB_URL not set; skipping cockpit DB tests.")
     return url
 
 
 @pytest.fixture
-def cockpit_client(db_url: str, monkeypatch):
+def cockpit_client(db_url: str):
     """Boot a fresh cockpit app and TestClient, with cockpit.* truncated."""
-    monkeypatch.setenv("BSS_DB_URL", db_url)
     # Ensure the test sees a clean cockpit schema.
     import asyncio
 

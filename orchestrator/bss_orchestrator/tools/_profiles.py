@@ -131,6 +131,7 @@ TOOL_PROFILES: dict[str, set[str]] = {
         "payment.get_attempt",
         # Inventory
         "inventory.msisdn.list_available",
+        "inventory.msisdn.count",
         "inventory.msisdn.get",
         "inventory.esim.list_available",
         "inventory.esim.get_activation",

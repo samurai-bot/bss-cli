@@ -522,8 +522,8 @@ body { margin: 0; }
 .thread-stream {
   flex: 1;
   overflow-y: auto;
-  padding: 24px 0;
-  display: flex; flex-direction: column; gap: 12px;
+  padding: 16px 0;
+  display: flex; flex-direction: column; gap: 8px;
 }
 .thread-empty {
   margin: auto; max-width: 480px;
@@ -539,26 +539,37 @@ body { margin: 0; }
 
 .chat-bubble {
   max-width: 78%;
-  padding: 12px 16px; border-radius: 12px;
-  font-size: 14px; line-height: 1.55;
+  padding: 10px 14px; border-radius: 10px;
+  font-size: 13.5px; line-height: 1.5;
   word-wrap: break-word;
 }
 .chat-bubble p { margin: 0 0 8px; }
 .chat-bubble p:last-child { margin-bottom: 0; }
+/* v0.19+ — assistant bubbles render LLM commentary, NOT canonical
+   data. Authoritative data lives in the deterministic tool-row block
+   below the bubble. So keep bubble formatting deliberately plain:
+   inline code is monospace + subtle bg with no accent color (the
+   global base.css rule colours <code> amber, which made the LLM's
+   freeform "Customer 360" prose visually competitive with the real
+   tool-result card — bad for the operator's eye, who would land on
+   the prettier fabrication first). Headings stay at base font size;
+   only weight changes. The visual hierarchy is now: tool-row block
+   (framed, monospace, accented) > assistant bubble (plain prose). */
 .chat-bubble code {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.06);
   padding: 1px 5px; border-radius: 3px;
   font-family: var(--mono); font-size: 12px;
+  color: var(--fg);  /* override global accent-amber so inline code
+                        in the bubble does NOT mimic an ID-pill. */
 }
 .chat-bubble ul, .chat-bubble ol { margin: 4px 0; padding-left: 20px; }
 .chat-bubble li { margin: 2px 0; }
 .chat-bubble strong { color: inherit; font-weight: 600; }
 .chat-bubble h3, .chat-bubble h4, .chat-bubble h5, .chat-bubble h6 {
-  margin: 8px 0 4px;
-  font-size: 14px; font-weight: 600;
+  margin: 6px 0 2px;
+  font-size: inherit; font-weight: 600;
   color: inherit;
 }
-.chat-bubble h3 { font-size: 15px; }
 .chat-bubble pre {
   background: var(--bg-code, rgba(0,0,0,0.3));
   border: 1px solid var(--border, rgba(255,255,255,0.1));
@@ -611,6 +622,8 @@ body { margin: 0; }
   color: var(--accent-error);
 }
 
+/* Legacy chat-tool-pill (still used by the customer-chat surface;
+   the cockpit surface uses .tool-row below). */
 .chat-tool-pill {
   align-self: flex-start;
   display: inline-flex; gap: 6px; align-items: center;
@@ -620,30 +633,61 @@ body { margin: 0; }
 }
 .chat-tool-icon { color: var(--accent-amber); }
 
-.chat-tool-block {
-  align-self: flex-start;
+/* v0.19+ Option-1 — unified cockpit tool-result block.
+   One HTML shape served by both the page-load transcript path AND
+   the SSE stream (routes/cockpit.py:_render_tool_row_as_pre). The
+   <details open> opens by default so the operator immediately sees
+   the answer; clicking the summary collapses old rows.
+   `white-space: pre` (NOT pre-wrap) is doctrine: column alignment
+   in the renderer's f-strings survives only when the browser
+   preserves every space and never wraps a row. The renderer keeps
+   rows under ~80 chars; `overflow-x: auto` covers narrow viewports.
+*/
+.tool-row {
+  align-self: stretch;
   max-width: 100%;
+  margin: 2px 0;
 }
-.chat-tool-block summary {
-  display: inline-flex; gap: 8px; align-items: center;
-  padding: 4px 10px; border-radius: 12px;
+.tool-row-summary {
+  display: inline-flex; gap: 6px; align-items: center;
+  padding: 3px 10px; border-radius: 10px;
   background: var(--bg-inset); border: 1px solid var(--border);
-  font-family: var(--mono); font-size: 11px; color: var(--fg-muted);
+  font-family: var(--mono); font-size: 11px; line-height: 1.4;
+  color: var(--fg-muted);
   cursor: pointer; list-style: none;
+  user-select: none;
+  transition: background-color 0.12s ease;
 }
-.chat-tool-block summary::-webkit-details-marker { display: none; }
-.chat-tool-block .chat-tool-icon { color: var(--accent-amber); }
-.chat-tool-block .chat-tool-name { color: var(--fg); }
-.chat-tool-block .chat-tool-hint { color: var(--fg-dim); font-size: 10px; }
-.chat-tool-block[open] summary { background: var(--bg-elev); }
-.chat-tool-block .chat-tool-body {
-  margin: 8px 0 0;
-  padding: 12px 14px;
+.tool-row-summary::-webkit-details-marker { display: none; }
+.tool-row-summary:hover { background: var(--bg-elev); }
+.tool-row[open] .tool-row-summary {
+  background: var(--bg-elev);
+  border-bottom-left-radius: 0; border-bottom-right-radius: 0;
+}
+.tool-row-icon { color: var(--accent-amber); font-weight: 600; }
+.tool-row-name { color: var(--fg); }
+.tool-row-summary::after {
+  content: "▾";
+  margin-left: 4px;
+  color: var(--fg-dim);
+  font-size: 9px;
+  transition: transform 0.12s ease;
+}
+.tool-row:not([open]) .tool-row-summary::after {
+  transform: rotate(-90deg);
+}
+.tool-row-body {
+  margin: 0;
+  padding: 10px 14px;
   background: var(--bg-code); border: 1px solid var(--border);
-  border-radius: 8px;
-  font-family: var(--mono); font-size: 12px; color: var(--fg);
-  white-space: pre-wrap; overflow-x: auto;
-  max-height: 280px;
+  border-top: none;
+  border-radius: 0 8px 8px 8px;
+  font-family: var(--mono); font-size: 11px; line-height: 1.45;
+  color: var(--fg);
+  white-space: pre;
+  overflow-x: auto;
+  max-height: 480px;
+  overflow-y: auto;
 }
 
 .thread-stream-incoming {

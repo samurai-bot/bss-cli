@@ -45,6 +45,40 @@ class TestMsisdn:
         assert r.status_code == 422
         assert r.json()["reason"] == "msisdn.release.only_if_reserved_or_assigned"
 
+    async def test_count_msisdns_returns_canonical_state_keys(
+        self, client: AsyncClient
+    ):
+        r = await client.get(f"{MSISDN_PREFIX}/msisdn/count")
+        assert r.status_code == 200
+        body = r.json()
+        for key in ("available", "reserved", "assigned", "ported_out", "total"):
+            assert key in body
+            assert isinstance(body[key], int)
+        # total must equal the sum of state buckets — invariant the
+        # cockpit relies on for "is that all?" follow-ups.
+        assert body["total"] == (
+            body["available"] + body["reserved"]
+            + body["assigned"] + body["ported_out"]
+        )
+        # Seed has 1000 available numbers — sanity check the floor.
+        assert body["total"] >= body["available"] >= 1
+
+    async def test_count_msisdns_with_prefix_narrows(
+        self, client: AsyncClient
+    ):
+        # Seed numbers all start with 9000; an unrelated prefix is empty.
+        r_match = await client.get(
+            f"{MSISDN_PREFIX}/msisdn/count", params={"prefix": "9000"}
+        )
+        r_miss = await client.get(
+            f"{MSISDN_PREFIX}/msisdn/count", params={"prefix": "1234"}
+        )
+        assert r_match.status_code == 200 and r_miss.status_code == 200
+        assert r_match.json()["total"] >= 1
+        assert r_match.json()["prefix"] == "9000"
+        assert r_miss.json()["total"] == 0
+        assert r_miss.json()["prefix"] == "1234"
+
 
 class TestEsim:
     async def test_list_esims(self, client: AsyncClient):

@@ -7,7 +7,7 @@ end up ragged in the terminal.
 
 from __future__ import annotations
 
-from bss_cli.renderers._box import (
+from bss_cockpit.renderers._box import (
     box,
     format_iccid,
     format_msisdn,

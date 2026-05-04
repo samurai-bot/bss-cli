@@ -49,6 +49,21 @@ class AddRangeResponse(BaseModel):
     last: str
 
 
+class MsisdnPoolCountResponse(BaseModel):
+    """Group-by-status count of the MSISDN pool.
+
+    ``total`` is the sum across all states; the canonical state keys
+    are always present (0 if the pool has no rows in that state).
+    """
+
+    available: int
+    reserved: int
+    assigned: int
+    ported_out: int
+    total: int
+    prefix: str | None = None
+
+
 def to_msisdn_response(m) -> MsisdnResponse:
     return MsisdnResponse(
         msisdn=m.msisdn,

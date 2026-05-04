@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from bss_cli.renderers.subscription import render_subscription
+from bss_cockpit.renderers.subscription import render_subscription
 
 
 def _sub() -> dict:

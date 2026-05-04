@@ -79,7 +79,29 @@ async def customer_find_by_msisdn(msisdn: Msisdn) -> dict[str, Any]:
 
 @register("customer.get")
 async def customer_get(customer_id: CustomerId) -> dict[str, Any]:
-    """Read a single customer with contact mediums and KYC status.
+    """Read a single customer with contact mediums, KYC status, and the
+    adjacent context the cockpit's 360 renderer expects (active
+    subscriptions, open cases, recent interactions).
+
+    The CRM API only returns the customer record itself; the cockpit's
+    deterministic ASCII renderer needs subscriptions / cases /
+    interactions to fill the "Subscriptions (N)", "Open Cases (N)",
+    "Recent Interactions (N)" sections. Without them the card showed
+    zeros even when the customer had real subs and cases — see
+    cockpit transcript May 2026. We compose the joins here so the
+    rendered card is honest, and so any caller of ``customer.get``
+    (cockpit, REPL, scenarios) gets the same shape.
+
+    The four upstream calls run in parallel — they are independent
+    reads against three services (CRM for customer + cases +
+    interactions, Subscription for the line list). Total latency is
+    bounded by the slowest read, not their sum.
+
+    The composite extras are surfaced under the synthetic ``_extras``
+    key so the customer dict's TMF629 shape is unchanged for callers
+    that only want the core record. ``_extras`` is the renderer's
+    plumbing channel; consumers that care only about the customer
+    fields should ignore it.
 
     Args:
         customer_id: Customer ID with the CUST- prefix (opaque suffix). Obtain from
@@ -87,12 +109,37 @@ async def customer_get(customer_id: CustomerId) -> dict[str, Any]:
 
     Returns:
         Customer dict including ``status`` (pending/active/suspended/closed),
-        ``contactMedium`` list, ``kycVerified`` boolean, and timestamps.
+        ``contactMedium`` list, ``kycVerified`` boolean, timestamps, plus an
+        ``_extras`` key containing ``{"subscriptions": [...], "cases": [...],
+        "interactions": [...]}``.
 
     Raises:
         NotFound: no customer with this ID.
     """
-    return await get_clients().crm.get_customer(customer_id)
+    import asyncio as _asyncio
+
+    clients = get_clients()
+    customer, subscriptions, cases, interactions = await _asyncio.gather(
+        clients.crm.get_customer(customer_id),
+        clients.subscription.list_for_customer(customer_id),
+        clients.crm.list_cases(customer_id=customer_id),
+        clients.crm.list_interactions(customer_id, limit=10),
+        # Sub-domain reads should never wedge the 360 — if any one
+        # fails (e.g. subscription service is down), surface the
+        # customer record alone with empty extras rather than
+        # erroring the entire customer.get tool.
+        return_exceptions=True,
+    )
+    # ``customer`` failure IS a hard error — that's the primary
+    # record. Re-raise so the caller sees a real NotFound.
+    if isinstance(customer, BaseException):
+        raise customer
+    customer["_extras"] = {
+        "subscriptions": subscriptions if isinstance(subscriptions, list) else [],
+        "cases": cases if isinstance(cases, list) else [],
+        "interactions": interactions if isinstance(interactions, list) else [],
+    }
+    return customer
 
 
 @register("customer.list")

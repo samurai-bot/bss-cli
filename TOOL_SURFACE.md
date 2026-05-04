@@ -76,7 +76,8 @@ Every CLI/LLM action that hits a write tool automatically creates an `interactio
 
 | Tool | Type | Description |
 |---|---|---|
-| `inventory.msisdn.list_available` | read | Support filters: prefix, golden patterns |
+| `inventory.msisdn.list_available` | read | Support filters: prefix, golden patterns. Status filter widened in v0.19+ — pass `status=None` for all states. |
+| `inventory.msisdn.count` | read | v0.19+ — group-by-status pool count. Source of truth for "how many numbers do we have" / "is that all?" (the list endpoint truncates at `limit`; this answers the unbounded question.) |
 | `inventory.msisdn.get` | read | Status of a specific MSISDN |
 | `inventory.msisdn.add_range` | write | v0.17 — operator-only bulk pool extension. Idempotent on overlap. |
 | `inventory.esim.list_available` | read | Available eSIM profiles |

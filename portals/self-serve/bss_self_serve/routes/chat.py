@@ -409,6 +409,7 @@ async def chat_events(
         if not (m.role == "user" and m.body == turn.question)
     ]
 
+    portal_settings = request.app.state.settings
     system_prompt = build_customer_chat_prompt(
         customer_name=ctx["customer_name"] or "there",
         customer_email=ctx["customer_email"] or identity.email or "",
@@ -416,6 +417,8 @@ async def chat_events(
                        if ctx["is_linked"] else "browsing"),
         current_plan=ctx["plan_id"],
         balance_summary=build_balance_summary(primary_sub),
+        operator_name=portal_settings.bss_operator_name,
+        operator_support_email=portal_settings.bss_operator_support_email,
         prior_messages=prior_pairs,
         is_linked=ctx["is_linked"],
     )
@@ -523,7 +526,7 @@ async def chat_events(
                             called_tools=called_tools_this_turn,
                         )
                         text = _ESCALATION_HALLUCINATION_FALLBACK.format(
-                            email=identity.email or "support@bss-cli.local"
+                            email=portal_settings.bss_operator_support_email
                         )
                         is_error = True
                     turn.done = True

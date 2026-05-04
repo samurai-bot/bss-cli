@@ -147,6 +147,52 @@ class MsisdnRepository:
         )
         return int(result.scalar_one())
 
+    async def count_by_status(
+        self, *, tenant_id: str, prefix: str | None = None
+    ) -> dict[str, int]:
+        """Group-by-status count of the pool, optionally narrowed to a
+        ``startswith`` prefix.
+
+        Returns a dict keyed by status string with int values; statuses
+        not present resolve to 0. Always includes the synthetic ``total``
+        key as the sum across all states. The query joins against the
+        canonical state set so callers can rely on the same keys (e.g.
+        ``available``, ``reserved``, ``assigned``, ``ported_out``)
+        without consulting the rows.
+        """
+        if prefix is not None:
+            result = await self._s.execute(
+                text(
+                    """
+                    SELECT status, COUNT(*) AS n
+                    FROM inventory.msisdn_pool
+                    WHERE tenant_id = :t
+                      AND msisdn LIKE :pfx
+                    GROUP BY status
+                    """
+                ),
+                {"t": tenant_id, "pfx": f"{prefix}%"},
+            )
+        else:
+            result = await self._s.execute(
+                text(
+                    """
+                    SELECT status, COUNT(*) AS n
+                    FROM inventory.msisdn_pool
+                    WHERE tenant_id = :t
+                    GROUP BY status
+                    """
+                ),
+                {"t": tenant_id},
+            )
+        rows = {row.status: int(row.n) for row in result.all()}
+        # Canonical key set — present 0 for absent statuses so consumers
+        # can render a stable table.
+        for canonical in ("available", "reserved", "assigned", "ported_out"):
+            rows.setdefault(canonical, 0)
+        rows["total"] = sum(v for k, v in rows.items() if k != "total")
+        return rows
+
     async def mark_ported_out(
         self, msisdn: str, *, subscription_id: str | None = None
     ) -> MsisdnPool | None:

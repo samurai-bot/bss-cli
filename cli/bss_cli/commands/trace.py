@@ -13,7 +13,7 @@ from rich import print as rprint
 
 from .._runtime import run_async
 from ..jaeger import JaegerClient, JaegerError
-from ..renderers.trace import render_swimlane
+from bss_cockpit.renderers.trace import render_swimlane
 
 app = typer.Typer(help="Query Jaeger traces + audit events.", no_args_is_help=True)
 

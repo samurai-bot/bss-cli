@@ -307,8 +307,16 @@ def test_prompt_carries_three_verbatim_sentences() -> None:
     )
     assert "I've topped up your line" in prompt
     assert "I've scheduled your switch to" in prompt
-    assert "I've escalated this to a human agent" in prompt
-    assert "24 hours via email" in prompt
+    assert "I've opened a case for this" in prompt
+    assert "follow up via email at" in prompt
+    # Doctrine: no specific-time promise. The platform does not send
+    # automated case-update emails (case events publish to RabbitMQ
+    # but no subscriber delivers an email today; follow-up is
+    # operator-driven). The LLM must not commit the system to a
+    # turnaround it cannot keep.
+    assert "24 hours" not in prompt
+    assert "within 24" not in prompt
+    assert "by end of day" not in prompt
 
 
 def test_prompt_does_not_leak_model_identity() -> None:
@@ -330,6 +338,68 @@ def test_prompt_handles_missing_variables_gracefully() -> None:
     # Renders without raising; placeholders prevent fabrication.
     assert "(loading)" in prompt
     assert "your address on file" in prompt
+
+
+# ─── v0.19+ — operator support email + self-serve URL guidance ──────
+
+
+def test_prompt_uses_operator_support_email_not_customer_email() -> None:
+    """Regression: previous template substituted ``{customer_email}``
+    in the "email support directly at …" sentence, telling customers
+    to email themselves. The fallback inbox is operator-side."""
+    prompt = build_customer_chat_prompt(
+        customer_name="Ck",
+        customer_email="customer@example.com",
+        operator_support_email="support@bss-cli.com",
+    )
+    # The customer's own email still appears in the verbatim escalation
+    # sentence ("you'll hear back via email at …") — that's the right
+    # use of the variable.
+    assert "customer@example.com" in prompt
+    # The OPERATOR address appears in the "human support fallback"
+    # section, NOT the customer's address.
+    assert "support@bss-cli.com" in prompt
+    # And we never tell the customer to email themselves.
+    assert "email support directly at customer@example.com" not in prompt
+
+
+def test_prompt_lists_self_serve_pages_for_routine_operations() -> None:
+    """The customer chat must point at the portal's self-serve pages
+    for things the customer can already do without human help. Naming
+    a self-serve URL is doctrine; suggesting "email support" for a
+    contact-detail change is the bug we just fixed."""
+    prompt = build_customer_chat_prompt(
+        customer_name="X",
+        customer_email="x@x",
+        operator_support_email="support@bss-cli.com",
+    )
+    # Each routine operation has a path the LLM can quote.
+    for path in (
+        "/profile/contact/email/change",
+        "/profile/contact/phone/update",
+        "/profile/contact/address/update",
+        "/profile/contact/name/update",
+        "/payment-methods",
+        "/payment-methods/add",
+        "/billing/history",
+        "/plan/change",
+    ):
+        assert path in prompt, (
+            f"Self-serve URL {path!r} is missing from the customer chat prompt; "
+            f"the LLM has to know where to send the customer"
+        )
+
+
+def test_anonymous_prompt_uses_operator_support_email_for_pre_signup_fallback() -> None:
+    prompt = build_customer_chat_prompt(
+        customer_name="",
+        customer_email="visitor@example.com",
+        operator_support_email="support@bss-cli.com",
+        is_linked=False,
+    )
+    assert "support@bss-cli.com" in prompt
+    # Pre-signup fallback should NOT direct the visitor to themselves.
+    assert "contact support directly at visitor@example.com" not in prompt
 
 
 def test_balance_summary_renderer_handles_unlimited_and_capped() -> None:
