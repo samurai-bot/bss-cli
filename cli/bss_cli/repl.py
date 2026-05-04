@@ -115,6 +115,7 @@ from .renderers import (
     render_esim_activation,
     render_order,
     render_subscription,
+    render_vas_list,
 )
 
 
@@ -292,6 +293,10 @@ def _render_catalog_show(payload: dict) -> str:
     return render_catalog_show(payload)
 
 
+def _render_vas_list(payload: list) -> str:
+    return render_vas_list(payload)
+
+
 def _render_esim(payload: dict) -> str:
     return render_esim_activation(payload)
 
@@ -308,6 +313,8 @@ _RENDERER_DISPATCH: dict[str, Callable[[Any], str]] = {
     "customer.list": _render_customer_list,
     "order.list": _render_order_list,
     "catalog.list_offerings": _render_catalog_list,
+    "catalog.list_active_offerings": _render_catalog_list,
+    "catalog.list_vas": _render_vas_list,
     "subscription.get_balance": _render_balance,
 }
 

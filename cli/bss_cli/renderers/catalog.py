@@ -53,6 +53,62 @@ def _ordered_plans(offerings: list[dict[str, Any]]) -> list[dict[str, Any]]:
     )
 
 
+def _vas_allowance_str(v: dict[str, Any]) -> str:
+    """Stringify a VAS allowance for the table row."""
+    qty = v.get("allowanceQuantity")
+    unit = v.get("allowanceUnit", "")
+    if qty in (None, "unlimited") or qty == -1:
+        return f"unlimited {unit}".strip()
+    if unit == "mb" and isinstance(qty, (int, float)) and qty >= 1024:
+        return f"{qty / 1024:g} GB"
+    return f"{qty} {unit}".strip()
+
+
+def render_vas_list(vas: list[dict[str, Any]]) -> str:
+    """v0.19 — render the catalog.list_vas response as an ASCII table.
+
+    Wired into the REPL post-processor so the agent can't fabricate
+    VAS prices/names from prompt context (was happening pre-v0.19
+    because the dispatcher only had catalog.list_offerings).
+    """
+    if not vas:
+        return "(no VAS offerings in catalog)"
+
+    rows = []
+    for v in vas:
+        vid = v.get("id", "?")
+        name = v.get("name", "")
+        ccy = v.get("currency", "SGD")
+        amount = v.get("priceAmount", "?")
+        allowance = _vas_allowance_str(v)
+        expiry = v.get("expiryHours")
+        expiry_s = f"{expiry}h" if expiry else "—"
+        rows.append((vid, name, f"{ccy} {amount}", allowance, expiry_s))
+
+    col1 = max(len("id"), max(len(r[0]) for r in rows))
+    col2 = max(len("name"), max(len(r[1]) for r in rows))
+    col3 = max(len("price"), max(len(r[2]) for r in rows))
+    col4 = max(len("allowance"), max(len(r[3]) for r in rows))
+    col5 = max(len("expiry"), max(len(r[4]) for r in rows))
+
+    inner = col1 + col2 + col3 + col4 + col5 + 4 * 3 + 2
+
+    def _row(c1, c2, c3, c4, c5):
+        return (
+            f"│ {c1.ljust(col1)} │ {c2.ljust(col2)} │ "
+            f"{c3.ljust(col3)} │ {c4.ljust(col4)} │ {c5.ljust(col5)} │"
+        )
+
+    title = " VAS Offerings "
+    out = ["┌─" + title + "─" * max(2, inner - len(title) - 2) + "┐"]
+    out.append(_row("id", "name", "price", "allowance", "expiry"))
+    out.append(_row("─" * col1, "─" * col2, "─" * col3, "─" * col4, "─" * col5))
+    for r in rows:
+        out.append(_row(*r))
+    out.append("└" + "─" * (inner) + "┘")
+    return "\n".join(out)
+
+
 def render_catalog(offerings: list[dict[str, Any]]) -> str:
     """Three-column plan comparison: PLAN_S / PLAN_M / PLAN_L side-by-side."""
     plans = _ordered_plans(offerings)

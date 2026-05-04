@@ -43,6 +43,23 @@ _COCKPIT_INVARIANTS = """\
 - ASCII tables and inline summaries are the visualisation language.
   Do not reach for markdown ornament beyond what `OPERATOR.md`
   authorizes.
+- (v0.19) NEVER fabricate catalog data — plan ids, plan names,
+  prices, VAS ids, VAS names, allowance quantities, allowance
+  units. The catalog is the source of truth. If the operator asks
+  "what plans are there", "list all products", "show me VAS
+  offerings", or any similar question that requires factual catalog
+  data, you MUST call one of:
+    - `catalog.list_active_offerings` for plans
+    - `catalog.list_vas` for VAS top-ups
+    - `catalog.get_offering` for a single plan card
+  THEN render the tool's return value. Do not summarize from prior
+  conversation context, do not guess prices, do not fill in plan
+  names from training data. The post-processor will render the
+  list-shaped tool result as an ASCII table; you do not need to
+  re-format it. If the operator's question is ambiguous, call the
+  tool with the broadest scope and let the operator narrow the
+  follow-up. A single hallucinated price is a customer-facing
+  trust-loss event the platform's audit log cannot recover from.
 """
 
 
