@@ -84,6 +84,14 @@ _RE_CODE_FENCE = _re.compile(r"^\s*```")
 _RE_TABLE_ROW = _re.compile(r"^\s*\|.+\|\s*$")
 # Separator row (after the header): cells are `---` / `:---:` / `---:` / `:---`
 _RE_TABLE_SEP_CELL = _re.compile(r"^\s*:?-{2,}:?\s*$")
+# v0.19 — Rich/box-drawing ASCII panel detection. The REPL renderers
+# emit Panel / Table layouts using U+250x box characters; when the LLM
+# regurgitates that output verbatim, a proportional-font browser with
+# collapsed whitespace destroys the alignment. Treat any contiguous run
+# of lines that begins with a panel top (`┌`) or contains a panel side
+# (`│` / `└` / `├`) as a literal `<pre>` block.
+_BOX_CHARS = "─━│┃┌┐└┘├┤┬┴┼═║╔╗╚╝"
+_RE_ASCII_PANEL_LINE = _re.compile(rf"[{_BOX_CHARS}]")
 
 
 def _render_inline(line: str) -> str:
@@ -192,6 +200,20 @@ def render_chat_markdown(text: str) -> str:
             _flush_blocks()
             fence_buf = []
             i += 1
+            continue
+
+        # ASCII panel (Rich/box-drawing). Collect contiguous lines that
+        # contain box-drawing characters into one <pre> block so the
+        # browser renders them in monospace with literal whitespace.
+        if _RE_ASCII_PANEL_LINE.search(line):
+            _flush_blocks()
+            panel: list[str] = [line]
+            j = i + 1
+            while j < len(lines) and _RE_ASCII_PANEL_LINE.search(lines[j]):
+                panel.append(lines[j].rstrip())
+                j += 1
+            out.append("<pre><code>" + "\n".join(panel) + "</code></pre>")
+            i = j
             continue
 
         # Pipe table: header row + separator + ≥0 body rows.

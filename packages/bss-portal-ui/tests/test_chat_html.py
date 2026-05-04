@@ -239,6 +239,44 @@ def test_strip_does_not_touch_normal_text() -> None:
     assert out == "Plain reply with no leakage."
 
 
+# ── v0.19 — Rich/box-drawing ASCII panel preservation ───────────────
+
+
+def test_ascii_panel_renders_inside_pre_block() -> None:
+    """Rich Panel/Table output uses U+250x box-drawing characters. When
+    the LLM regurgitates that ASCII art verbatim, a proportional-font
+    chat bubble destroys alignment. Detect the run and emit <pre>."""
+    md = (
+        "Here you go:\n"
+        "┌─ VAS Offerings ─────────────────────────┐\n"
+        "│ ID            Name           Price       │\n"
+        "│ VAS_DATA_1GB  Data Top-Up    3.00 SGD    │\n"
+        "└──────────────────────────────────────────┘"
+    )
+    out = render_chat_markdown(md)
+    assert "<pre><code>" in out
+    # Box characters preserved literally (HTML escape doesn't touch them).
+    assert "┌─ VAS Offerings" in out
+    assert "└─" in out
+    # Surrounding prose still rendered as a paragraph.
+    assert "<p>Here you go:</p>" in out
+
+
+def test_ascii_panel_pipe_borders_also_pre() -> None:
+    """Some Rich themes render side borders as ASCII `|`. The detector
+    fires on inner box-drawing chars too, so a fully-pipe-bordered
+    panel that contains `─` separators still ends up in <pre>."""
+    md = (
+        "│ Status: ACTIVE │\n"
+        "│ Type: Bundle   │\n"
+        "│ ──── Allowances ──── │\n"
+        "│ Data: 1024 MB  │"
+    )
+    out = render_chat_markdown(md)
+    assert "<pre><code>" in out
+    assert "Status: ACTIVE" in out
+
+
 def test_renderer_strips_thought_before_render() -> None:
     """Integration: the bubble renderer chain strips the leakage as
     part of render_chat_markdown — so neither the SSE frame nor the
