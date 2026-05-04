@@ -1,0 +1,164 @@
+name: operator_adds_roaming_plan
+description: |
+  v0.20 hero — catalog admin gains the `--data-roaming-mb` flag for
+  `bss admin catalog add-offering`. Closes the v0.17 admin gap (server-
+  side support for `data_roaming` shipped in v0.17, but the admin route
+  + bss-clients + CLI flag never did, so adding a roaming-included
+  plan required a SQL workaround until now).
+
+  This scenario exercises the new flag end-to-end via the LLM tool
+  surface (`catalog.add_offering` + `dataRoamingMb`):
+
+    1. Operator creates a fresh roaming-included offering through the
+       cockpit tool surface.
+    2. Asserts that 4 bundle_allowance rows landed atomically: data,
+       data_roaming, voice, sms — proving the flag wires through the
+       admin route → service → repository chain.
+    3. Customer signs up on the new offering, accumulates a roaming
+       balance, and burns it. After exhaustion, roaming usage is
+       rejected with `subscription.usage_rated.roaming_balance_required`
+       but the subscription stays `active` (additive doctrine —
+       roaming exhaustion does NOT cascade to home-data block).
+
+  Doctrine guarantees this scenario covers (greppable in CLAUDE.md):
+    - (v0.17+) Don't add a new event_type for roaming. Routing lives
+      in the rating consumer; mediation accepts roaming_indicator
+      as a per-event boolean.
+    - (v0.17+) Don't cascade roaming-balance exhaustion into home-data
+      exhaustion.
+    - (v0.20+) Roaming offerings use --data-roaming-mb on add-offering.
+
+tags: [hero, smoke, catalog, roaming, v0_20, deterministic]
+
+setup:
+  reset_operational_data: true
+  freeze_clock_at: "2026-05-15T10:00:00+00:00"
+
+variables:
+  offering_id: "PLAN_TEST_ROAM"
+  offering_name: "Test Plan + Roaming"
+  customer_email: "test-roaming@example.com"
+  customer_name: "Test Roaming Customer"
+  data_mb: 5120
+  voice_minutes: 100
+  sms_count: 100
+  roam_mb: 1024
+  price: "9.00"
+
+steps:
+  # ── 1. Catalog admin: add the offering with roaming included ───────
+  - name: add a roaming-included offering
+    action: catalog.add_offering
+    args:
+      offering_id: "{{ offering_id }}"
+      name: "{{ offering_name }}"
+      amount: "{{ price }}"
+      currency: "SGD"
+      data_mb: "{{ data_mb }}"
+      voice_minutes: "{{ voice_minutes }}"
+      sms_count: "{{ sms_count }}"
+      data_roaming_mb: "{{ roam_mb }}"
+
+  - name: offering is in the catalog at this point in time
+    assert:
+      tool: catalog.get_offering
+      args: {offering_id: "{{ offering_id }}"}
+      expect:
+        id: "{{ offering_id }}"
+        name: "{{ offering_name }}"
+
+  - name: bundle has all four allowance types incl. data_roaming
+    assert:
+      tool: catalog.get_offering
+      args: {offering_id: "{{ offering_id }}"}
+      expect:
+        bundleAllowance:
+          any_match:
+            allowance_type: data_roaming
+            quantity: "{{ roam_mb }}"
+
+  # ── 2. Customer signup on the new offering ─────────────────────────
+  - name: create the test customer
+    action: customer.create
+    args:
+      email: "{{ customer_email }}"
+      name: "{{ customer_name }}"
+    capture:
+      customer_id: "$.id"
+
+  - name: attest KYC (prebaked, deterministic)
+    action: customer.attest_kyc
+    args:
+      customer_id: "{{ customer_id }}"
+      provider: prebaked
+      document_type: NRIC
+      document_country: SG
+
+  - name: add a card on file
+    action: payment.add_card
+    args:
+      customer_id: "{{ customer_id }}"
+      token: "tok_test_roaming_card"
+      last4: "4242"
+      brand: visa
+      expires_at: "2030-12-31"
+
+  - name: place an order on the roaming offering
+    action: order.create
+    args:
+      customer_id: "{{ customer_id }}"
+      offering_id: "{{ offering_id }}"
+    capture:
+      order_id: "$.id"
+
+  - name: wait for activation
+    action: order.wait_until
+    args:
+      order_id: "{{ order_id }}"
+      target_state: completed
+      timeout_seconds: 30
+    capture:
+      subscription_id: "$.targetSubscriptionId"
+
+  # ── 3. Roaming behaviour: additive, doesn't block home data ────────
+  - name: subscription is active with the roaming bundle
+    assert:
+      tool: subscription.get_balance
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        balances:
+          any_match:
+            allowance_type: data_roaming
+            total: "{{ roam_mb }}"
+
+  - name: simulate roaming usage that exhausts the roaming bundle
+    action: usage.simulate
+    args:
+      subscription_id: "{{ subscription_id }}"
+      event_type: data
+      quantity: "{{ roam_mb }}"
+      unit: mb
+      roaming_indicator: true
+
+  - name: another roaming event is rejected (roaming bundle drained)
+    assert:
+      tool: subscription.get_balance
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        balances:
+          any_match:
+            allowance_type: data_roaming
+            consumed: "{{ roam_mb }}"
+      poll:
+        interval_ms: 200
+        timeout_seconds: 10
+
+  - name: subscription state is still active (roaming exhaustion is additive)
+    assert:
+      tool: subscription.get
+      args: {subscription_id: "{{ subscription_id }}"}
+      expect:
+        state: active
+
+teardown:
+  unfreeze_clock: true

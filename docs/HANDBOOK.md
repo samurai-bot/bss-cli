@@ -55,6 +55,7 @@ tags: [bss-cli, handbook, runbook, reference]
   - [7.12 Operator cockpit (v0.13)](#712-operator-cockpit-v013)
   - [7.13 Tracing & audit](#713-tracing--audit)
   - [7.14 Cockpit conversation rendering (v0.19)](#714-cockpit-conversation-rendering-v019)
+  - [7.15 Knowledge tool (v0.20)](#715-knowledge-tool-v020)
 - [Part 8 — Day-2 operations (runbooks)](#part-8--day-2-operations-runbooks)
   - [8.1 Catalog — add an offering (with roaming)](#81-catalog--add-an-offering-with-roaming)
   - [8.2 Catalog — run a promo](#82-catalog--run-a-promo)
@@ -74,6 +75,7 @@ tags: [bss-cli, handbook, runbook, reference]
   - [8.16 Snapshot regeneration (CLI golden files)](#816-snapshot-regeneration-cli-golden-files)
   - [8.17 Payment idempotency forensics](#817-payment-idempotency-forensics)
   - [8.18 Adding a tool to `customer_self_serve` (security review)](#818-adding-a-tool-to-customer_self_serve-security-review)
+  - [8.19 Knowledge indexer reindex / Postgres pgvector prereq](#819-knowledge-indexer-reindex--postgres-pgvector-prereq)
 - [Part 9 — Anti-patterns & doctrine ("Don'ts")](#part-9--anti-patterns--doctrine-donts)
 - [Part 10 — Reference appendix](#part-10--reference-appendix)
   - [10.1 Glossary](#101-glossary)
@@ -426,6 +428,14 @@ Loaded once at startup into a `TokenMap` (HMAC-SHA-256 hashed). Identity derived
 |---|---|---|
 | `BSS_COCKPIT_DIR` | Override for `.bss-cli/` directory inside the container | repo-relative (compose maps `/cockpit-state`) |
 
+#### Knowledge tool (v0.20+, operator_cockpit only)
+
+| Var | What | Default |
+|---|---|---|
+| `BSS_KNOWLEDGE_ENABLED` | Master switch for the cockpit's `knowledge.search` / `knowledge.get` tools. When `false`, tools are not registered and the citation guard relaxes | `true` |
+| `BSS_KNOWLEDGE_BACKEND` | `fts` (Postgres FTS only; default; zero deps beyond pgvector being installable) or `hybrid` (pgvector cosine + FTS re-rank) | `fts` |
+| `BSS_KNOWLEDGE_EMBEDDER` | When `BACKEND=hybrid`: `openrouter` (re-uses `BSS_LLM_API_KEY`) or `local` (sentence-transformers, offline) | `openrouter` |
+
 #### Test/scenario-only
 
 - `BSS_ONBOARD_ENV_PATH` — override `.env` path for the wizard
@@ -444,6 +454,7 @@ Loaded once at startup into a `TokenMap` (HMAC-SHA-256 hashed). Identity derived
 | `build` | `docker compose build` all service images |
 | `migrate` | `cd packages/bss-models && uv run alembic upgrade head` (sources `.env` first) |
 | `seed` | `uv run bss-seed` — 3 plans (incl. roaming buckets) + 4 VAS (incl. roaming) + 1000 MSISDNs + 1000 eSIM profiles |
+| `knowledge-reindex` | (v0.20+) Reindex doc corpus into `knowledge.doc_chunk` for the cockpit's `knowledge.search` tool. Idempotent (mtime + content_hash dedup) |
 | `reset-db` | DROP every BSS schema + re-migrate + re-seed (uses `BSS_ALLOW_ADMIN_RESET` paths) |
 | `test` | Per-package pytest sweep with PYTHONPATH isolation; excludes `integration` mark |
 | `fmt` | `ruff format .` |
@@ -877,6 +888,7 @@ Source: `orchestrator/bss_orchestrator/tools/_profiles.py`. **Coverage assertion
 | **Port-request (operator-only)** | `port_request.list`, `port_request.get`, `port_request.create`, `port_request.approve`, `port_request.reject` |
 | Provisioning ops | `provisioning.resolve_stuck`, `provisioning.retry_failed`, `provisioning.set_fault_injection` |
 | Test/scenario | `clock.advance`, `clock.freeze`, `clock.unfreeze`, `usage.simulate` |
+| **Knowledge (v0.20+)** | `knowledge.search`, `knowledge.get` — RAG over the indexed doc corpus. **Operator-cockpit only**; customer chat does NOT receive these by doctrine |
 
 > [!info] **The operator cannot call `*.mine` / `*_for_me` wrappers** — those are customer-chat-only (validated at startup; the profile rejects mine wrappers). The operator IS the trust principal here.
 
@@ -1381,6 +1393,55 @@ Both REPL and browser veneer resolve every `tool`-role row through `render_tool_
 - A tool with no renderer is fine — it just renders raw JSON. **Don't add markdown rendering as a "nicer" intermediate**; doctrine rules out exactly that.
 
 For the snapshot regeneration runbook see [§8.16](#816-snapshot-regeneration-cli-golden-files).
+
+### 7.15 Knowledge tool (v0.20)
+
+#### What it does
+
+The cockpit's `knowledge.search` / `knowledge.get` tools read the
+indexed doc corpus (this handbook + CLAUDE.md + runbooks +
+ARCHITECTURE.md + DECISIONS.md + TOOL_SURFACE.md + ROADMAP.md +
+CONTRIBUTING.md) and return rank-ordered hits. The cockpit's system
+prompt instructs the LLM to call `knowledge.search` for any how-to /
+what-is / is-this-allowed question outside the deterministic tool
+surface, and to cite the returned `anchor` + `source_path` in its
+reply.
+
+A **citation guard** (`_RE_KNOWLEDGE_CLAIM` regex at the REPL +
+browser cockpit) catches first-person handbook/doctrine claims and
+replaces un-cited ones with a templated fallback pointing at `bss
+admin knowledge search`. The guard is conservative — it catches the
+most common false-confident phrasings ("per the handbook", "according
+to doctrine", "the handbook says") and lets nuanced phrasings through
+(the search index is the primary defence).
+
+#### Search backends
+
+- `BSS_KNOWLEDGE_BACKEND=fts` (default) — Postgres FTS via
+  `tsvector` + GIN index. Zero deps beyond pgvector being installable
+  (the column exists; the index pays nothing when empty).
+- `BSS_KNOWLEDGE_BACKEND=hybrid` — pgvector cosine similarity over
+  embeddings, re-ranked by FTS. Requires `BSS_KNOWLEDGE_EMBEDDER`
+  (`openrouter` or `local`).
+
+#### Doctrine: customer chat does NOT get the knowledge tool
+
+The handbook + runbooks describe destructive operator flows, perimeter
+posture, KYC bypass flags, the cutover runbook for Stripe. None of
+that belongs in customer chat — leaking it to a prompt-injected LLM
+would teach it which flag to ask the operator about. The doctrine
+guard (`make doctrine-check` rule 15) catches any drift, and
+`validate_profiles()` enforces the exclusion at startup.
+
+#### Indexer is operator-initiated
+
+`bss admin knowledge reindex` (or `make knowledge-reindex`). No
+file-watcher in the cockpit container — the doc corpus changes with
+PRs and reindex runs on demand. Three idempotency layers (mtime cache
+→ content_hash dedup → deterministic chunk id) keep re-runs cheap.
+`--force` re-upserts all chunks.
+
+For the runbook see [§8.19](#819-knowledge-indexer-reindex--postgres-pgvector-prereq).
 
 ---
 
@@ -2337,6 +2398,49 @@ Symptoms: ownership-trip rate climbing; soak corpus consistently catching new pr
 ```python
 # Remove from TOOL_PROFILES["customer_self_serve"] only — leave the canonical tool.
 # The chat surface no longer offers it; CSR / cockpit retain access.
+```
+
+### 8.19 Knowledge indexer reindex / Postgres pgvector prereq
+
+The full procedure (image swap, BYOI one-liner, container bounce,
+troubleshooting) lives in
+[`docs/runbooks/knowledge-indexer.md`](runbooks/knowledge-indexer.md).
+Quick reference:
+
+```bash
+# First-time activation (after `make migrate` lands 0022 + 0023):
+make knowledge-reindex
+
+# After a docs PR merges:
+make knowledge-reindex
+# → ✓ reindex complete  files=25  added=2  updated=5  deleted=0  skipped=365
+
+# Force re-upsert (after a chunker/ranking change):
+bss admin knowledge reindex --force
+
+# Search debug surface (verifies citation quality):
+bss admin knowledge search "rotate cockpit token"
+bss admin knowledge search "prebaked KYC env flag" --kind doctrine
+```
+
+**Postgres prereq.** The migration's `CREATE EXTENSION IF NOT EXISTS
+vector` requires pgvector to be installable. Stock `postgres:16` and
+`postgres:16-alpine` images don't include it.
+
+- **Bundled mode:** swap `image: postgres:16-alpine` →
+  `image: pgvector/pgvector:pg16` (drop-in same-major; data dir
+  preserved; reversible).
+- **BYOI mode:** one-time `CREATE EXTENSION IF NOT EXISTS vector` on
+  the target Postgres before `make migrate`.
+
+After the swap, **bounce the BSS service containers** — their
+connection pools went stale during the Postgres restart and will
+500 on the first request otherwise:
+
+```bash
+docker compose restart \
+    catalog crm payment com som subscription mediation rating provisioning-sim \
+    portal-self-serve portal-csr
 ```
 
 ---
