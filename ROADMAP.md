@@ -55,37 +55,12 @@ renegotiated. The data model, tool surface, doctrine, and audit
 trail are stable. Tagging v1.0 without the SM-DP+ swap (the only
 remaining mock in the production-shape stack) is a doctrine break.
 
-## Phase 12 — Authentication & RBAC (staff-side retired in v0.13; customer-side concrete)
-
-The original Phase 12 plan covered both staff and customer auth.
-v0.13 split the question:
-
-- **Staff side (operator cockpit) — RETIRED.** v0.13 deletes the
-  v0.5 stub-login pattern and explicitly retires the OAuth/RBAC
-  ambition for the cockpit. The cockpit runs single-operator-by-
-  design behind a secure perimeter; `actor` from `.bss-cli/settings.toml`.
-  Multi-operator separation, if ever needed, is a multi-tenant
-  carve-out (one cockpit container per operator namespace), not a
-  login wall. DECISIONS 2026-05-01 documents the rationale.
-- **Customer side (self-serve portal) — concrete and partially
-  shipped.** v0.8 ships email + magic-link / OTP. v0.10 adds
-  step-up. v1.0 swaps email-OTP for real Singpass attestation
-  through the channel layer. No `services/auth`, no OAuth client
-  credentials JWT for service-to-service in v0.13's plan — the
-  v0.9 named-token model is the durable shape there.
-
-`auth_context.py` stays in every service. It carries `actor` /
-`tenant_id` / `service_identity`. The seam is preserved against a
-future need; the planned shape is no longer "Phase 12 fills these
-from a JWT" — it's "if a future deployment needs richer scoping,
-this is the place to add it".
-
 ## Future (speculative)
 
 These have come up enough to note, not enough to plan. Listed so contributors know they're on the radar; absence of a date means "no commitment".
 
 - **Postpaid (batch mediation plane).** Today's `services/mediation` is TMF635 online mediation: single-event ingest, block-at-edge, no batch CDR collection. Postpaid would mean a parallel mediation pipeline that ingests CDR files, enriches against subscriber data, runs rerating windows. Substantial new domain — would justify its own version and probably its own service (`services/mediation-batch/`).
-- **Multi-tenancy activation.** Every table has a `tenant_id` column already (seeded `'DEFAULT'`). Activating real multi-tenancy means routing requests by tenant claim, scoping queries per tenant, separate sequences per tenant. Phase 12+ once auth supports tenant claims.
+- **Multi-tenancy activation.** Every table has a `tenant_id` column already (seeded `'DEFAULT'`). Activating real multi-tenancy means routing requests by tenant claim, scoping queries per tenant, separate sequences per tenant. Pending a customer-side identity story (likely Singpass, see "Toward v1.0") that carries the tenant claim.
 - **Real CDR collection from network probes.** Currently out of scope per `CLAUDE.md` (channel/RAN concern). If a deployer ever wires a real network: a CDR-ingest service that parses Nokia NetAct / Ericsson EBM files into the existing `mediation.usage_event` shape.
 - **EKS / Aurora Tier-3 deployment path.** ARCHITECTURE.md sketches an AWS deployment ladder (Tier 1: ECS Fargate single-AZ; Tier 2: small MVNO; Tier 3: scaled MVNO on EKS + Aurora). Tier 1 is buildable from the current Dockerfiles. Tier 3 needs schema-per-service Postgres extraction (the boundary is already enforced; the split is mechanical).
 - **Customer-initiated chat in the self-serve portal.** Self-serve does signup, not support. A chat surface that escalates to a CSR is a real product, not a v0.x extension.
@@ -105,5 +80,6 @@ Restated from `CLAUDE.md` §"Scope boundaries" because new contributors keep ask
 - **Tax engines.** Inclusive SGD pricing. Vertex / Avalara are post-v0.x integrations.
 - **Regulatory reporting.** IMDA / MCMC reports are extraction jobs against `audit.domain_event`, not built-in BSS features.
 - **CRM-as-helpdesk.** Cases + tickets exist for telco state tracking, not as a Zendesk competitor. No SLA timer engine, no skill-based routing, no surveys.
+- **Staff-side OAuth / RBAC.** Retired in v0.13 (DECISIONS 2026-05-01). The operator cockpit runs single-operator-by-design behind a secure perimeter; `actor` from `.bss-cli/settings.toml`, descriptive not verified. Multi-operator separation, if ever needed, is a multi-tenant carve-out (one cockpit container per operator namespace), not a login wall. `auth_context.py` stays in every service for `actor` / `tenant_id` / `service_identity` propagation, but the seam exists for richer future scoping — not a deferred Phase 12.
 
 If you're surprised by a non-goal, open a `DECISIONS.md` entry before writing the feature. Half the value of this list is making it expensive to silently grow scope.
