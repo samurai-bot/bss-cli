@@ -60,7 +60,7 @@ steps:
     action: customer.attest_kyc
     args:
       customer_id: "{{ customer_id }}"
-      provider: myinfo
+      provider: prebaked
       attestation_token: "stub-signed-jwt-{{ run_id }}"
 
   # ─── Portal-named-identity write ────────────────────────────────────

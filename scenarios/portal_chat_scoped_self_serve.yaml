@@ -54,7 +54,7 @@ steps:
     action: customer.attest_kyc
     args:
       customer_id: "{{ customer_a }}"
-      provider: myinfo
+      provider: prebaked
       attestation_token: "stub-signed-jwt-a-{{ run_id }}"
 
   - name: A card on file
@@ -98,7 +98,7 @@ steps:
     action: customer.attest_kyc
     args:
       customer_id: "{{ customer_b }}"
-      provider: myinfo
+      provider: prebaked
       attestation_token: "stub-signed-jwt-b-{{ run_id }}"
 
   - name: B card on file
