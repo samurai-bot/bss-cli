@@ -27,88 +27,33 @@
 | **v0.17.0** | 2026-05-03 | Telco hygiene release. Three real-telco gaps closed: MNP (`crm.port_request` aggregate with FSM `requested → validated → completed | rejected`, operator-driven via REPL `/ports` + cockpit `port_request.*` tools), MSISDN replenishment (`bss inventory msisdn add-range` + `inventory.msisdn.pool_low` low-watermark event), and roaming as a product (new `data_roaming` allowance type — additive bucket; `VAS_ROAMING_1GB` top-up). `UsageEvent.roaming_indicator: bool` routes the rating decrement to the roaming balance; subscription-level block-on-exhaust independence (roaming exhaustion blocks roaming usage but not the subscription). Four new hero scenarios. Single Alembic migration (`0019`); no new doctrine pillars, no new auth model, no new external integrations. |
 | **v0.18.0** | 2026-05-04 | Automated subscription-renewal worker. In-process tick loop in the subscription service's lifespan polls `subscription.subscription` for due rows and dispatches the existing `renew()` (no logic duplication). New `last_renewal_attempted_at` column + `FOR UPDATE SKIP LOCKED` make the loop multi-replica safe by construction. New `subscription.renewal_skipped` audit event for blocked-overdue subs (cockpit dashboard signal). Admin endpoint `POST /admin-api/v1/renewal/tick-now` (gated by `BSS_ALLOW_ADMIN_RESET`) drives one deterministic sweep for scenarios. Worker can be disabled via `BSS_RENEWAL_TICK_SECONDS=0`. One new hero scenario asserts the worker fires on its own + idempotency holds across consecutive ticks. Single Alembic migration (`0020`); no new container, no new auth, no new external integration. |
 
-## Near-term (post-v0.6)
+## Toward v1.0 — what's left to swap
 
-These have spec drafts or are explicitly tracked in `DECISIONS.md`. Versioning is tentative.
+v0.16 shipped real Stripe (Checkout + webhook reconciliation).
+v0.15 shipped real Didit KYC (with prebaked dev-path preserved).
+v1.0 is what's left to make the platform production-real:
 
-### Phase 11 — Knowledge / RAG
-
-`knowledge.search` + `knowledge.get_document` tools backed by pgvector indexing of `docs/runbooks/`. Lets the LLM ground answers on the project's own operational knowledge — *"how do I rotate the BSS_API_TOKEN?"* returns the runbook content rather than a hallucinated procedure. Same Postgres instance, new `knowledge` schema. Documented as a Phase 11 backlog item since v0.1; the index + tools land in v0.7 (tentative) once a use case bigger than the runbook surface justifies it.
-
-### Phase 11 — Dockerfile workspace migration
-
-DECISIONS.md 2026-04-11 documented the per-service Dockerfile `sed` workaround. v0.6 evaluates the current `uv` version's workspace-in-Docker support empirically; the outcome is binary (migrate to a shared template OR re-defer with a fresh DECISIONS entry). If re-deferred in v0.6, the next attempt is post-v0.7.
-
-### Metrics-via-OTel decision
-
-v0.2 wired distributed tracing. Metrics (counters, histograms) currently go to structlog and aren't exported to a Prometheus / OTel-collector pipeline. Open question: do we add OTel metrics export alongside the existing trace export, or rely on Jaeger's span-derived metrics? Decision pending; tracked for v0.7+.
-
-### Billing read-layer (TMF678)
-
-DECISIONS.md 2026-04-13 deferred billing to v0.2. Skipped in v0.2-v0.5. Formally still planned: read-only view layer over `payment.payment_attempt`, statement generation, `/customerBill` TMF678 endpoints. Port 8009 reserved. No dunning, no credit extension — bundled-prepaid doesn't need them. Prioritized when an analytics/reporting use case asks for it.
-
-## v0.11.0 — Signup funnel goes direct
-
-`phases/V0_11_0.md`. Extends the v0.10 post-login carve-out to the
-signup funnel. Migrates `/signup/*` from orchestrator-mediated
-(LLM tool chain via SSE, ~85s wall time per signup) to direct API
-calls from route handlers (sub-second per step, deterministic
-chain). The chat surface becomes the only orchestrator-mediated
-route post-v0.11. The v0.4 demo artifact (agent log streaming
-during signup) is retired from the primary signup path; the
-educational story moves entirely to the LLM heroes
-(`llm_troubleshoot_blocked_subscription`, `portal_csr_blocked_diagnosis`)
-and the chat surface. URL shapes preserved. See DECISIONS
-2026-04-27 for the doctrine consolidation rationale.
-
-## v0.12.0 — Chat scoping, escalation, soak
-
-`phases/V0_12_0.md` (was V0_11 before the v0.11 signup-direct
-phase was committed). Scopes the AI chat to the logged-in
-customer via a `customer_self_serve` tool profile with
-`*.mine` wrappers, adds per-customer rate + monthly cost caps,
-auto-escalates the five out-of-scope categories (fraud, billing
-dispute, regulator complaint, identity recovery, deceased
-customer) into CSR cases with transcript hash, and runs a 14-day
-internal-beta soak. When v0.12 tags, the platform is
-production-shape modulo the three v1.0 swaps (real Singpass,
-real Stripe, real SM-DP+).
-
-## v1.0 — Real Singpass + real Stripe + real SM-DP+
-
-The version that swaps the three integrations v0.12 leaves
-mocked. v1.0 is **not** a new feature ladder; nothing in v0.7–v0.12
-is renegotiated. The data model, tool surface, doctrine, and audit
-trail are stable. The three swaps land behind the existing seams:
-
-- **Real Singpass attestation flow on the portal-side.** The
-  channel-layer eKYC vendor changes from a hardcoded
-  `KYC-PREBAKED-001` sentinel to a Singpass-issued signed JWT.
-  BSS-CLI's contract — receive a signed attestation, record it,
-  enforce `order.create.requires_verified_customer` — does not
-  change. The `customer.attest_kyc` tool keeps its signature.
-- **Real payment provider behind the existing COF UX.** The mock
-  tokenizer at `services/payment/app/services/mock_tokenizer.py`
-  is replaced with a Stripe (or equivalent) SDK call. PAN never
-  reaches BSS; tokens still stamp ``audit.domain_event``. The
-  `payment.add_card` / `payment.charge` surfaces, the COF-mandatory
-  policy, the no-retry doctrine — all unchanged.
+- **Real Singpass / channel-layer eKYC for SG market.** Didit
+  covers most jurisdictions; a Singapore-market deploy would
+  swap the channel-layer adapter for a Singpass-issued signed
+  JWT. BSS-CLI's contract (`customer.attest_kyc` accepts a signed
+  attestation, records the corroboration_id, enforces
+  `order.create.requires_verified_customer`) does not change.
 - **Real SM-DP+ integration for eSIM provisioning.** The
-  provisioning-sim's eSIM hooks are replaced with a real GSMA
-  SGP.22 SM-DP+ adapter. The `inventory.esim` pool, the
-  `subscription.get_esim_activation` LPA bundle, the activation
-  state machine — unchanged shape. The `ESIM_PROFILE_REARM` SOM
-  task ships then; v0.x's `/esim/<id>` view becomes the entry
-  point for the real re-arm flow.
+  v0.15 `EsimProvisioner` Protocol stub gets a real GSMA SGP.22
+  adapter. The `inventory.esim` pool, the
+  `subscription.get_esim_activation` LPA bundle, and the activation
+  state machine are all unchanged shape. The `ESIM_PROFILE_REARM`
+  SOM task ships then.
+- **Public soak.** Real-customer-cohort exposure with all three
+  real integrations live, monitored against the v0.12 soak gates
+  (zero ownership trips, p99 chat latency, no DB unbounded growth)
+  re-run on production data shapes.
 
-Plus a public soak: real-customer-cohort exposure with the three
-real integrations live, monitored against the v0.12 soak gates
-(zero ownership trips, p99 chat latency, no DB unbounded growth)
-re-run on production data shapes.
-
-`SHIP_CRITERIA.md` gets a v1.0 row when the three swaps land.
-The git tag `v0.12.0` is the platform v1.0 sits on; tagging v1.0
-without all three swaps is a doctrine violation.
+v1.0 is **not** a new feature ladder; nothing in v0.7–v0.18 is
+renegotiated. The data model, tool surface, doctrine, and audit
+trail are stable. Tagging v1.0 without the SM-DP+ swap (the only
+remaining mock in the production-shape stack) is a doctrine break.
 
 ## Phase 12 — Authentication & RBAC (staff-side retired in v0.13; customer-side concrete)
 

@@ -125,10 +125,9 @@ bss trace for-order ORD-0001
 - [`TOOL_SURFACE.md`](TOOL_SURFACE.md) — every LLM tool with arg shape and return shape
 - [`DECISIONS.md`](DECISIONS.md) — non-obvious architectural choices, append-only
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — *(new in v0.6)* phase discipline, DECISIONS pattern, test conventions
-- [`ROADMAP.md`](ROADMAP.md) — *(new in v0.6)* shipped + planned + speculative + non-goals
-- [`SHIP_CRITERIA.md`](SHIP_CRITERIA.md) — per-version ship checklist with measured numbers
-- [`phases/`](phases/) — phase-by-phase build plans (PHASE_01 → PHASE_10) and version specs (V0_2_0 → V0_12_0)
-- [`docs/runbooks/`](docs/runbooks/) — operational procedures (Jaeger BYOI, API token rotation, snapshot regen, ship-criteria re-measurement, chat ownership trip, chat caps, chat-escalated case triage, chat transcript retention, adding a tool to the chat profile)
+- [`ROADMAP.md`](ROADMAP.md) — shipped + speculative + non-goals
+- [`phases/`](phases/) — phase-by-phase build plans (PHASE_01 → PHASE_10) and version specs (V0_2_0 → V0_18_0)
+- [`docs/runbooks/`](docs/runbooks/) — operational procedures (Jaeger BYOI, API token rotation, snapshot regen, chat ownership trip, chat caps, chat-escalated case triage, chat transcript retention, adding a tool to the chat profile, MNP port flows)
 - [`soak/report-v0.12.md`](soak/report-v0.12.md) — output of the v0.12 14-day soak run
 
 ## Tracing with `bss trace`
