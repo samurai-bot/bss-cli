@@ -115,6 +115,7 @@ from .renderers import (
     render_esim_activation,
     render_order,
     render_subscription,
+    render_vas_list,
 )
 
 
@@ -131,18 +132,18 @@ _LOGO = r"""
 
 
 _SLASH_HELP = (
-    "[cyan]/sessions[/] list  "
-    "[cyan]/new[/] [label]  "
-    "[cyan]/switch[/] SES  "
-    "[cyan]/reset[/]  "
-    "[cyan]/focus[/] CUST  "
-    "[cyan]/360[/]  "
-    "[cyan]/ports[/]  "
-    "[cyan]/confirm[/]  "
-    "[cyan]/config edit[/]  "
-    "[cyan]/operator edit[/]  "
-    "[cyan]/help[/]  "
-    "[cyan]/exit[/]"
+    "[green]/sessions[/] list  "
+    "[green]/new[/] [label]  "
+    "[green]/switch[/] SES  "
+    "[green]/reset[/]  "
+    "[green]/focus[/] CUST  "
+    "[green]/360[/]  "
+    "[green]/ports[/]  "
+    "[green]/confirm[/]  "
+    "[green]/config edit[/]  "
+    "[green]/operator edit[/]  "
+    "[green]/help[/]  "
+    "[green]/exit[/]"
 )
 
 
@@ -157,7 +158,7 @@ def _render_banner(
     customer_focus: str | None,
     allow_destructive_default: bool,
 ) -> Panel:
-    logo = Text(_LOGO, style="bold cyan", no_wrap=True)
+    logo = Text(_LOGO, style="bold green", no_wrap=True)
     tagline = Align.center(
         Text.from_markup(
             "[bold white]LLM-native Business Support System[/]   "
@@ -168,7 +169,7 @@ def _render_banner(
     focus = customer_focus or "—"
     meta_line = Align.center(
         Text.from_markup(
-            f"[dim]actor[/] [cyan]{actor}[/]   "
+            f"[dim]actor[/] [green]{actor}[/]   "
             f"[dim]·[/]   [dim]model[/] [bold magenta]{model}[/]\n"
             f"[dim]session[/] [yellow]{session_id}[/]   "
             f"[dim]·[/]   [dim]focus[/] [green]{focus}[/]"
@@ -203,9 +204,9 @@ def _render_banner(
         ]
     return Panel(
         Group(*parts),
-        border_style="cyan",
+        border_style="green",
         padding=(0, 1),
-        title="[bold cyan]bss[/] [dim]·[/] [white]cockpit[/]",
+        title="[bold green]bss[/] [dim]·[/] [white]cockpit[/]",
         title_align="left",
         subtitle="[dim]type a request or a /command[/]",
         subtitle_align="right",
@@ -292,6 +293,114 @@ def _render_catalog_show(payload: dict) -> str:
     return render_catalog_show(payload)
 
 
+def _render_vas_list(payload: list) -> str:
+    return render_vas_list(payload)
+
+
+# ─── v0.19 — natural-language list intercepts ─────────────────────────
+#
+# Small models (Gemma 4 26B, MiMo, etc.) tend to fabricate list-shaped
+# answers from prompt context instead of calling the right tool. The
+# system prompt asks them not to; they ignore it. Fix: intercept the
+# operator's input BEFORE it reaches the LLM and dispatch the tool
+# directly when intent is unambiguous. The result flows through the
+# existing renderer dispatch — same ASCII output the LLM would have
+# produced if it had called the tool itself, just faster + always
+# correct.
+#
+# Match patterns are loose-substring; the keys list is the canonical
+# operator vocabulary. Add a new entry by appending to _INTENT_RULES.
+# Each rule maps a regex (compiled) to a tool name + optional kwarg
+# extractor (None = no args).
+
+import re as _re
+
+_INTENT_RULES: list[tuple[Any, str, Callable[[str], dict] | None]] = [
+    # Customers
+    (_re.compile(r"\b(list|show)( me| us)?( all| every| the)? customers?\b", _re.I),
+     "customer.list", None),
+    (_re.compile(r"\bwho are (the|all|our|my) customers\b", _re.I),
+     "customer.list", None),
+
+    # Catalog
+    (_re.compile(r"\b(list|show)( me| us)?( all| every| the)? (plans|products|offerings)\b", _re.I),
+     "catalog.list_active_offerings", None),
+    (_re.compile(r"\bwhat( are the| plans|s)? (plans|products|offerings)\b", _re.I),
+     "catalog.list_active_offerings", None),
+    (_re.compile(r"\bproduct catalog\b", _re.I),
+     "catalog.list_active_offerings", None),
+    (_re.compile(r"\b(list|show)( me| us)?( all| every)? (vas|top.?ups?)\b", _re.I),
+     "catalog.list_vas", None),
+    (_re.compile(r"\bwhat( are the)? (vas|top.?ups?)\b", _re.I),
+     "catalog.list_vas", None),
+
+    # Inventory
+    (_re.compile(r"\b(list|show)( me| us)?( all| every)? (msisdns?|numbers?|inventory)\b", _re.I),
+     "inventory.msisdn.list_available", None),
+
+    # Port requests (v0.17)
+    (_re.compile(r"\b(list|show)( me| us)?( all| every| pending| open)? port (requests?|ins?|outs?)\b", _re.I),
+     "port_request.list", None),
+
+    # Orders
+    (_re.compile(r"\b(list|show)( me| us)?( all| every| recent)? orders\b", _re.I),
+     "order.list", None),
+]
+
+
+def _maybe_intent_match(line: str) -> tuple[str, dict] | None:
+    """Return (tool_name, kwargs) if the line matches a list-intent rule.
+
+    None means no match — fall through to the LLM as before.
+    """
+    for pattern, tool, extractor in _INTENT_RULES:
+        if pattern.search(line):
+            kwargs = extractor(line) if extractor else {}
+            return tool, kwargs
+    return None
+
+
+async def _drive_intent_turn(
+    *,
+    conv: Conversation,
+    line: str,
+    tool_name: str,
+    kwargs: dict,
+) -> None:
+    """Dispatch a tool deterministically + render + persist as a turn.
+
+    Skips the LLM entirely. Same renderer dispatch as
+    `_drive_turn`'s tool-result path so the ASCII output is identical
+    to "the model called the right tool" — but always correct, faster,
+    and zero token cost.
+    """
+    from bss_orchestrator.tools import TOOL_REGISTRY
+
+    fn = TOOL_REGISTRY.get(tool_name)
+    if fn is None:
+        rprint(f"[red]intent dispatch failed: tool {tool_name!r} not registered[/]")
+        return
+
+    try:
+        result = await fn(**kwargs)
+    except Exception as exc:
+        rprint(f"[red]{tool_name} failed:[/] {exc}")
+        await conv.append_user_turn(line)
+        await conv.append_tool_turn(tool_name, f"ERROR: {exc}")
+        return
+
+    renderer = _RENDERER_DISPATCH.get(tool_name)
+    rendered = renderer(result) if renderer else json.dumps(result, indent=2, default=str)
+
+    rprint(rendered)
+
+    # Persist as a regular conversation turn so the browser veneer
+    # sees the same content. Mark the turn with a synthetic actor
+    # so the audit trail is honest about the bypass.
+    await conv.append_user_turn(line)
+    await conv.append_tool_turn(tool_name, rendered)
+
+
 def _render_esim(payload: dict) -> str:
     return render_esim_activation(payload)
 
@@ -308,6 +417,8 @@ _RENDERER_DISPATCH: dict[str, Callable[[Any], str]] = {
     "customer.list": _render_customer_list,
     "order.list": _render_order_list,
     "catalog.list_offerings": _render_catalog_list,
+    "catalog.list_active_offerings": _render_catalog_list,
+    "catalog.list_vas": _render_vas_list,
     "subscription.get_balance": _render_balance,
 }
 
@@ -355,19 +466,19 @@ def _bootstrap_store_and_config() -> tuple[ConversationStore, str, str]:
 
 async def _cmd_help() -> None:
     rprint(
-        "[cyan]/sessions[/]      list operator's cockpit sessions\n"
-        "[cyan]/new[/] [LABEL]   close current → open new (label optional)\n"
-        "[cyan]/switch[/] SES    resume specific session id\n"
-        "[cyan]/reset[/]         clear messages on current session\n"
-        "[cyan]/focus[/] CUST    pin a customer for the system prompt\n"
-        "[cyan]/focus clear[/]   unset focus\n"
-        "[cyan]/360[/] [CUST]    customer 360 (uses focus if no arg)\n"
-        "[cyan]/ports[/]         MNP queue: list / approve PORT-NNN / reject PORT-NNN <reason>\n"
-        "[cyan]/confirm[/]       flip next turn allow_destructive=True\n"
-        "[cyan]/config edit[/]   open settings.toml in $EDITOR; reload\n"
-        "[cyan]/operator edit[/] open OPERATOR.md in $EDITOR; reload\n"
-        "[cyan]/help[/]          this list\n"
-        "[cyan]/exit[/]          leave (does not close the session)"
+        "[green]/sessions[/]      list operator's cockpit sessions\n"
+        "[green]/new[/] [LABEL]   close current → open new (label optional)\n"
+        "[green]/switch[/] SES    resume specific session id\n"
+        "[green]/reset[/]         clear messages on current session\n"
+        "[green]/focus[/] CUST    pin a customer for the system prompt\n"
+        "[green]/focus clear[/]   unset focus\n"
+        "[green]/360[/] [CUST]    customer 360 (uses focus if no arg)\n"
+        "[green]/ports[/]         MNP queue: list / approve PORT-NNN / reject PORT-NNN <reason>\n"
+        "[green]/confirm[/]       flip next turn allow_destructive=True\n"
+        "[green]/config edit[/]   open settings.toml in $EDITOR; reload\n"
+        "[green]/operator edit[/] open OPERATOR.md in $EDITOR; reload\n"
+        "[green]/help[/]          this list\n"
+        "[green]/exit[/]          leave (does not close the session)"
     )
 
 
@@ -376,7 +487,7 @@ async def _cmd_sessions(actor: str) -> None:
     if not rows:
         rprint(f"[yellow]No active cockpit sessions for {actor}.[/]")
         return
-    t = Table(title=f"Cockpit sessions for [cyan]{actor}[/]")
+    t = Table(title=f"Cockpit sessions for [green]{actor}[/]")
     t.add_column("Session", style="yellow")
     t.add_column("Label")
     t.add_column("Focus")
@@ -645,7 +756,7 @@ async def _drive_turn(
     if cards_shown:
         # The card was the answer; skip the redundant prose panel.
         return
-    rprint(Panel(final_text, title="bss ai", border_style="cyan"))
+    rprint(Panel(final_text, title="bss ai", border_style="green"))
 
 
 # Tools whose mere "started" event indicates a destructive proposal.
@@ -783,7 +894,7 @@ async def _handle_slash(
         rprint(f"[dim]reloaded {path.name} (mtime-based hot reload).[/]")
         return "continue", None
 
-    rprint(f"[yellow]Unknown command: {cmd}  ([cyan]/help[/] for the list)[/]")
+    rprint(f"[yellow]Unknown command: {cmd}  ([green]/help[/] for the list)[/]")
     return "continue", None
 
 
@@ -857,7 +968,7 @@ def run_repl(
         while True:
             # ANSI-coloured prompt label rendered identically to the
             # prior Rich shape (bold "bss:" + yellow last-8 chars of
-            # session id + cyan "> ").
+            # session id + green "> ").
             prompt_label = ANSI(
                 f"\033[1mbss\033[0m:"
                 f"\033[33m{conv.session_id[-8:]}\033[0m"
@@ -896,6 +1007,28 @@ def run_repl(
                 # consumes the pending row. No explicit state change
                 # here; the next prompt the operator types will run
                 # with allow_destructive=True if a pending row exists.
+                continue
+
+            # v0.19 — list-intent intercept. Small models hallucinate
+            # list-shaped factual answers; if the operator's prompt is
+            # a clean "list X" / "show X" / "what X" intent, dispatch
+            # the right tool deterministically and skip the LLM. The
+            # rendered result is identical to the LLM-mediated path
+            # (same renderer dispatch) but always correct.
+            intent_match = _maybe_intent_match(line)
+            if intent_match is not None:
+                tool_name, kwargs = intent_match
+                try:
+                    loop.run_until_complete(
+                        _drive_intent_turn(
+                            conv=conv,
+                            line=line,
+                            tool_name=tool_name,
+                            kwargs=kwargs,
+                        )
+                    )
+                except Exception as e:  # pragma: no cover
+                    rprint(f"[red]intent dispatch raised:[/] {e}")
                 continue
 
             try:

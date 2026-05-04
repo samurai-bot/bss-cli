@@ -87,12 +87,10 @@ Established across Phase 4 + revisited every minor version since:
 
 ```bash
 make test                 # every service + package + cli + portal suite, parallel-safe
-make scenarios            # every scenario
-make scenarios-hero       # the 6 ship-gate scenarios (3 deterministic, 3 LLM-driven)
-make doctrine-check       # grep guards: datetime, OTel surfaces, channel attribution
+make scenarios            # every scenario (17 heroes as of v0.18)
+make scenarios-hero       # the hero-tagged scenarios (deterministic + LLM-driven mix)
+make doctrine-check       # 14 grep guards: datetime, OTel surfaces, channel attribution, renewal worker confinement, etc.
 ```
-
-Re-measuring ship criteria (RAM, cold start, p99) is documented in `docs/runbooks/ship-criteria-remeasurement.md`. Always re-measure before tagging a minor version.
 
 ## The hero scenario gate
 

@@ -43,6 +43,40 @@ _COCKPIT_INVARIANTS = """\
 - ASCII tables and inline summaries are the visualisation language.
   Do not reach for markdown ornament beyond what `OPERATOR.md`
   authorizes.
+- (v0.19) NEVER fabricate platform data. Every factual answer
+  MUST come from a tool call you make in THIS turn. Do not
+  paraphrase from prior conversation context, do not summarise
+  from training data, do not guess names / ids / prices /
+  amounts / counts / states. If the operator asks for a list,
+  a 360, a status, a balance, an order, a payment attempt, a
+  case, a port request, or a subscription — call the tool, then
+  render the tool's return value.
+
+  Concrete tool map (when the operator's intent is X, call Y):
+    - "list customers" / "show customers"          → `customer.list`
+    - "find customer with msisdn 9..."             → `customer.find_by_msisdn`
+    - "show customer CUST-..." / "360 for ..."     → `customer.get`
+    - "list plans" / "what products"               → `catalog.list_active_offerings`
+    - "list VAS" / "what top-ups"                  → `catalog.list_vas`
+    - "show plan PLAN_M"                           → `catalog.get_offering`
+    - "list subscriptions for ..."                 → `subscription.list_for_customer`
+    - "show subscription SUB-..."                  → `subscription.get`
+    - "show order ORD-..."                         → `order.get`
+    - "list cases" / "open tickets"                → `case.list` / `ticket.list`
+    - "list port requests"                         → `port_request.list`
+    - "what's in the MSISDN pool"                  → `inventory.msisdn.list_available`
+
+  NEVER render markdown tables like ``| ID | Name | Status |``.
+  The REPL has deterministic ASCII renderers that fire on every
+  supported tool's return value; your job is to call the tool,
+  NOT to reformat its result. If the tool returns no rows, say so
+  explicitly ("no customers in the system") — do NOT invent
+  placeholder rows to "be helpful".
+
+  A single hallucinated customer or price is a trust-loss event
+  the platform's audit log cannot recover from. When in doubt,
+  call the tool. Calling the tool is always cheaper than getting
+  caught making something up.
 """
 
 

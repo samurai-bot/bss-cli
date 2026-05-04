@@ -31,11 +31,11 @@ def add_card(
     if provider != "mock":
         rprint(
             f"[red]ERROR[/] [bold]bss payment add-card[/] is dev-only and requires "
-            f"[cyan]BSS_PAYMENT_PROVIDER=mock[/] (currently {provider!r}).\n"
+            f"[green]BSS_PAYMENT_PROVIDER=mock[/] (currently {provider!r}).\n"
             f"In stripe mode, customers add cards via the self-serve portal "
-            f"([cyan]Stripe Elements[/]).\n"
+            f"([green]Stripe Elements[/]).\n"
             f"For test data, use the portal with Stripe test cards "
-            f"(e.g. [cyan]4242 4242 4242 4242[/])."
+            f"(e.g. [green]4242 4242 4242 4242[/])."
         )
         raise typer.Exit(code=2)
 
@@ -124,8 +124,8 @@ def cutover(
     """
     if not invalidate_mock_tokens:
         rprint(
-            "[yellow]nothing to do[/] — pass [cyan]--invalidate-mock-tokens[/] "
-            "to run the cutover (or [cyan]--dry-run[/] to preview)."
+            "[yellow]nothing to do[/] — pass [green]--invalidate-mock-tokens[/] "
+            "to run the cutover (or [green]--dry-run[/] to preview)."
         )
         raise typer.Exit(code=0)
 
@@ -149,7 +149,7 @@ def cutover(
         f"[yellow]Found {count} active payment_methods with token_provider='mock'.[/]"
     )
     if dry_run:
-        rprint("[cyan]Dry run — no writes performed.[/]")
+        rprint("[green]Dry run — no writes performed.[/]")
         for pm_id in preview.get("candidate_ids", []):
             rprint(f"  would invalidate: {pm_id}")
         raise typer.Exit(code=0)
@@ -169,7 +169,7 @@ def cutover(
         f"[green]Invalidated {result.get('invalidated_count', 0)} payment methods.[/]"
     )
     rprint(
-        "[dim]Each row emitted a [cyan]payment_method.cutover_invalidated[/] "
+        "[dim]Each row emitted a [green]payment_method.cutover_invalidated[/] "
         "event for the email-template flow to pick up.[/]"
     )
 

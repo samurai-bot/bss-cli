@@ -222,12 +222,17 @@ async def customer_attest_kyc(
 ) -> dict[str, Any]:
     """Record a signed KYC attestation from the channel layer. BSS-CLI does
     NOT run eKYC itself — the mobile app / web portal completes the vendor
-    flow (Myinfo, Jumio, Onfido) and passes the signed token here. The
-    attestation unlocks ``order.create``.
+    flow and passes the signed token here. The attestation unlocks
+    ``order.create``.
 
     Args:
         customer_id: Customer ID with the CUST- prefix (opaque suffix).
-        provider: Attestation provider slug, e.g. ``"myinfo"``, ``"jumio"``.
+        provider: Attestation provider slug. v0.15+ ships two: ``"didit"``
+            (real production via Didit's hosted UI + signed-webhook
+            corroboration) and ``"prebaked"`` (dev / scenarios — stub
+            attestation accepted only when ``BSS_KYC_ALLOW_PREBAKED=true``
+            outside production). Other vendors (Singpass, Jumio, Onfido)
+            would integrate at the channel layer with their own slug.
         attestation_token: Signed JWT from the vendor. Never fabricate.
 
     Returns:

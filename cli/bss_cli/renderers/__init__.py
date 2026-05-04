@@ -16,7 +16,7 @@ Plus two simpler table renderers (ticket list, prov tasks).
 """
 
 from .case import render_case
-from .catalog import render_catalog, render_catalog_show
+from .catalog import render_catalog, render_catalog_show, render_vas_list
 from .customer import render_customer_360
 from .esim import render_esim_activation
 from .order import render_order
@@ -28,6 +28,7 @@ __all__ = [
     "render_case",
     "render_catalog",
     "render_catalog_show",
+    "render_vas_list",
     "render_customer_360",
     "render_esim_activation",
     "render_order",

@@ -46,7 +46,7 @@ steps:
     action: customer.attest_kyc
     args:
       customer_id: "{{ customer_id }}"
-      provider: myinfo
+      provider: prebaked
       attestation_token: "cockpit-stub-jwt-{{ run_id }}"
 
   - name: add card on file

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture v0.6 portal screenshots via playwright headless.
+"""Capture v0.18+ portal screenshots via playwright headless.
 
 Run from repo root:
     uv run python docs/screenshots/capture_portals.py
@@ -8,10 +8,18 @@ Prereqs (see CAPTURE.md):
     uv pip install playwright
     uv run python -m playwright install chromium
 
-The script assumes:
-    - portal-self-serve healthy on http://localhost:9001
-    - portal-csr healthy on http://localhost:9002
-    - DB reset and seeded so customer fixture names match
+The script targets the post-v0.13 surfaces:
+
+* portal-self-serve (port 9001) — public /welcome, /plans
+* portal-csr (port 9002) — v0.13 cockpit (no auth wall);
+  sessions index at /, individual session at /cockpit/<id>
+
+The v0.5 CSR stub-login + AI-escalation case fixtures are gone; the
+v1.0-baseline captures are limited to surfaces that work without
+hand-seeded fixtures. Authenticated post-login self-serve dashboard
+captures (the customer's line cards + the chat widget) require a
+verified `bss_portal_session` cookie — left as a follow-up that
+needs the seed-helper documented in CAPTURE.md.
 """
 
 from __future__ import annotations
@@ -20,7 +28,6 @@ import os
 import shutil
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 from playwright.sync_api import Page, sync_playwright
@@ -30,11 +37,6 @@ VIEWPORT = {"width": 1280, "height": 800}
 
 
 def _resolve_chromium() -> str | None:
-    """If ``playwright install chromium`` failed for this OS (e.g.
-    Ubuntu 26.04 isn't on the supported list), fall back to an
-    already-cached chromium under ``~/.cache/ms-playwright``.
-    Set ``PLAYWRIGHT_CHROMIUM_EXECUTABLE`` to override. Returns
-    ``None`` to let playwright pick its bundled default."""
     explicit = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE")
     if explicit and Path(explicit).is_file():
         return explicit
@@ -56,137 +58,82 @@ def _optimize(path: Path) -> None:
         print(f"  optimized: {path.name}")
 
 
-def _self_serve_signup(page: Page) -> None:
-    """v0.12 — capture the direct-write signup form + confirmation.
+# ── Public marketing surfaces ────────────────────────────────────────
 
-    Pre-condition (see CAPTURE.md): the page's Context carries a
-    verified-but-unlinked ``bss_portal_session`` cookie so the
-    /signup/* routes pass ``requires_verified_email``. The linked
-    identity carries the customer's email; the form is minimal
-    (name + phone + card_pan; KYC pre-baked, msisdn pre-picked).
-    """
-    page.goto("http://localhost:9001/signup/PLAN_M?msisdn=90000000")
-    page.wait_for_selector("button.form-submit", timeout=10_000)
-    page.fill('input[name="name"]', "Ck Demo")
-    page.fill('input[name="phone"]', "+6590001234")
+
+def _welcome(page: Page) -> None:
+    """Public landing — /welcome. Shows the brand bar + CTAs."""
+    page.goto("http://localhost:9001/welcome")
+    page.wait_for_selector(".page-title", timeout=10_000)
     page.wait_for_timeout(400)
-    out = OUT / "portal_self_serve_signup_v0_12.png"
-    page.screenshot(path=str(out), full_page=False)
-    print(f"captured: {out.name}")
-    _optimize(out)
-    page.click("button.form-submit")
-    try:
-        page.wait_for_url("**/confirmation/*", timeout=60_000)
-        page.wait_for_timeout(800)
-        out2 = OUT / "portal_self_serve_confirmation_v0_12.png"
-        page.screenshot(path=str(out2), full_page=False)
-        print(f"captured: {out2.name}")
-        _optimize(out2)
-    except Exception as exc:
-        print(f"  WARN: confirmation capture skipped — {exc}")
-
-
-def _csr_360_and_ask(page: Page) -> None:
-    """Login, find a customer with a blocked subscription, capture 360 + ask."""
-    # Stub login
-    page.goto("http://localhost:9002/login")
-    page.fill('input[name="username"]', "csr-demo-001")
-    page.fill('input[name="password"]', "anything")
-    page.click('button[type="submit"]')
-    page.wait_for_url("**/search", timeout=10_000)
-
-    # Find a customer — search by 'Demo' which matches scenario fixtures.
-    page.fill('form.search-form input[name="q"]', "Demo")
-    page.locator('form.search-form button').click()
-    # First result row link
-    page.wait_for_selector('table.search-results', timeout=10_000)
-    first = page.locator('table.search-results tbody tr a').first
-    first.click()
-    page.wait_for_url("**/customer/CUST-*", timeout=10_000)
-    page.wait_for_timeout(800)
-
-    out = OUT / "portal_csr_360_v0_5.png"
+    out = OUT / "portal_self_serve_welcome_v0_18.png"
     page.screenshot(path=str(out), full_page=False)
     print(f"captured: {out.name}")
     _optimize(out)
 
-    # Submit an ask — capture mid-stream
-    page.fill(
-        'form.ask-form input[name="question"]',
-        "Why is their data not working? Fix it if you can.",
-    )
-    page.click('form.ask-form button[type="submit"]')
-    page.wait_for_url("**/customer/CUST-*?session=*", timeout=10_000)
-    # Pause long enough for several agent events to land but before final
-    page.wait_for_timeout(8_000)
-    out2 = OUT / "portal_csr_agent_midstream_v0_5.png"
-    page.screenshot(path=str(out2), full_page=False)
-    print(f"captured: {out2.name}")
-    _optimize(out2)
 
-
-def _self_serve_dashboard_with_fab(page: Page) -> None:
-    """v0.12 — dashboard with the floating "Chat with us" pill visible
-    bottom-right. Requires the customer to be logged in via portal_auth.
-    Use a freshly-seeded test session (see CAPTURE.md) so the
-    dashboard renders one or more line cards.
-    """
-    page.goto("http://localhost:9001/")
-    page.wait_for_selector(".chat-fab", timeout=10_000)
+def _plans(page: Page) -> None:
+    """Public plan picker — /plans. v0.17 added the Roaming row;
+    PLAN_S shows '—' (alignment), PLAN_M shows '500 mb', PLAN_L
+    shows '2 GB'."""
+    page.goto("http://localhost:9001/plans")
+    page.wait_for_selector(".plan-grid", timeout=10_000)
     page.wait_for_timeout(400)
-    out = OUT / "portal_self_serve_dashboard_v0_12.png"
+    out = OUT / "portal_self_serve_plans_v0_18.png"
     page.screenshot(path=str(out), full_page=False)
     print(f"captured: {out.name}")
     _optimize(out)
 
 
-def _self_serve_chat_widget(page: Page) -> None:
-    """v0.12 — chat widget popup open over the dashboard, with a
-    short conversation: one user question + the assistant's reply.
-    Drives a real LLM round-trip so the bubble content is realistic;
-    waits for the SSE 'done' status before snapshotting."""
-    page.goto("http://localhost:9001/")
-    page.wait_for_selector(".chat-fab", timeout=10_000)
-    page.click(".chat-fab")
-    page.wait_for_selector(".chat-widget-popup", timeout=5_000)
-    page.fill(
-        '.chat-widget-form textarea[name="message"]',
-        "what plans do you have?",
-    )
-    page.click('.chat-widget-form button[type="submit"]')
-    # Wait for status: done — the SSE stream finishes when the
-    # streaming bubble's status pill swaps to ``dot done``.
-    page.wait_for_selector(".chat-status .dot.done", timeout=30_000)
+# ── Cockpit (v0.13+) ─────────────────────────────────────────────────
+
+
+def _cockpit_sessions_index(page: Page) -> None:
+    """v0.13 cockpit landing — list of recent sessions, no login wall."""
+    page.goto("http://localhost:9002/")
+    page.wait_for_selector("body", timeout=10_000)
     page.wait_for_timeout(600)
-    out = OUT / "portal_self_serve_chat_widget_v0_12.png"
+    out = OUT / "portal_csr_cockpit_sessions_v0_18.png"
     page.screenshot(path=str(out), full_page=False)
     print(f"captured: {out.name}")
     _optimize(out)
 
 
-def _csr_case_with_transcript(page: Page) -> None:
-    """v0.12 — CSR's case detail page rendering the chat-transcript
-    panel for an AI-opened escalation case. Pre-condition: at least
-    one case exists with chat_transcript_hash set (run the
-    portal_chat_escalation_to_case hero scenario before capturing)."""
-    page.goto("http://localhost:9002/login")
-    page.fill('input[name="username"]', "csr-demo-001")
-    page.fill('input[name="password"]', "anything")
-    page.click('button[type="submit"]')
-    page.wait_for_url("**/search", timeout=10_000)
-    # Find the customer who has the AI-escalated case.
-    page.fill('form.search-form input[name="q"]', "Escalation")
-    page.locator('form.search-form button').click()
-    page.wait_for_selector('table.search-results', timeout=10_000)
-    page.locator('table.search-results tbody tr a').first.click()
-    page.wait_for_url("**/customer/CUST-*", timeout=10_000)
-    # Click the first AI-escalated case in the cases panel.
-    case_link = page.locator('a[href^="/case/CASE-"]').first
-    case_link.click()
-    page.wait_for_url("**/case/CASE-*", timeout=10_000)
-    page.wait_for_selector(".chat-transcript-section", timeout=5_000)
-    page.wait_for_timeout(400)
-    out = OUT / "portal_csr_case_transcript_v0_12.png"
+def _cockpit_session_detail(page: Page) -> None:
+    """v0.13 cockpit session view — opens the session with the MOST
+    messages so the screenshot shows the agent transcript in action.
+
+    Querying DB directly via the audit endpoint would be cleaner but
+    requires the BSS_API_TOKEN; instead we scrape the sessions index
+    for the highest "N messages" badge.
+    """
+    page.goto("http://localhost:9002/")
+    page.wait_for_selector("body", timeout=10_000)
+    # Each conversation card carries text like "13 messages" or
+    # "(empty conversation)" / "0 messages". Prefer the row with the
+    # highest visible message count — playwright JS handles the parse.
+    href = page.evaluate(
+        """() => {
+            const links = Array.from(document.querySelectorAll('a[href^="/cockpit/SES-"]'));
+            let best = null, bestCount = -1;
+            for (const link of links) {
+                const m = (link.textContent || "").match(/(\\d+)\\s*messages?/);
+                const count = m ? parseInt(m[1], 10) : 0;
+                if (count > bestCount) {
+                    bestCount = count;
+                    best = link.getAttribute("href");
+                }
+            }
+            return best;
+        }"""
+    )
+    if not href:
+        print("  WARN: no cockpit sessions to capture; skipping detail")
+        return
+    page.goto(f"http://localhost:9002{href}")
+    page.wait_for_selector("body", timeout=10_000)
+    page.wait_for_timeout(600)
+    out = OUT / "portal_csr_cockpit_session_v0_18.png"
     page.screenshot(path=str(out), full_page=False)
     print(f"captured: {out.name}")
     _optimize(out)
@@ -203,32 +150,16 @@ def main() -> int:
         ctx = browser.new_context(viewport=VIEWPORT, color_scheme="dark")
         page = ctx.new_page()
 
-        try:
-            _self_serve_signup(page)
-        except Exception as exc:
-            print(f"FAIL self-serve signup: {exc}", file=sys.stderr)
-
-        try:
-            _csr_360_and_ask(page)
-        except Exception as exc:
-            print(f"FAIL csr ask: {exc}", file=sys.stderr)
-
-        # v0.12 — chat surface captures. These need a session cookie
-        # already present (see CAPTURE.md for the seed-helper pattern).
-        try:
-            _self_serve_dashboard_with_fab(page)
-        except Exception as exc:
-            print(f"FAIL self-serve dashboard fab: {exc}", file=sys.stderr)
-
-        try:
-            _self_serve_chat_widget(page)
-        except Exception as exc:
-            print(f"FAIL self-serve chat widget: {exc}", file=sys.stderr)
-
-        try:
-            _csr_case_with_transcript(page)
-        except Exception as exc:
-            print(f"FAIL csr case transcript: {exc}", file=sys.stderr)
+        for fn in (
+            _welcome,
+            _plans,
+            _cockpit_sessions_index,
+            _cockpit_session_detail,
+        ):
+            try:
+                fn(page)
+            except Exception as exc:
+                print(f"FAIL {fn.__name__}: {exc}", file=sys.stderr)
 
         browser.close()
     return 0
