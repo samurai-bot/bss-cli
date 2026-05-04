@@ -10,7 +10,7 @@ from bss_orchestrator.clients import get_clients
 from rich import print as rprint
 
 from .._runtime import run_async
-from ..renderers import render_catalog
+from bss_cockpit.renderers import render_catalog
 
 app = typer.Typer(help="Browse the product catalog (TMF620).", no_args_is_help=True)
 

@@ -18,21 +18,30 @@ Plus two simpler table renderers (ticket list, prov tasks).
 from .case import render_case
 from .catalog import render_catalog, render_catalog_show, render_vas_list
 from .customer import render_customer_360
+from .dispatch import RENDERER_DISPATCH, render_tool_result
 from .esim import render_esim_activation
+from .inventory import render_msisdn_count, render_msisdn_list
 from .order import render_order
+from .port_request import render_port_request_get, render_port_request_list
 from .prov import render_prov_tasks
 from .subscription import render_subscription
 from .ticket import render_ticket
 
 __all__ = [
+    "RENDERER_DISPATCH",
     "render_case",
     "render_catalog",
     "render_catalog_show",
-    "render_vas_list",
     "render_customer_360",
     "render_esim_activation",
+    "render_msisdn_count",
+    "render_msisdn_list",
     "render_order",
+    "render_port_request_get",
+    "render_port_request_list",
     "render_prov_tasks",
     "render_subscription",
     "render_ticket",
+    "render_tool_result",
+    "render_vas_list",
 ]

@@ -216,30 +216,23 @@ def render_chat_markdown(text: str) -> str:
             i = j
             continue
 
-        # Pipe table: header row + separator + ≥0 body rows.
-        if _RE_TABLE_ROW.match(line) and i + 1 < len(lines) and \
-                _RE_TABLE_ROW.match(lines[i + 1]) and \
-                _is_table_separator(lines[i + 1]):
-            _flush_blocks()
-            header_cells = _split_table_row(line)
-            i += 2  # skip header + separator
-            body_rows: list[list[str]] = []
-            while i < len(lines) and _RE_TABLE_ROW.match(lines[i]):
-                body_rows.append(_split_table_row(lines[i]))
-                i += 1
-            head_html = (
-                "<thead><tr>"
-                + "".join(f"<th>{_render_inline(c)}</th>" for c in header_cells)
-                + "</tr></thead>"
-            )
-            body_html = "<tbody>" + "".join(
-                "<tr>"
-                + "".join(f"<td>{_render_inline(c)}</td>" for c in row)
-                + "</tr>"
-                for row in body_rows
-            ) + "</tbody>"
-            out.append(f"<table class='chat-table'>{head_html}{body_html}</table>")
-            continue
+        # v0.19+ — pipe-table grammar is INTENTIONALLY not rendered.
+        #
+        # Doctrine: tool results render through `bss_cockpit.renderers`
+        # as deterministic ASCII inside <pre>. The LLM's assistant
+        # bubble is commentary, never the source of truth for tabular
+        # data. If a model produces `| col | col |` here, it is either
+        # (a) summarising data it should not be summarising, or (b)
+        # fabricating. Either way, surfacing it as a real <table>
+        # rewards the wrong behaviour and is indistinguishable from a
+        # hallucination from the operator's perspective.
+        #
+        # The table grammar falls through to the paragraph branch
+        # below; pipes render as the literal characters they are, so
+        # the operator can SEE the LLM tried to fall back. That
+        # visibility is the point. A future opt-in for safe contexts
+        # can re-introduce table rendering — but only for content
+        # that did NOT originate from an LLM bubble.
 
         # Heading.
         m_h = _RE_HEADING.match(line)

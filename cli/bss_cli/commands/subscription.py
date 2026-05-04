@@ -10,7 +10,7 @@ from bss_orchestrator.clients import get_clients
 from rich import print as rprint
 
 from .._runtime import run_async
-from ..renderers import render_esim_activation, render_subscription
+from bss_cockpit.renderers import render_esim_activation, render_subscription
 
 app = typer.Typer(help="Manage subscriptions + VAS.", no_args_is_help=True)
 

@@ -8,19 +8,69 @@ here covers the two remaining route files:
   exercised at the route layer with real Postgres).
 * ``routes/case.py`` — read-only deep link, exercised in
   ``test_routes_case.py`` against a mocked CRM client.
+
+Every test that boots ``create_app`` needs ``BSS_DB_URL`` populated —
+the cockpit lifespan refuses to start without it (the doctrine is
+"perimeter-trusted but never lies about its dependencies"). The
+``_ensure_bss_db_url`` autouse fixture below reads ``.env`` once at
+collection time and stamps the env-var for the whole test session
+so individual tests don't have to remember.
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from bss_csr.config import Settings
 from bss_csr.main import create_app
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+class _DbSettings(BaseSettings):
+    """Single-purpose loader for ``BSS_DB_URL`` from the repo ``.env``.
+
+    Mirrors the helper that ``test_cockpit_routes.py`` defined locally
+    — extracted to conftest so every CSR portal test inherits the
+    same env-bootstrap. No test file should redefine this.
+    """
+
+    BSS_DB_URL: str = ""
+
+    model_config = SettingsConfigDict(
+        env_file=_REPO_ROOT / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _ensure_bss_db_url(monkeypatch) -> None:
+    """Populate ``BSS_DB_URL`` from ``.env`` for every test in this dir.
+
+    The cockpit lifespan refuses to boot without ``BSS_DB_URL`` (see
+    portals/csr/bss_csr/main.py:lifespan). Tests that simply
+    construct ``TestClient(create_app(...))`` would otherwise crash
+    on startup with a ``RuntimeError`` even if they never touch the
+    DB. Skip if neither the process env nor ``.env`` provides it —
+    the cockpit-routes tests then short-circuit via their own
+    skip-aware ``db_url`` fixture, while pure-grep doctrine tests
+    that don't boot the app are unaffected.
+    """
+    if os.environ.get("BSS_DB_URL"):
+        return
+    url = _DbSettings().BSS_DB_URL
+    if url:
+        monkeypatch.setenv("BSS_DB_URL", url)
 
 
 # ─── Fake CRM client (used only by test_routes_case.py) ──────────────

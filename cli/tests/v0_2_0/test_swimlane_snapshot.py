@@ -20,7 +20,7 @@ import json
 import os
 from pathlib import Path
 
-from bss_cli.renderers.trace import render_swimlane
+from bss_cockpit.renderers.trace import render_swimlane
 
 _HERE = Path(__file__).resolve().parent
 _FIXTURE = _HERE / "fixtures" / "signup_trace.json"

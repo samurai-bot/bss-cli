@@ -15,11 +15,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from conftest import assert_snapshot  # type: ignore[import-not-found]
 
-from bss_cli.renderers.catalog import render_catalog, render_catalog_show
-from bss_cli.renderers.customer import render_customer_360
-from bss_cli.renderers.esim import render_esim_activation
-from bss_cli.renderers.order import render_order
-from bss_cli.renderers.subscription import render_subscription
+from bss_cockpit.renderers.catalog import render_catalog, render_catalog_show
+from bss_cockpit.renderers.customer import render_customer_360
+from bss_cockpit.renderers.esim import render_esim_activation
+from bss_cockpit.renderers.order import render_order
+from bss_cockpit.renderers.subscription import render_subscription
 
 
 # ─── Catalog ─────────────────────────────────────────────────────────

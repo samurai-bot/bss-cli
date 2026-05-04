@@ -10,7 +10,7 @@ from bss_orchestrator.clients import get_clients
 from rich import print as rprint
 
 from .._runtime import run_async
-from ..renderers import render_ticket
+from bss_cockpit.renderers import render_ticket
 
 app = typer.Typer(help="Manage trouble tickets (TMF621).", no_args_is_help=True)
 

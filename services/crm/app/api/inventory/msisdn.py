@@ -6,6 +6,7 @@ from app.dependencies import get_inventory_service
 from app.schemas.internal.inventory import (
     AddRangeRequest,
     AddRangeResponse,
+    MsisdnPoolCountResponse,
     MsisdnResponse,
     to_msisdn_response,
 )
@@ -24,6 +25,22 @@ async def list_msisdns(
 ) -> list[MsisdnResponse]:
     rows = await svc.list_msisdns(status=status, prefix=prefix, limit=limit, offset=offset)
     return [to_msisdn_response(r) for r in rows]
+
+
+@router.get("/msisdn/count", response_model=MsisdnPoolCountResponse)
+async def count_msisdns(
+    prefix: str | None = None,
+    svc: InventoryService = Depends(get_inventory_service),
+) -> MsisdnPoolCountResponse:
+    """Group-by-status pool count, optionally narrowed by prefix.
+
+    The list endpoint truncates at ``limit`` (default 20) without
+    revealing the underlying total — operators ask "is that all?"
+    after a list and the LLM has no honest way to answer. This endpoint
+    is the source of truth for that question.
+    """
+    counts = await svc.count_msisdns(prefix=prefix)
+    return MsisdnPoolCountResponse(prefix=prefix, **counts)
 
 
 @router.get("/msisdn/{msisdn}", response_model=MsisdnResponse)

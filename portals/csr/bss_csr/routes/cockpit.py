@@ -42,10 +42,12 @@ from bss_cockpit import (
     build_cockpit_prompt,
     current as cockpit_config_current,
 )
+from bss_cockpit.renderers import render_tool_result
 from bss_orchestrator.clients import get_clients
 from bss_orchestrator.session import (
     AgentEventError,
     AgentEventFinalMessage,
+    AgentEventToolCallCompleted,
     AgentEventToolCallStarted,
     astream_once,
 )
@@ -109,6 +111,152 @@ _DESTRUCTIVE_PREFIXES = (
 def _is_destructive(tool_name: str) -> bool:
     return any(
         tool_name == p or tool_name.startswith(p) for p in _DESTRUCTIVE_PREFIXES
+    )
+
+
+# Tools whose return value is rendered as a deterministic ASCII card
+# inside the cockpit. When ANY of these fire on a turn, the LLM's
+# subsequent assistant bubble is commentary — never the answer. If
+# the LLM produces a structural recap (matching the heuristics in
+# ``_looks_like_tool_recap`` below), the bubble is replaced with a
+# short acknowledgement so the operator never sees a duplicate.
+#
+# Source of truth is the renderer dispatch — keep this in sync by
+# importing the dispatch table.
+from bss_cockpit.renderers import RENDERER_DISPATCH as _RENDERED_TOOLS
+
+import re as _re
+
+# Heuristics that flag an assistant bubble as a tool-result mimic.
+# Each pattern is conservative — only fires when the bubble is clearly
+# trying to reproduce structured tool output, not when the LLM is
+# legitimately commenting (e.g., "I've topped up your line — your
+# balance now shows X").
+_RE_RECAP_PRE_TAG = _re.compile(r"^\s*<pre[^>]*>", _re.IGNORECASE)
+_RE_RECAP_HEADERED = _re.compile(
+    # A keyword from the canonical Customer 360 / Subscription
+    # vocabulary, followed by ``:`` or ``|`` — possibly wrapped in
+    # ``**bold**``. Two or more occurrences anywhere in the text is
+    # the threshold; below that, a single mention is legitimate
+    # commentary, not a recap.
+    r"\b(?:Customer|Status|KYC|Since|Contact|"
+    r"Subscriptions?|Open\s+Cases?|Recent\s+Interactions?|MSISDN|Plan|"
+    r"State|Activated|Renews|Bundle|Balance)\s*[:\|]",
+    _re.IGNORECASE,
+)
+
+
+def _looks_like_tool_recap(text: str) -> bool:
+    """True when the assistant bubble is mimicking a tool result.
+
+    The doctrine in ``_COCKPIT_INVARIANTS`` forbids re-rendering tool
+    output, but small models (gemma 4 26b in particular) ignore the
+    instruction. This heuristic catches the resulting bubble before
+    it reaches the operator's eye:
+
+    * Bubble starts with a literal ``<pre>`` tag — the LLM is trying
+      to format ASCII inside HTML, which is a clear mimic signal.
+    * Bubble contains multiple structured "Header:" / "**Header:**"
+      lines drawn from the canonical Customer 360 / Subscription
+      vocabulary. Two-or-more is the threshold so a single
+      "Status: active" mention in commentary doesn't false-positive.
+    """
+    if not text:
+        return False
+    if _RE_RECAP_PRE_TAG.search(text):
+        return True
+    matches = _RE_RECAP_HEADERED.findall(text)
+    return len(matches) >= 2
+
+
+def _suppress_tool_recap(
+    text: str, captured_tool_calls: list[dict[str, Any]]
+) -> str:
+    """Replace a tool-recap bubble with a short acknowledgement.
+
+    Only fires when (a) at least one tool with a registered renderer
+    fired this turn — so the operator already saw the canonical
+    output above the bubble — AND (b) the bubble matches the recap
+    heuristics. Otherwise returns ``text`` unchanged.
+    """
+    if not captured_tool_calls:
+        return text
+    rendered_tool_fired = any(
+        call.get("name") in _RENDERED_TOOLS for call in captured_tool_calls
+    )
+    if not rendered_tool_fired:
+        return text
+    if not _looks_like_tool_recap(text):
+        return text
+    return "(see above)"
+
+
+def _render_tool_row_as_pre(
+    tool_name: str, body: str, *, include_pill: bool = True
+) -> str:
+    """Render a tool-row body as a unified ``<details open>`` block.
+
+    Single source of truth for tool-result HTML on the browser
+    surface — used by both the page-load transcript path and the SSE
+    stream. Same shape on both wires; same look-and-feel for the
+    operator. Doctrine: tool results never render as markdown / table
+    / paraphrase; they render as monospace ASCII inside <pre>.
+
+    Block shape::
+
+        <details class="tool-row" open>
+          <summary class="tool-row-summary">
+            <span class="tool-row-icon">≈</span>
+            <span class="tool-row-name">tool.name</span>
+          </summary>
+          <pre class="tool-row-body">…rendered ASCII…</pre>
+        </details>
+
+    The block opens by default — the operator's most recent question
+    just landed; the answer should be immediately visible. Older
+    blocks in scrollback can be manually collapsed by the operator.
+    The summary is clickable; the chevron is implicit via the
+    <details> default UA toggle, restyled in CSS.
+
+    ``body`` is whatever was persisted in ``cockpit.message`` —
+    pre-rendered ASCII (REPL stored the rendered card), raw JSON
+    (tool with no registered renderer), or — preferred — ASCII
+    produced by ``render_tool_result`` at stream time. We re-attempt
+    rendering when the body looks like JSON so old conversations
+    rendered before the unified renderer landed retroactively get
+    nice cards on page reload.
+
+    Newlines in the rendered ASCII are encoded as ``&#10;`` numeric
+    character references so the resulting HTML is a single physical
+    line. SSE's wire format requires the ``data:`` field be one line,
+    and a raw ``\\n`` would split the frame at the wrong boundary and
+    drop every line of the card after the first. Inside ``<pre>``,
+    the browser parses ``&#10;`` back to a real LF and renders it as
+    a line break, so the visible output is identical to the REPL's.
+
+    ``include_pill`` is kept for source compatibility but no longer
+    affects output — both paths emit the same block now (the
+    surrounding stream logic decides whether to suppress separate
+    pill events).
+    """
+    import html as _html
+
+    rendered: str
+    looks_like_json = body.lstrip().startswith(("{", "["))
+    if looks_like_json and tool_name:
+        rendered = render_tool_result(tool_name, body) or body
+    else:
+        rendered = body
+    escaped = _html.escape(rendered).replace("\n", "&#10;")
+    name_html = _html.escape(tool_name or "tool")
+    return (
+        '<details class="tool-row" open>'
+        '<summary class="tool-row-summary">'
+        '<span class="tool-row-icon">≈</span>'
+        f'<span class="tool-row-name">{name_html}</span>'
+        '</summary>'
+        f'<pre class="tool-row-body">{escaped}</pre>'
+        '</details>'
     )
 
 
@@ -351,6 +499,13 @@ async def cockpit_thread(
         }
         if row.role == "assistant":
             block["body_html"] = render_chat_markdown(row.content)
+        elif row.role == "tool":
+            # Same helper as the SSE stream — both paths produce the
+            # same <details open> block, same typography, same
+            # collapse/expand affordance. No two-rulesets drift.
+            block["body_html"] = _render_tool_row_as_pre(
+                row.tool_name or "", row.content
+            )
         else:
             block["body_html"] = row.content
         blocks.append(block)
@@ -624,6 +779,33 @@ async def cockpit_events(
                         "message", render_tool_pill(event.name)
                     )
                     continue
+                if isinstance(event, AgentEventToolCallCompleted):
+                    # v0.19+ Option-1 doctrine — every tool result that
+                    # has a registered renderer flows through the shared
+                    # `render_tool_result`, gets persisted as a `tool`
+                    # row, and is emitted to the browser as a <pre>
+                    # block. The LLM's subsequent assistant bubble is
+                    # commentary, not the answer; the answer is here.
+                    raw = event.result_full or event.result or ""
+                    rendered = render_tool_result(event.name, raw)
+                    if rendered is None:
+                        # No registered renderer — surface the raw JSON
+                        # verbatim. The LLM is forbidden from "helpfully"
+                        # reformatting it; any markdown table coming
+                        # back as the assistant bubble is a doctrine bug
+                        # that this code path makes visible.
+                        rendered = raw
+                    if rendered:
+                        await conv.append_tool_turn(event.name, rendered)
+                        # Suppress the duplicate pill — the stream
+                        # already emitted one via ToolCallStarted.
+                        yield _sse_frame(
+                            "message",
+                            _render_tool_row_as_pre(
+                                event.name, rendered, include_pill=False
+                            ),
+                        )
+                    continue
                 if isinstance(event, AgentEventError):
                     text = "Sorry — something went wrong. Please try again."
                     await conv.append_assistant_turn(
@@ -636,6 +818,13 @@ async def cockpit_events(
                     return
                 if isinstance(event, AgentEventFinalMessage):
                     text = strip_reasoning_leakage(event.text or "") or "(no reply)"
+                    # Defense-in-depth against gemma's tool-recap habit:
+                    # if the bubble mimics structured tool output and a
+                    # rendered tool fired this turn, replace with a
+                    # short acknowledgement. The deterministic ASCII
+                    # card already showed; the operator doesn't need
+                    # the LLM's prose copy.
+                    text = _suppress_tool_recap(text, captured_tool_calls)
                     asst_id = await conv.append_assistant_turn(
                         text, tool_calls_json=captured_tool_calls or None
                     )

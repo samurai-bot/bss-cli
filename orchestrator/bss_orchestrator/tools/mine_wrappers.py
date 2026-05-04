@@ -580,10 +580,11 @@ async def case_open_for_me(
     the case is opened. The case row carries the hash so a CSR can
     retrieve the conversation via ``case.show_transcript_for``.
 
-    After calling this tool, tell the customer plainly: "I've
-    escalated this to a human agent — you'll hear back within 24
-    hours via email at <email>." Do not promise a faster turnaround;
-    do not attempt the resolution yourself.
+    After calling this tool, tell the customer plainly: "I've opened
+    a case for this. A member of our team will follow up via email
+    at <email>." Do NOT promise a specific turnaround time or hour
+    count — case-update emails are operator-driven today, not
+    platform-automated. Do NOT attempt the resolution yourself.
 
     Args:
         category: One of the five non-negotiable categories or

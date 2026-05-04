@@ -114,10 +114,18 @@ def test_tool_pill_shape() -> None:
     assert "≈" in out  # pill icon
 
 
-# ── v0.13.1 extended block-level: tables, headings, ol, code fences ──
+# ── v0.19+ Option-1 doctrine — pipe tables NEVER render ──────────────
+#
+# Tool results render through `bss_cockpit.renderers` as deterministic
+# ASCII inside <pre>. The LLM's assistant bubble is commentary; if it
+# emits `| col | col |` that is either a fabrication or a reformat of
+# data we already rendered authoritatively elsewhere — neither case
+# warrants real <table> HTML. The pipes fall through to the paragraph
+# branch and render as literal characters so the operator can see the
+# LLM tried to fall back. That visibility is the point.
 
 
-def test_pipe_table_renders_as_html_table() -> None:
+def test_pipe_table_does_not_render_as_html_table() -> None:
     md = (
         "| Plan | Price | Data |\n"
         "|------|-------|------|\n"
@@ -125,32 +133,31 @@ def test_pipe_table_renders_as_html_table() -> None:
         "| PLAN_M | $10 | 5 GB |\n"
     )
     out = render_chat_markdown(md)
-    assert "<table" in out
-    assert "<thead>" in out and "<th>Plan</th>" in out
-    assert "<tbody>" in out
-    assert "<td>PLAN_S</td>" in out and "<td>$5</td>" in out
-    # Pipes shouldn't leak as literal characters.
-    assert "| Plan |" not in out
+    assert "<table" not in out
+    assert "<thead>" not in out and "<tbody>" not in out
+    # Pipes survive verbatim — operator can SEE the LLM tried to fall
+    # back to a markdown table, which is the doctrine signal.
+    assert "| Plan |" in out
 
 
-def test_table_separator_with_alignment_markers() -> None:
+def test_table_separator_alignment_markers_render_as_text() -> None:
     md = (
         "| Col | Right |\n"
         "|:----|------:|\n"
         "| a | b |\n"
     )
     out = render_chat_markdown(md)
-    assert "<table" in out
-    assert "<th>Col</th>" in out
-    assert "<td>a</td>" in out
+    assert "<table" not in out
+    # Whole thing renders as an inline paragraph — the operator sees
+    # what the LLM produced, no HTML magic.
+    assert "| Col |" in out
 
 
-def test_table_with_inline_markdown_in_cells() -> None:
-    md = (
-        "| Plan | Notes |\n"
-        "|------|-------|\n"
-        "| **PLAN_S** | uses `5 GB` |\n"
-    )
+def test_pipe_text_inline_markdown_still_safe() -> None:
+    """Inline ``**bold**`` / `code` STILL renders inside paragraph
+    text even when pipes are present. Only the table grammar is
+    suppressed; ordinary inline emphasis continues to work."""
+    md = "Plan **PLAN_S** uses `5 GB` per cycle."
     out = render_chat_markdown(md)
     assert "<strong>PLAN_S</strong>" in out
     assert "<code>5 GB</code>" in out
@@ -201,10 +208,9 @@ def test_separator_row_alone_is_treated_as_paragraph() -> None:
 
 
 def test_assistant_bubble_strips_inner_newlines_for_sse() -> None:
-    """SSE data: must be one line; tables embed newlines in the
-    rendered HTML for human readability. The bubble wrapper strips
-    them at the wire layer."""
-    md = "| a | b |\n|---|---|\n| 1 | 2 |"
+    """SSE data: must be one line; the bubble wrapper strips embedded
+    newlines at the wire layer regardless of input shape."""
+    md = "first line\n\nsecond line\n\nthird line"
     bubble = render_assistant_bubble(md)
     assert "\n" not in bubble
 

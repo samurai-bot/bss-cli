@@ -10,7 +10,7 @@ from bss_orchestrator.clients import get_clients
 from rich import print as rprint
 
 from .._runtime import run_async
-from ..renderers import render_case
+from bss_cockpit.renderers import render_case
 
 app = typer.Typer(help="Manage cases (CRM).", no_args_is_help=True)
 

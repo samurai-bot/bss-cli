@@ -43,6 +43,18 @@ class InventoryClient(BSSClient):
         )
         return resp.json()
 
+    async def count_msisdns(
+        self, *, prefix: str | None = None
+    ) -> dict[str, Any]:
+        """GET /inventory-api/v1/msisdn/count — group-by-status pool count."""
+        params: dict[str, Any] = {}
+        if prefix:
+            params["prefix"] = prefix
+        resp = await self._request(
+            "GET", "/inventory-api/v1/msisdn/count", params=params
+        )
+        return resp.json()
+
     async def get_msisdn(self, msisdn: str) -> dict[str, Any]:
         """GET /inventory-api/v1/msisdn/{msisdn}."""
         resp = await self._request(

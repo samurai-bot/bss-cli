@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import re
 
-from bss_cli.renderers.trace import render_swimlane
+from bss_cockpit.renderers.trace import render_swimlane
 
 
 def _make_span(

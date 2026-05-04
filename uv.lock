@@ -337,6 +337,7 @@ dependencies = [
     { name = "bss-models" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "qrcode" },
     { name = "sqlalchemy" },
     { name = "structlog" },
 ]
@@ -354,6 +355,7 @@ requires-dist = [
     { name = "bss-models", editable = "packages/bss-models" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pydantic-settings", specifier = ">=2.0" },
+    { name = "qrcode", specifier = ">=7.4" },
     { name = "sqlalchemy", specifier = ">=2.0" },
     { name = "structlog", specifier = ">=24.0" },
 ]
