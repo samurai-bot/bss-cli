@@ -1,61 +1,77 @@
 # Capturing screenshots for `docs/screenshots/`
 
-> v0.6 introduced `docs/screenshots/` as the canonical home for committed PNGs that the README references. This file documents how each one is captured so a future maintainer can re-do them cleanly. Naming convention: `<feature>_v0_X.png`. All captures use a freshly-reset operational DB so fixture names match (`Ck Demo`, `portal-demo-*`, `csr-demo-*`).
+> v0.18 baseline. The committed PNGs are what the README links to.
+> Naming convention: `<surface>_v0_X.png`. Re-capture when the
+> rendered surface meaningfully changes (banner, layout, brand
+> elements, version stamp).
 
-## Prerequisites
+## Web surfaces (Playwright)
 
 ```bash
-# Reset DB so fixture names line up
-uv run bss admin reset-operational-data
-make seed
-
-# Bring everything up
+# Bring the stack up
 docker compose up -d --wait
 
-# Dev-only deps for capture (not installed by default)
+# Dev-only deps (not in the workspace lock)
 uv pip install playwright
 uv run python -m playwright install chromium
-# Terminal captures: install scrot or maim on the host (apt install scrot)
+
+# Capture
+uv run python docs/screenshots/capture_portals.py
 ```
 
-## Portal screenshots (playwright, headless)
+The script captures four surfaces and writes them next to itself:
 
-Run `python docs/screenshots/capture_portals.py` from the repo root. The script drives each portal with playwright headless, captures at 1280×800, writes PNGs into `docs/screenshots/`, and optimizes via `oxipng -o 4` if available.
+| File | URL | Notes |
+|---|---|---|
+| `portal_self_serve_welcome_v0_18.png` | `localhost:9001/welcome` | Public landing — brand bar + Sign in / Browse plans CTAs |
+| `portal_self_serve_plans_v0_18.png` | `localhost:9001/plans` | Three-card plan picker; v0.17 Roaming row visible (PLAN_S "—", PLAN_M 500 mb, PLAN_L 2 GB) |
+| `portal_csr_cockpit_sessions_v0_18.png` | `localhost:9002/` | Cockpit sessions index — "Hello, operator", recent conversations |
+| `portal_csr_cockpit_session_v0_18.png` | `localhost:9002/cockpit/SES-...` | Live cockpit conversation — chosen at runtime as the session with the most messages |
 
-Captures produced:
+Re-run any time the running stack reflects the surface you want.
+The captures use a 1280×800 viewport, dark color scheme, headless
+chromium from `~/.cache/ms-playwright` (override via
+`PLAYWRIGHT_CHROMIUM_EXECUTABLE`).
 
-- `portal_self_serve_signup_v0_12.png` *(replaces the deleted v0_4 capture)* — direct-write signup form (linked-identity flow): minimal fields (name + phone + card pre-fill + pre-baked KYC). The capture context carries a verified-but-unlinked session cookie so `requires_verified_email` passes; without that, /signup/* redirects to login.
-- `portal_self_serve_confirmation_v0_12.png` *(replaces the deleted v0_4 capture)* — confirmation page with eSIM QR PNG. Continues from the signup capture's redirect.
-- `portal_csr_360_v0_5.png` — customer 360 view with a blocked subscription highlighted. Pre-blocks SUB-0001 via `usage.simulate` so the state shows.
-- `portal_csr_agent_midstream_v0_5.png` — operator's ask form submitted, agent log mid-stream. Snapshots the agent log between `tool_started` and `tool_completed` for a visible streaming state.
-- `portal_self_serve_dashboard_v0_12.png` — dashboard with the floating "Chat with us" pill bottom-right.
-- `portal_self_serve_chat_widget_v0_12.png` — chat popup widget opened over the dashboard, one full conversation turn rendered.
-- `portal_csr_case_transcript_v0_12.png` — CSR case-detail page showing the "Chat transcript" panel for an AI-opened escalation case.
-
-The v0.12 dashboard / chat-widget captures need a verified linked-customer session in `portal_auth.session` before they run; the v0.12 signup capture needs an unlinked-but-verified session (no customer_id yet). Both are easiest to seed via `bss_portal_auth.test_helpers.create_test_session`. The CSR transcript capture additionally needs at least one case with `chat_transcript_hash` set — run the `portal_chat_escalation_to_case` hero scenario before capturing. The `bss_trace_swimlane_v0_2.png` was re-cropped at v0.12 (1280×1200, top-half of the original ~2200px capture) to keep the README scroll length sensible.
-
-## Terminal screenshots (manual — needs a display)
-
-These two need a real terminal session:
-
-- `bss_trace_swimlane_v0_2.png` — output of `bss trace for-order ORD-0001` after running `customer_signup_and_exhaust`.
-- `bss_repl_ask_v0_1.png` *(optional)* — output of `bss ask "Show me the most recent customer."`.
-
-Capture procedure on the host:
+## Trace swimlane (terminal `bss trace`)
 
 ```bash
-# 120-column dark-theme terminal
-resize -s 40 120     # if using xterm; alacritty/kitty have similar
-# Run the command, then capture the visible terminal area
-scrot -s docs/screenshots/bss_trace_swimlane_v0_2.png   # interactive selection
-oxipng -o 4 docs/screenshots/bss_trace_swimlane_v0_2.png
+uv run python docs/screenshots/capture_trace.py
 ```
 
-Aim for **<300 KB per PNG** post-`oxipng`. Strip URL bars (browser captures) by feeding playwright the `viewport_size` only — see the script.
+Produces `bss_trace_swimlane_v0_2.png`. Hasn't changed since v0.2;
+re-capture if the renderer meaningfully evolves.
+
+## Terminal REPL banner (`bss_repl_v0_19.jpg`)
+
+The Rich-rendered REPL banner can't be captured by Playwright (no
+DOM) and headless terminal capture loses the ANSI rendering. Capture
+this manually:
+
+1. Open a wide terminal (~2000×1300 px — ghostty / kitty / iterm2 /
+   alacritty all work).
+2. `uv run bss`.
+3. Run a few representative queries so the banner sits above real
+   conversation output:
+   ```
+   list all products
+   how about the VASes?
+   show me more details about PLAN_L please
+   ```
+4. Take a window screenshot and save as
+   `docs/screenshots/bss_repl_v0_19.jpg` (PNG also fine — terminals
+   produce either; the v0.19 capture is JPEG @ 3200×2092 ~510 KB
+   which renders crisply on github.com).
+
+The README links this filename verbatim; commit at the same path.
 
 ## Discipline
 
-- **No real customer data.** Every capture uses scenario-fixture names (`Ck Demo`, `portal-demo-{run_id}`, `csr-demo-001`).
-- **Dark theme only.** Light theme captures are out of scope for v0.6.
-- **Deterministic state.** Always reset DB first; never capture against a long-running stack with accumulated state.
-- **Commit the PNGs.** `docs/screenshots/*.png` are part of the repo, not external links. README references them via relative paths.
+- **No real customer data.** Captures use scenario-fixture names
+  (`Trace Demo` / `Ck Demo` / `portal-demo-*`).
+- **Dark theme only.**
+- **Commit the PNGs.** `docs/screenshots/*.png` are part of the repo,
+  not external links.
+- **Optimize.** If `oxipng` is on PATH, the capture script runs
+  `oxipng -o 4` automatically; install it for a 30-50% size win
+  (`apt install oxipng`).
