@@ -9,6 +9,7 @@ dependencies = [
     "bss-cockpit",
     "bss-knowledge",
     "bss-orchestrator",
+    "bss-portal-auth",
     "bss-telemetry",
     "bss-middleware",
     "typer>=0.12",
@@ -40,6 +41,7 @@ bss-clock = { workspace = true }
 bss-cockpit = { workspace = true }
 bss-knowledge = { workspace = true }
 bss-orchestrator = { workspace = true }
+bss-portal-auth = { workspace = true }
 bss-telemetry = { workspace = true }
 bss-middleware = { workspace = true }
 

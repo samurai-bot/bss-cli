@@ -36,17 +36,21 @@ setup:
 
 steps:
   # ── 1. Confirm the corpus is alive ─────────────────────────────────
-  - name: knowledge.search returns hits for a handbook question
+  - name: knowledge.search returns the right top hit for a handbook question
     assert:
       tool: knowledge.search
       args:
         query: "rotate cockpit token"
         k: 3
       expect:
-        hits:
-          any_match:
-            source_path: "docs/HANDBOOK.md"
-            kind: handbook
+        # The runner's `any_match` operator is top-level only and the
+        # result shape is `{hits: [...], query: "..."}`, so we assert
+        # against the top-ranked hit by index. The smoke against the
+        # live corpus showed `rotate cockpit token` → HANDBOOK §8.4
+        # at rank 0.841 (the cockpit runbook is rank-2).
+        hits.0.source_path: "docs/HANDBOOK.md"
+        hits.0.kind: handbook
+        hits.0.anchor: "84-rotate-api-tokens"
 
   # ── 2. LLM hand-over: ask a how-to question ────────────────────────
   - name: LLM consults knowledge tool and cites a handbook anchor
