@@ -134,8 +134,18 @@ async def knowledge_search(
 
     Returns:
         ``{"hits": [{"anchor", "source_path", "heading_path", "kind",
-        "snippet"}, ...]}``. Empty hits = no relevant content; tell the
-        operator explicitly rather than answering from training data.
+        "snippet", "content"}, ...], "query": "..."}``.
+
+        IMPORTANT: read ``content`` to answer, NOT ``snippet``.
+        ``snippet`` is a short ts_headline excerpt for ranking display.
+        ``content`` is the FULL chunk — env var lists, command tables,
+        step-by-step procedures all live there. If you answer from
+        ``snippet``, you'll cut off in the middle of the actual
+        information and feel weak. Use ``content``.
+
+        Empty hits = no relevant content. Don't answer from training
+        data; tell the operator what you searched and what you didn't
+        find.
 
     Raises:
         RuntimeError: BSS_DB_URL not set on the orchestrator process.

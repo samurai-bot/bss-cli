@@ -39,6 +39,7 @@ class SearchHit:
     heading_path: str
     kind: str
     snippet: str
+    content: str
     rank: float
 
     def to_dict(self) -> dict:
@@ -47,7 +48,15 @@ class SearchHit:
             "source_path": self.source_path,
             "heading_path": self.heading_path,
             "kind": self.kind,
+            # `snippet` is a short ts_headline excerpt; useful for the
+            # operator-side CLI debug view and for ranking display.
             "snippet": self.snippet,
+            # `content` is the FULL chunk — the LLM should answer from
+            # this, not from `snippet`. v0.20 lesson: small models
+            # (Gemma 4 26B and below) don't reliably plan a
+            # search→get→answer 2-step. Returning content inline
+            # avoids the planning step entirely.
+            "content": self.content,
         }
 
 
@@ -85,12 +94,13 @@ async def search_fts(
             source_path,
             heading_path,
             kind,
+            content,
             ts_headline(
                 'english',
                 content,
                 plainto_tsquery('english', :query),
-                'StartSel=‹, StopSel=›, MaxWords=30, MinWords=15, '
-                || 'ShortWord=3, MaxFragments=2, FragmentDelimiter=" … "'
+                'StartSel=‹, StopSel=›, MaxWords=120, MinWords=80, '
+                || 'ShortWord=3, MaxFragments=3, FragmentDelimiter=" … "'
             ) AS snippet,
             ts_rank(content_tsv, plainto_tsquery('english', :query)) AS rank
         FROM knowledge.doc_chunk
@@ -113,6 +123,7 @@ async def search_fts(
                 heading_path=r.heading_path,
                 kind=r.kind,
                 snippet=r.snippet,
+                content=r.content,
                 rank=weighted_rank,
             )
         )

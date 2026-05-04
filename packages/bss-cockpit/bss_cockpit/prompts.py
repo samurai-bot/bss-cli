@@ -145,6 +145,15 @@ _COCKPIT_INVARIANTS = """\
   ``[HANDBOOK §8.4](docs/HANDBOOK.md#84-rotate-api-tokens)``,
   ``[CLAUDE.md anti-patterns](CLAUDE.md#anti-patterns-never-do-these)``.
 
+  Each hit carries ``snippet`` (a short ts_headline preview) AND
+  ``content`` (the FULL chunk text). Read ``content`` to answer. Do
+  NOT answer from ``snippet`` — env var lists, command tables, and
+  multi-step procedures live in ``content`` and the snippet always
+  cuts off before the actual data. If your reply ends with "but the
+  specific X was not found" or "you might want to check the file",
+  that's a tell you read snippet instead of content. Re-read the
+  hit and answer from ``content``.
+
   If ``knowledge.search`` genuinely returns zero hits or only
   unrelated hits (low rank, off-topic snippet), tell the operator in
   YOUR OWN WORDS what you searched for and what you didn't find, then
