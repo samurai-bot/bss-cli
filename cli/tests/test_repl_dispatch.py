@@ -28,6 +28,10 @@ def test_dispatch_covers_show_shaped_and_list_shaped_tools() -> None:
         "customer.list",
         "order.list",
         "catalog.list_offerings",
+        # v0.19 additions — wired so the natural-language list intercept
+        # in the REPL has a renderer for the tool it dispatches.
+        "catalog.list_active_offerings",
+        "catalog.list_vas",
         # Balance
         "subscription.get_balance",
     }
