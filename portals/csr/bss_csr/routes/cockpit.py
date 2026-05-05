@@ -855,7 +855,34 @@ async def cockpit_events(
                     yield _sse_frame("status", _status_html("error"))
                     return
                 if isinstance(event, AgentEventFinalMessage):
-                    text = strip_reasoning_leakage(event.text or "") or "(no reply)"
+                    text = strip_reasoning_leakage(event.text or "")
+                    # v0.20.1 — empty terminal AIMessage after tool calls
+                    # is a known gemma failure mode. Tell the operator
+                    # what fired and how to recover, rather than dropping
+                    # an opaque "(no reply)" bubble that looks like a
+                    # crashed turn. astream_once's relaxed gate catches
+                    # most cases by surfacing intermediate prose; this
+                    # fallback covers the residual where the model
+                    # produced no text at any phase.
+                    if not text:
+                        if captured_tool_calls:
+                            called = ", ".join(
+                                tc["name"] for tc in captured_tool_calls
+                            )
+                            text = (
+                                f"(The model called `{called}` but did not "
+                                "synthesise a final answer. Send the same "
+                                "question again or rephrase to retry.)"
+                            )
+                            log.warning(
+                                "cockpit.empty_final_after_tool_calls",
+                                session_id=session_id,
+                                called_tools=[
+                                    tc["name"] for tc in captured_tool_calls
+                                ],
+                            )
+                        else:
+                            text = "(no reply)"
                     # Defense-in-depth against gemma's tool-recap habit:
                     # if the bubble mimics structured tool output and a
                     # rendered tool fired this turn, replace with a
