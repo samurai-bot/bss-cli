@@ -162,6 +162,69 @@ async def test_error_event_on_graph_exception() -> None:
     assert not any(isinstance(e, AgentEventFinalMessage) for e in events)
 
 
+async def test_final_text_falls_back_to_intermediate_prose() -> None:
+    """v0.20.1 — when the terminal AIMessage has empty content (gemma's
+    failure mode after ``knowledge.search``), the final-message text
+    should fall back to whichever prior AIMessage carried prose,
+    even if that prior message also carried tool_calls. Before v0.20.1
+    the gate ``text and not tool_calls`` dropped the intermediate
+    prose and the operator saw an empty bubble that only resolved on
+    a second turn."""
+    fake = _FakeGraph([
+        {"agent": {"messages": [
+            AIMessage(
+                content="Let me check the docs for that.",
+                tool_calls=[{
+                    "name": "knowledge.search", "args": {}, "id": "k1",
+                }],
+            )
+        ]}},
+        {"tools": {"messages": [
+            ToolMessage(
+                content="result body", name="knowledge.search",
+                tool_call_id="k1",
+            ),
+        ]}},
+        # Terminal AIMessage with empty content — the symptom case.
+        {"agent": {"messages": [AIMessage(content="")]}},
+    ])
+    with patch("bss_orchestrator.session.build_graph", return_value=fake):
+        events = await _collect(astream_once("explain"))
+
+    final = next(e for e in events if isinstance(e, AgentEventFinalMessage))
+    # The intermediate "Let me check..." prose carries through instead
+    # of an empty string. The cockpit / REPL fallback then has real
+    # content to render rather than dropping a "(no reply)" bubble.
+    assert final.text == "Let me check the docs for that."
+
+
+async def test_terminal_text_overrides_intermediate_prose() -> None:
+    """The relaxed gate must NOT regress the happy path: when the
+    terminal AIMessage carries text, that text wins over any
+    intermediate tool-call AIMessage prose."""
+    fake = _FakeGraph([
+        {"agent": {"messages": [
+            AIMessage(
+                content="Searching...",
+                tool_calls=[{
+                    "name": "knowledge.search", "args": {}, "id": "k1",
+                }],
+            )
+        ]}},
+        {"tools": {"messages": [
+            ToolMessage(
+                content="ok", name="knowledge.search", tool_call_id="k1",
+            ),
+        ]}},
+        {"agent": {"messages": [AIMessage(content="The actual answer.")]}},
+    ])
+    with patch("bss_orchestrator.session.build_graph", return_value=fake):
+        events = await _collect(astream_once("ask"))
+
+    final = next(e for e in events if isinstance(e, AgentEventFinalMessage))
+    assert final.text == "The actual answer."
+
+
 async def test_tool_result_truncation() -> None:
     """Results longer than the 500-char cap are truncated with an ellipsis."""
     long_result = "x" * 1000

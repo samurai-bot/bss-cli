@@ -366,10 +366,22 @@ async def astream_once(
                                         call_id=call_id,
                                     )
                                 # Track the latest textual AI message so we emit
-                                # the right "final" text at the end. The final
-                                # message is the AIMessage without tool_calls.
+                                # the right "final" text at the end. v0.20.1 —
+                                # relaxed the gate from ``text and not
+                                # tool_calls`` to just ``text``. The strict
+                                # gate dropped legitimate intermediate prose
+                                # ("Let me check the docs...") when the model
+                                # ALSO returned an empty terminal AIMessage
+                                # after the tool call — gemma does this
+                                # routinely after ``knowledge.search``,
+                                # leaving the cockpit with an empty bubble
+                                # the operator could only fix by sending a
+                                # second turn. The terminal AIMessage's text
+                                # still wins when present (it lands later in
+                                # the stream and overwrites); the change
+                                # only matters when the terminal is empty.
                                 text = _ai_text(msg)
-                                if text and not tool_calls:
+                                if text:
                                     last_ai_text = text
                                 # v0.12 — accumulate per-turn token
                                 # counts so the chat route can record

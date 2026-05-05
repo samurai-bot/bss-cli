@@ -685,8 +685,19 @@ async def _drive_turn(
     # it. Even when cards rendered (and the prose was suppressed for
     # display), the prose lands in the conversation log so the browser
     # surface or a /switch back can read what was said.
+    # v0.20.1 — when the LLM fired tools but produced no final text
+    # (gemma after knowledge.search, occasionally), surface a useful
+    # recovery hint instead of an opaque "(no reply)" bubble.
     if not final_text.strip():
-        final_text = "(no reply)"
+        if captured_tool_calls:
+            called = ", ".join(tc["name"] for tc in captured_tool_calls)
+            final_text = (
+                f"(The model called `{called}` but did not synthesise a "
+                "final answer. Send the same question again or rephrase "
+                "to retry.)"
+            )
+        else:
+            final_text = "(no reply)"
     asst_msg_id = await conv.append_assistant_turn(
         final_text,
         tool_calls_json=captured_tool_calls or None,
