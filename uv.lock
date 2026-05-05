@@ -580,6 +580,7 @@ name = "bss-portal-ui"
 version = "0.1.0"
 source = { editable = "packages/bss-portal-ui" }
 dependencies = [
+    { name = "bss-cockpit" },
     { name = "bss-orchestrator" },
     { name = "jinja2" },
 ]
@@ -592,6 +593,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "bss-cockpit", editable = "packages/bss-cockpit" },
     { name = "bss-orchestrator", editable = "orchestrator" },
     { name = "jinja2", specifier = ">=3.1" },
 ]

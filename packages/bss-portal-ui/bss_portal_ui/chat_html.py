@@ -17,12 +17,29 @@ numbered lists (``1.``), code fences (``` ``` ```), and pipe tables
 (``| col | col |``). Catalog and balance summaries from the LLM
 typically come back as tables; render them as real ``<table>`` rather
 than literal pipe characters.
+
+v0.20.1 — pipe-table rendering is opt-in via ``allow_tables``. The
+v0.19 doctrine that suppressed pipe tables in prose stays the default
+(tool results render through ``bss_cockpit.renderers``, not via
+fabricated ``<table>``). Callers that know a renderer-less tool was
+the source of the prose — most importantly ``knowledge.search``,
+which has no ASCII renderer and whose answer IS the LLM's prose —
+flip ``allow_tables=True`` so the operator sees a real table instead
+of literal pipes. The decision lives at the call site so both the
+operator cockpit and any future surface can apply the same rule
+without re-implementing the table grammar.
+
+Channel-markup stripping (``<channel|>`` / ``assistantfinal`` and
+friends) is delegated to ``bss_cockpit.postprocess.strip_channel_markup``
+so REPL and browser converge on one regex.
 """
 
 from __future__ import annotations
 
 import html as _html
 import re as _re
+
+from bss_cockpit.postprocess import strip_channel_markup as _strip_channel_markup
 
 __all__ = [
     "render_assistant_bubble",
@@ -57,16 +74,19 @@ def strip_reasoning_leakage(text: str) -> str:
 def _strip_reasoning_leakage(text: str) -> str:
     """Remove gemma-style reasoning leakage from the start of a reply.
 
-    Two shapes seen in the wild:
+    Three shapes seen in the wild:
     - ``<think>...</think>\\nAnswer.`` — XML-style block.
     - ``thought\\n\\nAnswer.`` — bare "thought" header with a newline.
+    - ``<channel|>...`` / ``assistantfinal\\n...`` — Harmony channel
+      markup leaking into the final-message stream (v0.20.1).
 
-    Both are stripped; the rest of the reply renders normally.
+    All three are stripped; the rest of the reply renders normally.
     """
     if not text:
         return text
     cleaned = _RE_THINK_BLOCK.sub("", text)
     cleaned = _RE_LEADING_THOUGHT.sub("", cleaned, count=1)
+    cleaned = _strip_channel_markup(cleaned)
     return cleaned.lstrip()
 
 
@@ -129,7 +149,7 @@ def _is_table_separator(row: str) -> bool:
     return all(_RE_TABLE_SEP_CELL.match(c) for c in cells)
 
 
-def render_chat_markdown(text: str) -> str:
+def render_chat_markdown(text: str, *, allow_tables: bool = False) -> str:
     """Block-level + inline markdown render for assistant chat output.
 
     HTML-escapes the whole text once up front, then walks lines grouping
@@ -140,6 +160,12 @@ def render_chat_markdown(text: str) -> str:
 
     v0.13.1 — strips gemma's reasoning leakage (``<think>...</think>``,
     leading ``thought\\n``) before rendering.
+
+    v0.20.1 — ``allow_tables=True`` opts into pipe-table → ``<table>``
+    rendering. Default stays False to preserve the v0.19 doctrine that
+    pipe tables in prose are usually a hallucination. Callers that
+    know the prose came from a renderer-less tool (``knowledge.*``)
+    flip this on so handbook tables render as real tables.
     """
     cleaned = _strip_reasoning_leakage(text or "")
     escaped = _html.escape(cleaned)
@@ -216,23 +242,54 @@ def render_chat_markdown(text: str) -> str:
             i = j
             continue
 
-        # v0.19+ — pipe-table grammar is INTENTIONALLY not rendered.
-        #
-        # Doctrine: tool results render through `bss_cockpit.renderers`
-        # as deterministic ASCII inside <pre>. The LLM's assistant
-        # bubble is commentary, never the source of truth for tabular
-        # data. If a model produces `| col | col |` here, it is either
-        # (a) summarising data it should not be summarising, or (b)
-        # fabricating. Either way, surfacing it as a real <table>
-        # rewards the wrong behaviour and is indistinguishable from a
-        # hallucination from the operator's perspective.
-        #
-        # The table grammar falls through to the paragraph branch
-        # below; pipes render as the literal characters they are, so
-        # the operator can SEE the LLM tried to fall back. That
-        # visibility is the point. A future opt-in for safe contexts
-        # can re-introduce table rendering — but only for content
-        # that did NOT originate from an LLM bubble.
+        # v0.19+ / v0.20.1 — pipe-table grammar is opt-in via
+        # ``allow_tables``. Default stays OFF: tool results render
+        # through ``bss_cockpit.renderers`` as deterministic ASCII
+        # inside <pre>; an LLM bubble fabricating a table is a
+        # doctrine bug we want VISIBLE (literal pipes survive so the
+        # operator can see the attempt). Renderer-less tools — most
+        # importantly ``knowledge.*``, where the LLM's prose IS the
+        # answer — set ``allow_tables=True`` at the call site so a
+        # pipe-table relayed from the handbook renders as a real
+        # ``<table>``. Suppression for renderer-backed-tool turns
+        # already happens upstream via ``_suppress_tool_recap`` in
+        # the cockpit route, so this branch only fires on prose that
+        # legitimately survived that gate.
+        if allow_tables and _RE_TABLE_ROW.match(line):
+            # Look ahead: a pipe-table in markdown is a header row,
+            # a separator row (---|---), then ≥1 body rows. If the
+            # next line isn't a separator, treat as paragraph (the
+            # branch below handles literal pipes).
+            if i + 1 < len(lines) and _is_table_separator(lines[i + 1]):
+                _flush_blocks()
+                header_cells = _split_table_row(line)
+                body_rows: list[list[str]] = []
+                j = i + 2
+                while j < len(lines) and _RE_TABLE_ROW.match(lines[j]):
+                    body_rows.append(_split_table_row(lines[j]))
+                    j += 1
+                thead = (
+                    "<thead><tr>"
+                    + "".join(
+                        f"<th>{_render_inline(c)}</th>" for c in header_cells
+                    )
+                    + "</tr></thead>"
+                )
+                tbody = (
+                    "<tbody>"
+                    + "".join(
+                        "<tr>"
+                        + "".join(
+                            f"<td>{_render_inline(c)}</td>" for c in row
+                        )
+                        + "</tr>"
+                        for row in body_rows
+                    )
+                    + "</tbody>"
+                )
+                out.append(f"<table>{thead}{tbody}</table>")
+                i = j
+                continue
 
         # Heading.
         m_h = _RE_HEADING.match(line)
@@ -285,11 +342,17 @@ def render_chat_markdown(text: str) -> str:
     return "".join(out) or "&nbsp;"
 
 
-def render_assistant_bubble(text: str, *, error: bool = False) -> str:
+def render_assistant_bubble(
+    text: str, *, error: bool = False, allow_tables: bool = False
+) -> str:
     """Full assistant reply as a chat bubble. Single-line HTML for SSE.
 
     Adds ``chat-bubble-error`` modifier when ``error=True`` so portal
     CSS can dim or red-tint a fallback / ownership-violation reply.
+
+    ``allow_tables`` (v0.20.1) is forwarded to
+    :func:`render_chat_markdown` so callers can opt into pipe-table
+    rendering when the prose came from a renderer-less tool.
 
     SSE wire format requires a single-line ``data:`` field; tables and
     code fences embed real newlines in the rendered output for human
@@ -300,7 +363,9 @@ def render_assistant_bubble(text: str, *, error: bool = False) -> str:
     css = "chat-bubble chat-bubble-assistant"
     if error:
         css += " chat-bubble-error"
-    rendered = render_chat_markdown(text).replace("\n", "")
+    rendered = render_chat_markdown(text, allow_tables=allow_tables).replace(
+        "\n", ""
+    )
     return f'<div class="{css}">{rendered}</div>'
 
 

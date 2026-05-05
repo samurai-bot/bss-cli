@@ -291,3 +291,109 @@ def test_renderer_strips_thought_before_render() -> None:
     bubble = render_assistant_bubble("thought\n\nHello, world.")
     assert "thought" not in bubble.lower()
     assert "Hello, world." in bubble
+
+
+# ── v0.20.1 — channel-markup leakage stripping ──────────────────────
+
+
+def test_strip_channel_pipe_suffix_marker() -> None:
+    """``<channel|>`` at the start of a bubble (gemma's most common
+    leak shape) is removed before rendering."""
+    from bss_portal_ui import strip_reasoning_leakage
+
+    out = strip_reasoning_leakage("<channel|>Real reply text.")
+    assert "<channel|>" not in out
+    assert "Real reply text." in out
+
+
+def test_strip_channel_bracketed_marker() -> None:
+    """``<|channel|>`` Harmony-style fully-bracketed marker."""
+    from bss_portal_ui import strip_reasoning_leakage
+
+    out = strip_reasoning_leakage("<|channel|>commentary")
+    assert "<|channel|>" not in out
+    assert "commentary" in out
+
+
+def test_renderer_strips_channel_markup_before_html_escape() -> None:
+    """Integration: the rendered bubble never contains a literal
+    ``<channel|>`` token (escaped or not). Defends against the
+    screenshot bug where the operator saw raw channel markup at the
+    head of the assistant bubble."""
+    bubble = render_assistant_bubble("<channel|>To configure email service...")
+    assert "channel" not in bubble.lower() or "chat-bubble" in bubble
+    # More precise: the ``<channel|>`` token in any escaping form is gone.
+    assert "&lt;channel" not in bubble
+    assert "<channel|>" not in bubble
+    assert "To configure email service..." in bubble
+
+
+# ── v0.20.1 — pipe-table carve-out via ``allow_tables`` ─────────────
+
+
+def test_pipe_table_renders_when_allow_tables_true() -> None:
+    """With ``allow_tables=True`` (knowledge.* fired), a markdown
+    pipe table should render as a real <table>."""
+    md = (
+        "| Plan | Price | Data |\n"
+        "|------|-------|------|\n"
+        "| PLAN_S | $5 | 1 GB |\n"
+        "| PLAN_M | $10 | 5 GB |\n"
+    )
+    out = render_chat_markdown(md, allow_tables=True)
+    assert "<table>" in out
+    assert "<thead>" in out
+    assert "<tbody>" in out
+    # Header cells.
+    assert "<th>Plan</th>" in out
+    assert "<th>Price</th>" in out
+    # Body cells, with inline markdown inside cells still escaped.
+    assert "<td>PLAN_S</td>" in out
+    assert "<td>$5</td>" in out
+
+
+def test_pipe_table_default_still_falls_back_to_literal() -> None:
+    """Without ``allow_tables``, the v0.19 default behaviour still
+    holds — pipes survive verbatim, no <table> rendered. Defends
+    against the carve-out leaking into pure-prose turns where a
+    fabricated table is the more likely cause."""
+    md = (
+        "| Plan | Price |\n"
+        "|------|-------|\n"
+        "| PLAN_S | $5 |\n"
+    )
+    out = render_chat_markdown(md)
+    assert "<table>" not in out
+    assert "| Plan |" in out
+
+
+def test_assistant_bubble_passes_allow_tables_through() -> None:
+    """The bubble wrapper forwards ``allow_tables`` to the inner
+    renderer — same shape as ``error``, no implicit override."""
+    md = "| a | b |\n|---|---|\n| 1 | 2 |"
+    bubble = render_assistant_bubble(md, allow_tables=True)
+    assert "<table>" in bubble
+    bubble_default = render_assistant_bubble(md)
+    assert "<table>" not in bubble_default
+
+
+def test_pipe_table_with_inline_markdown_in_cells() -> None:
+    """Inline ``**bold**`` and ``code`` substitutions still apply
+    inside cells when ``allow_tables=True``."""
+    md = (
+        "| Var | Notes |\n"
+        "|-----|-------|\n"
+        "| `BSS_PORTAL_EMAIL_PROVIDER` | **required** when v0.8 |\n"
+    )
+    out = render_chat_markdown(md, allow_tables=True)
+    assert "<table>" in out
+    assert "<code>BSS_PORTAL_EMAIL_PROVIDER</code>" in out
+    assert "<strong>required</strong>" in out
+
+
+def test_pipe_table_without_separator_row_is_paragraph() -> None:
+    """``allow_tables=True`` doesn't promote a stray pipe line into a
+    table — the separator row is still required for the grammar."""
+    md = "| not a | table |\nbut a paragraph"
+    out = render_chat_markdown(md, allow_tables=True)
+    assert "<table>" not in out
