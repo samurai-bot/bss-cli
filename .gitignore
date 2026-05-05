@@ -48,3 +48,11 @@ build/
 .LSOverride
 v0.6-baseline.md
 /.dev-mailbox/
+
+# Paste-accident screenshots — the legitimate captures in
+# docs/screenshots/ end in a single extension. Files like
+# ``foo.png.jpg`` are accidental copies (drag-and-drop save dialogs
+# that don't strip the original ext). Curated screenshots are
+# tracked individually; this pattern only filters the obvious dupes.
+*.png.jpg
+*.jpg.png
