@@ -892,21 +892,26 @@ async def cockpit_events(
                     text = _suppress_tool_recap(text, captured_tool_calls)
                     # v0.20+ citation guard. Un-cited handbook claims →
                     # safe fallback. See REPL _RE_KNOWLEDGE_CLAIM mirror.
-                    called_tool_names = {
+                    # v0.20.1 — compute via the imported ``knowledge_called``
+                    # helper (single source of truth) and bind to a
+                    # distinctly named local so the rendering path below
+                    # can still call the function. Earlier draft of
+                    # v0.20.1 named the local ``knowledge_called``,
+                    # shadowing the import; ``hello`` turns crashed with
+                    # ``TypeError: 'bool' object is not callable``.
+                    called_tool_names = sorted(
                         tc["name"] for tc in captured_tool_calls
-                    }
-                    knowledge_called = any(
-                        n.startswith("knowledge.") for n in called_tool_names
                     )
+                    knowledge_was_called = knowledge_called(captured_tool_calls)
                     if (
                         text
                         and _claims_handbook(text)
-                        and not knowledge_called
+                        and not knowledge_was_called
                     ):
                         log.warning(
                             "cockpit.knowledge_hallucination",
                             session_id=session_id,
-                            called_tools=sorted(called_tool_names),
+                            called_tools=called_tool_names,
                         )
                         text = _KNOWLEDGE_HALLUCINATION_FALLBACK
                     asst_id = await conv.append_assistant_turn(
@@ -929,7 +934,7 @@ async def cockpit_events(
                         "message",
                         render_assistant_bubble(
                             text,
-                            allow_tables=knowledge_called(captured_tool_calls),
+                            allow_tables=knowledge_was_called,
                         ),
                     )
                     yield _sse_frame("status", _status_html("done"))
