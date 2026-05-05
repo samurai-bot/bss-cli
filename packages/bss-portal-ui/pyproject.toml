@@ -5,6 +5,7 @@ requires-python = ">=3.12"
 description = "Shared UI bits for BSS-CLI portals — agent log widget, SSE plumbing, base CSS, vendored HTMX. Consumed by portals/self-serve and portals/csr."
 dependencies = [
     "jinja2>=3.1",
+    "bss-cockpit",
     "bss-orchestrator",
 ]
 
@@ -26,6 +27,7 @@ packages = ["bss_portal_ui"]
 "bss_portal_ui/static" = "bss_portal_ui/static"
 
 [tool.uv.sources]
+bss-cockpit = { workspace = true }
 bss-orchestrator = { workspace = true }
 
 [tool.pytest.ini_options]

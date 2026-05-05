@@ -103,11 +103,13 @@ from bss_orchestrator.session import (
 from rich import print as rprint
 from rich.align import Align
 from rich.console import Group
+from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.table import Table
 from rich.text import Text
 
+from bss_cockpit.postprocess import strip_channel_markup
 from bss_cockpit.renderers import (
     RENDERER_DISPATCH,
     render_tool_result,
@@ -646,7 +648,10 @@ async def _drive_turn(
                     rprint(card)
                     cards_shown += 1
             elif isinstance(event, AgentEventFinalMessage):
-                final_text = event.text
+                # v0.20.1 — strip Harmony / channel-format leakage at
+                # the boundary so neither display nor persistence
+                # carries `<channel|>` / `assistantfinal` artefacts.
+                final_text = strip_channel_markup(event.text or "")
             elif isinstance(event, AgentEventError):
                 error = event.message
                 break
@@ -707,7 +712,19 @@ async def _drive_turn(
     if cards_shown:
         # The card was the answer; skip the redundant prose panel.
         return
-    rprint(Panel(final_text, title="bss ai", border_style="green"))
+    # v0.20.1 — render the final message via Rich Markdown so headings,
+    # bold/italic, code spans, fenced code, and (for knowledge.* turns)
+    # pipe tables display as formatted text instead of raw markdown.
+    # Rich's renderer handles all of that natively; no surface-specific
+    # parsing lives here. Plain text without markdown markers is a
+    # no-op pass-through, so the worst case is the prior behaviour.
+    rprint(
+        Panel(
+            Markdown(final_text or "(no reply)"),
+            title="bss ai",
+            border_style="green",
+        )
+    )
 
 
 # Tools whose mere "started" event indicates a destructive proposal.

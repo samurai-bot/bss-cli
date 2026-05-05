@@ -41,6 +41,7 @@ from bss_cockpit import (
     ConversationSummary,
     build_cockpit_prompt,
     current as cockpit_config_current,
+    knowledge_called,
 )
 from bss_cockpit.renderers import render_tool_result
 from bss_orchestrator.clients import get_clients
@@ -516,14 +517,26 @@ async def cockpit_thread(
     # ConversationMessage rows now; nothing parses transcript text.
     rows = await conv.list_messages()
     blocks: list[dict[str, Any]] = []
+    # v0.20.1 — track the tool calls seen since the most recent user
+    # turn so a rehydrated assistant bubble can render pipe tables iff
+    # a knowledge.* tool fired in the same turn. Mirrors the live SSE
+    # path's ``allow_tables=knowledge_called(captured_tool_calls)``.
+    turn_tool_names: list[str] = []
     for row in rows:
         block: dict[str, Any] = {
             "role": row.role,
             "tool_name": row.tool_name or "",
             "body": row.content,
         }
+        if row.role == "user":
+            turn_tool_names = []
+        elif row.role == "tool":
+            turn_tool_names.append(row.tool_name or "")
         if row.role == "assistant":
-            block["body_html"] = render_chat_markdown(row.content)
+            block["body_html"] = render_chat_markdown(
+                row.content,
+                allow_tables=knowledge_called(turn_tool_names),
+            )
         elif row.role == "tool":
             # Same helper as the SSE stream — both paths produce the
             # same <details open> block, same typography, same
@@ -879,8 +892,18 @@ async def cockpit_events(
                             args=ta,
                             proposal_message_id=asst_id,
                         )
+                    # v0.20.1 — opt into pipe-table rendering when a
+                    # renderer-less knowledge tool fired this turn.
+                    # Mirrors the v0.20 carve-out for the anti-recap
+                    # rule: ``knowledge.*`` has no ASCII renderer, so
+                    # the LLM's prose IS the answer; tables relayed
+                    # from the handbook should render as <table>.
                     yield _sse_frame(
-                        "message", render_assistant_bubble(text)
+                        "message",
+                        render_assistant_bubble(
+                            text,
+                            allow_tables=knowledge_called(captured_tool_calls),
+                        ),
                     )
                     yield _sse_frame("status", _status_html("done"))
                     return
