@@ -368,7 +368,11 @@ body { margin: 0; }
 }
 .cockpit-page {
   flex: 1; display: flex; flex-direction: column;
-  max-width: 960px; width: 100%;
+  /* v0.20.1 — widened from 960px. Operator monitors are typically
+     1440px+; the prior cap left ~480px of blank space per side and
+     squeezed the chat canvas. 1280px keeps a comfortable reading
+     measure on 4K without forcing full-bleed. */
+  max-width: 1280px; width: 100%;
   margin: 0 auto;
   padding: 32px 24px;
   box-sizing: border-box;
@@ -467,7 +471,11 @@ body { margin: 0; }
 /* ── Thread page ─────────────────────────────────────────── */
 
 .thread-page {
-  max-width: 880px;
+  /* v0.20.1 — widened from 880px to match the wider cockpit-page
+     cap. The thread is the operator's primary canvas; reclaiming
+     the side gutters means more of the LLM's prose / tool-result
+     blocks fit on screen without horizontal scroll. */
+  max-width: 1280px;
   padding: 16px 24px 24px;
   display: flex; flex-direction: column;
   gap: 0;
@@ -538,9 +546,15 @@ body { margin: 0; }
 }
 
 .chat-bubble {
-  max-width: 78%;
+  /* v0.20.1 — tighter typography + wider bubble cap. Operator
+     feedback: the 13.5px/1.5 + 78% combination wasted vertical
+     space and forced wraps mid-sentence on a 1280px canvas.
+     13px/1.45 keeps the bubble readable while reclaiming a line
+     or two on long answers; 92% lets a markdown table or env-var
+     list breathe before the wrap kicks in. */
+  max-width: 92%;
   padding: 10px 14px; border-radius: 10px;
-  font-size: 13.5px; line-height: 1.5;
+  font-size: 13px; line-height: 1.45;
   word-wrap: break-word;
 }
 .chat-bubble p { margin: 0 0 8px; }
