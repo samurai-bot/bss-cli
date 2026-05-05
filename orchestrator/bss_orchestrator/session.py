@@ -473,10 +473,31 @@ async def astream_once(
             )
             yield AgentEventFinalMessage(text=last_ai_text)
         finally:
+            # v0.20.1 — guard ContextVar.reset against cross-context
+            # disposal. Starlette closes the SSE response by calling
+            # ``aclose`` on the async generator from a *different*
+            # asyncio Task than the one the body iterated in; that
+            # different Task carries a different copy_context()
+            # snapshot, and Python's ``ContextVar.reset(token)``
+            # raises ``ValueError: Token was created in a different
+            # Context``. The unhandled ValueError propagated up
+            # through Starlette and closed the connection before the
+            # browser had committed the final ``message`` / ``status:
+            # done`` frames — the operator saw the prior turn's
+            # bubble appear only on the *next* request when the page
+            # rehydrated from persistence. The tokens are best-effort
+            # cleanup; a ValueError here means the Context is going
+            # away anyway, so swallow it.
             if identity_reset_token is not None:
-                reset_service_identity_token(identity_reset_token)
+                try:
+                    reset_service_identity_token(identity_reset_token)
+                except ValueError:
+                    pass
             if auth_reset_token is not None:
-                auth_context.reset_actor(auth_reset_token)
+                try:
+                    auth_context.reset_actor(auth_reset_token)
+                except ValueError:
+                    pass
 
 
 def _messages_from_transcript(transcript: str) -> list[BaseMessage]:
