@@ -170,7 +170,9 @@ async def test_subscription_list_mine_resolves_actor_into_canonical_call(
     finally:
         auth_context.reset_actor(token)
 
-    assert result == [{"id": "SUB-1"}]
+    # v1.1.1 — the wrapper annotates pricing; the id passes through unchanged.
+    assert len(result) == 1 and result[0]["id"] == "SUB-1"
+    assert "currentMonthlyCharge" in result[0]  # pricing annotation applied
     fake_clients.subscription.list_for_customer.assert_called_once_with("CUST-042")
 
 
