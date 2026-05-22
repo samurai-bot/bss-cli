@@ -135,6 +135,10 @@ class Promotion(Base, TenantMixin, TimestampMixin):
     __table_args__ = {"schema": SCHEMA}
 
     id: Mapped[str] = mapped_column(Text, primary_key=True)  # e.g. PROMO_SUMMER25
+    # v1.1.1 — operator-set friendly label for customer display (e.g. "VIP
+    # Welcome"). NULL → UI falls back to the discount label. Same value sent to
+    # loyalty's OfferDefinition display_name at create.
+    name: Mapped[str | None] = mapped_column(Text)
     # The loyalty promo code. Present for BOTH audiences (v1.1.1): a public code
     # is advertised/typed; a targeted code is BSS-internal, auto-applied only for
     # eligible customers (gated by promotion_eligibility) and not advertised.

@@ -389,7 +389,7 @@ class TestValidateForOrder:
                 promo_code_kind="multi_use",
             )
             p = await svc.preview_promo(code=code, offering_id="PLAN_M")
-            assert set(p) == {"valid", "code", "offering_id", "label", "base", "effective", "reason"}
+            assert set(p) == {"valid", "code", "offering_id", "label", "name", "base", "effective", "reason"}
             assert p["valid"] is True
             assert p["label"] == "SGD 5.00 off"
             assert p["effective"] == p["base"] - Decimal("5.00")

@@ -166,9 +166,33 @@ async def test_dashboard_shows_assigned_offer(seed_db, fake_clients):
         with TestClient(create_app(Settings())) as c:
             c.cookies.set(PORTAL_SESSION_COOKIE, sid)
             body = c.get("/").text
-    assert "🎁 You have a" in body
+    assert "You have a" in body  # unnamed promo → falls back to the label phrasing
     assert "20% off" in body
     assert "applies automatically to your next order" in body
+
+
+@pytest.mark.asyncio
+async def test_dashboard_shows_promo_friendly_name(seed_db, fake_clients):
+    async with seed_db() as db:
+        sess, _ = await create_test_session(
+            db, email="ada@example.sg", customer_id="CUST-042", verified=True
+        )
+        await db.commit()
+        sid = sess.id
+    fake_clients.subscription.records = {"SUB-001": _active_sub_with_discount()}
+    fake_clients.subscription.by_customer = {"CUST-042": ["SUB-001"]}
+    fake_clients.catalog.customer_offers = {
+        "offers": [{
+            "offer_id": "OFF-1", "state": "eligible", "offer_definition_id": "OD_VIP",
+            "promotion": {"promotion_id": "PROMO_VIP", "name": "VIP Welcome", "label": "20% off"},
+        }]
+    }
+    with patch("bss_self_serve.routes.landing.get_clients", return_value=fake_clients):
+        with TestClient(create_app(Settings())) as c:
+            c.cookies.set(PORTAL_SESSION_COOKIE, sid)
+            body = c.get("/").text
+    assert "VIP Welcome" in body  # the friendly name, not just "20% off"
+    assert "20% off" in body
 
 
 @pytest.mark.asyncio
@@ -187,7 +211,7 @@ async def test_signup_form_shows_assigned_offer_preapplied(seed_db, fake_clients
         with TestClient(create_app(Settings())) as c:
             c.cookies.set(PORTAL_SESSION_COOKIE, sid)
             body = c.get("/signup/PLAN_M", params={"msisdn": "91234567"}).text
-    assert "offer applied" in body
+    assert "applied" in body  # unnamed → "20% off applied"
     assert "20% off" in body
     assert 'name="apply_offer"' in body  # the remove/keep toggle
     assert 'name="offer_shown"' in body  # the hidden marker for opt-out detection

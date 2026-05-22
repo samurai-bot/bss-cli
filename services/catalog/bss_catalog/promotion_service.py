@@ -116,6 +116,7 @@ class PromotionService:
             "base": None,
             "effective": None,
             "label": None,
+            "name": None,
         }
 
         # 1. resolve code → OfferDefinition (loyalty read; no consume)
@@ -189,6 +190,7 @@ class PromotionService:
                 "label": discount_label(
                     promo.discount_type, promo.discount_value, promo.currency
                 ),
+                "name": promo.name,  # friendly label (None → UI uses label)
             }
         }
 
@@ -229,6 +231,7 @@ class PromotionService:
             "code": code,
             "offering_id": offering_id,
             "label": r["label"],
+            "name": r["name"],
             "base": r["base"],
             "effective": r["effective"],
             "reason": r["reason"],
@@ -253,6 +256,7 @@ class PromotionService:
                     "state": "eligible",
                     "promotion": {
                         "promotion_id": promo.id,
+                        "name": promo.name,
                         "discount_type": promo.discount_type,
                         "discount_value": str(promo.discount_value),
                         "duration_kind": promo.duration_kind,
@@ -385,6 +389,7 @@ class PromotionService:
             promo = Promotion(
                 id=promotion_id,
                 code=code,
+                name=display_name,  # friendly label for customer display
                 audience=audience,
                 offer_definition_id=None,
                 discount_type=discount_type,

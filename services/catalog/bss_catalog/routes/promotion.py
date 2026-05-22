@@ -64,6 +64,7 @@ class AssignTargetedRequest(_CamelBase):
 class Tmf671Promotion(_CamelBase):
     id: str
     code: str | None
+    name: str | None
     audience: str
     offer_definition_id: str | None
     discount_type: str
@@ -82,6 +83,7 @@ def _to_tmf671(p: Promotion) -> Tmf671Promotion:
     return Tmf671Promotion(
         id=p.id,
         code=p.code,
+        name=p.name,
         audience=p.audience,
         offer_definition_id=p.offer_definition_id,
         discount_type=p.discount_type,
@@ -173,6 +175,7 @@ async def preview_promo(
         "code": r["code"],
         "offering": r["offering_id"],
         "label": r["label"],
+        "name": r.get("name"),
         "base": str(r["base"]) if r["base"] is not None else None,
         "effective": str(r["effective"]) if r["effective"] is not None else None,
         "reason": r["reason"],
@@ -195,6 +198,7 @@ async def validate_promo(
         "code": r["code"],
         "offering": r["offering_id"],
         "reason": r["reason"],
+        "name": r.get("name"),
         "offerDefinitionId": r["offer_definition_id"],
         "discountType": r["discount_type"],
         "discountValue": str(r["discount_value"]) if r["discount_value"] is not None else None,
@@ -223,6 +227,7 @@ async def resolve_eligible(
         "valid": True,
         "code": r["code"],
         "promotionId": r["promotion_id"],
+        "name": r.get("name"),
         "offerDefinitionId": r["offer_definition_id"],
         "discountType": r["discount_type"],
         "discountValue": str(r["discount_value"]),

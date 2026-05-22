@@ -318,6 +318,7 @@ boundary). The discount **composes** on top of the lowest-active price snapshot.
 | column | type | notes |
 |---|---|---|
 | id | TEXT PK | e.g. `PROMO_SUMMER25` |
+| name | TEXT | v1.1.1 — operator-set friendly label for customer display ("VIP Welcome"); NULL → UI falls back to the discount label |
 | code | TEXT | the loyalty code (BOTH audiences, v1.1.1). Public = advertised/typed; targeted = unadvertised, derived from id if omitted. Partial-unique on `(code, tenant_id)` |
 | audience | TEXT | `public` (anyone may type) \| `targeted` (eligibility-gated, auto-applied). v1.1.1 (CHECK) |
 | offer_definition_id | TEXT | loyalty join key; NULL until the create saga completes |

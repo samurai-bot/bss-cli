@@ -97,7 +97,7 @@
       <input type="hidden" name="offer_shown" value="1" />
       <label class="offer-toggle">
         <input type="checkbox" name="apply_offer" value="1" checked />
-        <span>🎁 <strong>{{ assigned_offer.label }}</strong> offer applied —
+        <span>🎁 <strong>{{ assigned_offer.name or assigned_offer.label }}</strong> applied{% if assigned_offer.name %} <span class="form-optional">({{ assigned_offer.label }})</span>{% endif %} —
           <span class="promo-was">SGD {{ assigned_offer.base }}/mo</span>
           → <strong class="promo-now">SGD {{ assigned_offer.effective }}/mo</strong></span>
       </label>
