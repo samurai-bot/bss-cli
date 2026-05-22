@@ -187,11 +187,12 @@ async def test_signup_form_shows_assigned_offer_preapplied(seed_db, fake_clients
         with TestClient(create_app(Settings())) as c:
             c.cookies.set(PORTAL_SESSION_COOKIE, sid)
             body = c.get("/signup/PLAN_M", params={"msisdn": "91234567"}).text
-    assert "Apply your" in body
+    assert "offer applied" in body
     assert "20% off" in body
     assert 'name="apply_offer"' in body  # the remove/keep toggle
     assert 'name="offer_shown"' in body  # the hidden marker for opt-out detection
     assert "checked" in body  # pre-applied by default
+    assert "Use a different code instead" in body  # replace-framed, not stack
 
 
 @pytest.mark.asyncio
@@ -247,6 +248,46 @@ async def test_promo_preview_invalid_renders_inline_note(seed_db, fake_clients):
     assert resp.status_code == 200
     assert "expired" in resp.text.lower()
     assert "full price" in resp.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_promo_preview_valid_with_offer_says_replaces(seed_db, fake_clients):
+    async with seed_db() as db:
+        sess, _ = await create_test_session(
+            db, email="ada@example.sg", customer_id="CUST-042", verified=True
+        )
+        await db.commit()
+        sid = sess.id
+    fake_clients.catalog.promo_preview = {
+        "valid": True, "label": "30% off", "base": "25.00", "effective": "17.50",
+    }
+    with patch("bss_self_serve.routes.signup.get_clients", return_value=fake_clients):
+        with TestClient(create_app(Settings())) as c:
+            c.cookies.set(PORTAL_SESSION_COOKIE, sid)
+            resp = c.get("/signup/promo/preview",
+                         params={"code": "SUMMER", "offering": "PLAN_M", "has_offer": "1"})
+    assert resp.status_code == 200
+    assert "replaces your auto-applied offer" in resp.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_promo_preview_invalid_with_offer_says_offer_stays(seed_db, fake_clients):
+    async with seed_db() as db:
+        sess, _ = await create_test_session(
+            db, email="ada@example.sg", customer_id="CUST-042", verified=True
+        )
+        await db.commit()
+        sid = sess.id
+    fake_clients.catalog.promo_preview = {"valid": False, "reason": "expired"}
+    with patch("bss_self_serve.routes.signup.get_clients", return_value=fake_clients):
+        with TestClient(create_app(Settings())) as c:
+            c.cookies.set(PORTAL_SESSION_COOKIE, sid)
+            resp = c.get("/signup/promo/preview",
+                         params={"code": "OLD", "offering": "PLAN_M", "has_offer": "1"})
+    assert resp.status_code == 200
+    txt = resp.text.lower()
+    assert "your auto-applied offer still applies" in txt
+    assert "full price" not in txt  # don't threaten full price when an offer holds
 
 
 @pytest.mark.asyncio

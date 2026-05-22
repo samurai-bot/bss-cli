@@ -153,42 +153,51 @@ class OrderService:
     ) -> dict:
         """Resolve a promo to stamp as INTENT on the order item.
 
-        Precedence: a typed ``discount_code`` always wins. Otherwise the
-        customer's cheapest applicable *assigned* offer auto-applies — unless
-        ``skip_assigned_offer`` is set (the customer opted out in the funnel).
-        Returns the discount fields, or ``{}`` for no/invalid/opted-out promo.
-        Catalog owns all promo logic; a catalog/loyalty hiccup degrades to "no
+        Precedence: a *valid* typed ``discount_code`` wins. If the typed code is
+        invalid (a typo), we fall back to the customer's cheapest applicable
+        *assigned* offer rather than dropping to full price — a typo shouldn't
+        cost the customer their auto-offer. ``skip_assigned_offer`` (the funnel
+        opt-out) suppresses that fallback. Promos do NOT stack: exactly one
+        applies, composed onto the base price. Returns the discount fields or
+        ``{}``. Catalog owns all promo logic; a transport hiccup degrades to "no
         discount" (never blocks the order).
         """
+        res: dict | None = None
+        offer_id: str | None = None
+        used_typed = False
         try:
             if discount_code:
-                res = await self._catalog.validate_promo(
+                typed = await self._catalog.validate_promo(
                     code=discount_code, offering=offering_id
                 )
-                if not res.get("valid"):
+                if typed.get("valid"):
+                    res, used_typed = typed, True  # typed code wins
+                else:
                     log.info(
-                        "order.promo.code_invalid",
+                        "order.promo.code_invalid_fallback_to_assigned",
                         code=discount_code,
-                        reason=res.get("reason"),
+                        reason=typed.get("reason"),
                     )
-                    return {}
-                offer_id = None  # a typed code's offer is created at claim
-            elif skip_assigned_offer:
-                return {}  # customer opted out of their auto-applied offer
-            else:
-                res = await self._catalog.resolve_assigned_offer(
+            # No code, or an invalid code → try the auto-applied assigned offer
+            # (unless the customer opted out).
+            if res is None and not skip_assigned_offer:
+                assigned = await self._catalog.resolve_assigned_offer(
                     customer_id=customer_id, offering=offering_id
                 )
-                if not res.get("valid"):
-                    return {}
-                offer_id = res.get("offerId")  # assigned offer already exists
+                if assigned.get("valid"):
+                    res = assigned
+                    offer_id = assigned.get("offerId")  # assigned offer exists already
         except ClientError:
             log.warning("order.promo.resolve_failed", code=discount_code, exc_info=True)
             return {}
 
+        if res is None:
+            return {}
+
         raw_value = res.get("discountValue")
         return {
-            "discount_code": discount_code if discount_code else None,
+            # stamp the typed code only when it was the one actually used
+            "discount_code": discount_code if used_typed else None,
             "offer_definition_id": res.get("offerDefinitionId"),
             "discount_type": res.get("discountType"),
             "discount_value": Decimal(raw_value) if raw_value is not None else None,

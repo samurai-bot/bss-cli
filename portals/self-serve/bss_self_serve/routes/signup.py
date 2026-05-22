@@ -155,6 +155,7 @@ async def signup_promo_preview(
     request: Request,
     offering: str = Query(...),
     code: str = Query(default=""),
+    has_offer: str = Query(default=""),  # "1" when an assigned offer is pre-applied
     identity: IdentityView = Depends(requires_verified_email),
 ) -> HTMLResponse:
     """Live discounted-price preview for the signup form's promo field (v1.1).
@@ -182,6 +183,9 @@ async def signup_promo_preview(
             "base": result.get("base"),
             "effective": result.get("effective"),
             "reason": result.get("reason"),
+            # when an offer is pre-applied: a valid code REPLACES it; an invalid
+            # code leaves it in place (the backend falls back to the offer).
+            "has_offer": bool(has_offer),
         },
     )
 

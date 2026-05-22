@@ -43,6 +43,7 @@ class TestNonTargetedCode:
         mock_clients["catalog"].validate_promo.assert_awaited_once()
 
     async def test_invalid_code_proceeds_at_full_price(self, client, mock_clients):
+        # invalid code AND no assigned offer (mock default) → full price
         mock_clients["catalog"].validate_promo = AsyncMock(
             return_value={"valid": False, "reason": "expired"}
         )
@@ -51,6 +52,47 @@ class TestNonTargetedCode:
         item = r.json()["items"][0]
         assert item["discountCode"] is None
         assert item["discountType"] is None
+
+    async def test_invalid_code_falls_back_to_assigned_offer(self, client, mock_clients):
+        # a typo shouldn't cost the customer their auto-applied offer
+        mock_clients["catalog"].validate_promo = AsyncMock(
+            return_value={"valid": False, "reason": "promo_code.not_found"}
+        )
+        mock_clients["catalog"].resolve_assigned_offer = AsyncMock(
+            return_value={
+                "valid": True, "offerId": "OFF-VIP", "offerDefinitionId": "OD_VIP",
+                "discountType": "percent", "discountValue": "15",
+                "discountPeriodsTotal": 1, "base": "25.00", "effective": "21.25",
+            }
+        )
+        r = await _create(client, discountCode="TYPOO")
+        assert r.status_code == 201
+        item = r.json()["items"][0]
+        # fell back to the assigned offer: typed code NOT stamped, offer id is
+        assert item["discountCode"] is None
+        assert item["promoOfferId"] == "OFF-VIP"
+        assert item["discountType"] == "percent"
+
+    async def test_valid_code_overrides_assigned_offer(self, client, mock_clients):
+        mock_clients["catalog"].validate_promo = AsyncMock(
+            return_value={
+                "valid": True, "offerDefinitionId": "OD_SUMMER",
+                "discountType": "percent", "discountValue": "30",
+                "discountPeriodsTotal": 1, "base": "25.00", "effective": "17.50",
+            }
+        )
+        # an assigned offer also exists, but the valid typed code wins
+        mock_clients["catalog"].resolve_assigned_offer = AsyncMock(
+            return_value={"valid": True, "offerId": "OFF-VIP", "discountType": "percent",
+                          "discountValue": "15", "discountPeriodsTotal": 1}
+        )
+        r = await _create(client, discountCode="SUMMER")
+        assert r.status_code == 201
+        item = r.json()["items"][0]
+        assert item["discountCode"] == "SUMMER"   # typed code stamped
+        assert item["promoOfferId"] is None        # not the assigned offer
+        # typed code won → assigned-offer discovery never consulted
+        mock_clients["catalog"].resolve_assigned_offer.assert_not_awaited()
 
 
 class TestTargetedAssignedOffer:
