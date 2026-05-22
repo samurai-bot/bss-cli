@@ -69,7 +69,7 @@ async def _ensure_promotion(catalog: CatalogClient, promotion_id: str) -> None:
             discount_value="20",
             duration_kind="single",
             audience="targeted",  # v1.1.1 — eligibility-gated code, not codeless
-            display_name="VIP welcome — 20% off first month",
+            display_name="VIP Welcome",  # friendly name shown to customers
         )
         print(f"✓ created promotion {promo['id']} (OD={promo.get('offerDefinitionId')})")
     except PolicyViolationFromServer as exc:
@@ -106,13 +106,15 @@ async def run(promotion_id: str, customer_ids: list[str], count: int) -> int:
             return 1
 
         result = await catalog.assign_promotion(promotion_id, customer_ids=targets)
-        issued = result.get("issued", [])
-        skipped = result.get("skipped", [])
-        print(f"✓ assigned {promotion_id}: {len(issued)} issued, {len(skipped)} skipped")
-        for cid in issued:
-            print(f"  · issued  {cid}")
-        for s in skipped:
-            print(f"  · skipped {s.get('customer_id')} ({s.get('reason')})")
+        eligible = result.get("eligible", [])
+        already = result.get("already", [])
+        print(
+            f"✓ eligibility for {promotion_id}: {len(eligible)} added, {len(already)} already"
+        )
+        for cid in eligible:
+            print(f"  · added   {cid}")
+        for cid in already:
+            print(f"  · already {cid}")
         return 0
     finally:
         await catalog.close()
