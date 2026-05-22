@@ -5,6 +5,7 @@ bundle_allowance, vas_offering, service_specification, product_to_service_mappin
 """
 
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
@@ -112,6 +113,46 @@ class ServiceSpecification(Base, TenantMixin, TimestampMixin):
     name: Mapped[str | None] = mapped_column(Text)
     type: Mapped[str | None] = mapped_column(Text)
     parameters: Mapped[dict | None] = mapped_column(JSONB)
+
+
+class Promotion(Base, TenantMixin, TimestampMixin):
+    """v1.1 — money terms for a promotion + the join key to loyalty-cli.
+
+    The only genuinely new BSS domain object in v1.1. loyalty owns the
+    entitlement (codes/offers, validity windows, usage/per-customer limits,
+    inventory, targeting); this row owns the *discount terms* and the join
+    key (``offer_definition_id``). One promotion row per loyalty
+    OfferDefinition; many codes/offers share it.
+
+    No FK to loyalty — it lives behind the HTTP boundary. ``offer_definition_id``
+    is NULL while the create saga is mid-flight (state ``pending_link``) and
+    set once loyalty's ``offer_definition.register`` returns (state ``active``).
+    A live code/offer does nothing until the row is ``active``, so a
+    half-failed saga is harmless; ``promo reconcile`` relinks by OD.
+    """
+
+    __tablename__ = "promotion"
+    __table_args__ = {"schema": SCHEMA}
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)  # e.g. PROMO_SUMMER25
+    # NULL for codeless targeted promotions (assigned via offer.issue, not typed).
+    code: Mapped[str | None] = mapped_column(Text)
+    # The loyalty join key. NULL until the create saga completes.
+    offer_definition_id: Mapped[str | None] = mapped_column(Text)
+    discount_type: Mapped[str] = mapped_column(Text, nullable=False)  # percent | absolute
+    discount_value: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(
+        Text, nullable=False, default="SGD", server_default="SGD"
+    )  # for absolute discounts
+    # NULL = applies to all sellable offerings.
+    applicable_offering_ids: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    duration_kind: Mapped[str] = mapped_column(Text, nullable=False)  # single | multi | perpetual
+    # N for multi; NULL for single/perpetual.
+    periods_total: Mapped[int | None] = mapped_column(SmallInteger)
+    valid_from: Mapped[datetime | None] = mapped_column(TZDateTime)
+    valid_to: Mapped[datetime | None] = mapped_column(TZDateTime)
+    state: Mapped[str] = mapped_column(Text, nullable=False)  # pending_link → active → retired
+    created_by: Mapped[str] = mapped_column(Text, nullable=False)
 
 
 class ProductToServiceMapping(Base, TenantMixin, TimestampMixin):
