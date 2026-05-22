@@ -16,8 +16,9 @@ row — and the join key to a loyalty *OfferDefinition*. The two compose over HT
 loyalty ships unmodified.
 
 - **Non-targeted** = a shared/multi-use *code* the customer types at checkout.
-- **Targeted** = a *codeless* offer an operator pre-assigns to chosen customers;
-  it auto-applies at their next order and shows on their dashboard.
+- **Targeted** = a *code* (in loyalty, but unadvertised) gated by a BSS
+  eligibility list; it auto-applies at an eligible customer's next order and
+  shows on their dashboard. A typed attempt by a non-eligible customer is rejected.
 
 The discount **composes** with the catalog's lowest-active price (unlike v0.7
 windowed prices, which don't stack): the base snapshot is selected first, then
@@ -61,19 +62,32 @@ price; an invalid code never blocks the order — it just proceeds at full price
 Restrict to specific plans with `--offerings PLAN_M,PLAN_L` (omit = all sellable).
 Absolute discounts: `--type absolute --value 5.00`.
 
-## Targeted: a codeless assigned offer
+## Targeted: an eligibility-gated code (v1.1.1)
+
+A targeted promo is **one real loyalty code + a BSS eligibility list** — not a
+codeless offer. The code exists in loyalty (visible in `promo_code.list`) but is
+*not advertised*: it auto-applies only for customers on the eligibility list, and
+a typed attempt by anyone else is rejected (`not_eligible`).
 
 ```bash
-# 1. Create the promotion WITHOUT a code (codeless = targeted).
-bss promo create --id PROMO_VIP --type percent --value 20 --duration single
+# 1. Create the promotion as targeted. A code is derived from the id if omitted
+#    (it's BSS-internal); kind defaults to one-per-customer.
+bss promo create --id PROMO_VIP --type percent --value 20 --duration single \
+    --audience targeted
 
-# 2. Assign it to chosen customers (one loyalty offer.issue per customer).
+# 2. Add the chosen customers to its eligibility list.
 bss promo assign --promo PROMO_VIP --customers CUST-001,CUST-007,CUST-042
 ```
 
-`bss promo assign` is re-runnable: a customer who already holds the offer is
-reported under `skipped`. For repeatable demo data, `seed_targeted_campaign.py`
-at the repo root creates a promo and assigns it to a set of customers.
+`bss promo assign` is re-runnable: a customer already eligible is reported under
+`already`. The code then auto-applies at each eligible customer's next order
+(cheapest wins if they're eligible for several) and shows on their dashboard. For
+repeatable demo data, `seed_targeted_campaign.py` at the repo root creates a
+targeted promo and adds a set of customers to its eligibility list.
+
+> **Why eligibility, not codeless?** loyalty's `promo_code.register` has no
+> customer field, so the per-customer pairing lives in `catalog.promotion_eligibility`
+> and BSS is the gate. See DECISIONS 2026-05-22 (v1.1.1).
 
 ## Lifecycle — claim at activation
 
@@ -116,9 +130,12 @@ targeted offer ("🎁 You have a 20%-off offer").
 - **Preview shows "isn't valid" for a real code** — check `bss promo show` state
   is `active` (not `pending_link`), the code applies to that offering
   (`--offerings`), and the validity window is open.
-- **Targeted offer didn't apply** — confirm the offer is `issued` to that
-  customer (re-run `bss promo assign`; it's idempotent) and the promotion is
-  active.
+- **Targeted promo didn't apply** — confirm the customer is on the eligibility
+  list (re-run `bss promo assign`; it's idempotent), the promotion is `active`
+  with `audience=targeted`, and the customer didn't untick it at signup.
+- **`not_eligible` on a targeted code** — the customer typing it isn't on the
+  eligibility list. Add them with `bss promo assign`, or it's working as intended
+  (the code is private to its audience).
 
 ## Anti-patterns
 

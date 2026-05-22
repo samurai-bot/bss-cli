@@ -318,7 +318,8 @@ boundary). The discount **composes** on top of the lowest-active price snapshot.
 | column | type | notes |
 |---|---|---|
 | id | TEXT PK | e.g. `PROMO_SUMMER25` |
-| code | TEXT | typed code (non-targeted); NULL for codeless targeted promos. Partial-unique on `(code, tenant_id)` where code IS NOT NULL |
+| code | TEXT | the loyalty code (BOTH audiences, v1.1.1). Public = advertised/typed; targeted = unadvertised, derived from id if omitted. Partial-unique on `(code, tenant_id)` |
+| audience | TEXT | `public` (anyone may type) \| `targeted` (eligibility-gated, auto-applied). v1.1.1 (CHECK) |
 | offer_definition_id | TEXT | loyalty join key; NULL until the create saga completes |
 | discount_type | TEXT | `percent` \| `absolute` (CHECK) |
 | discount_value | NUMERIC(12,2) | percent 0-100, or absolute amount |
@@ -332,9 +333,27 @@ boundary). The discount **composes** on top of the lowest-active price snapshot.
 
 Index `ix_promotion_offer_definition_id` backs the OD→terms lookup (validate,
 resolve, reconcile). A promotion stays `pending_link` until loyalty's
-`offer_definition.register` (+ `promo_code.register` for coded) returns; a live
-code/offer does nothing until the row is `active`, so a half-failed create saga
-is harmless and resumable.
+`offer_definition.register` + `promo_code.register` returns; a live code does
+nothing until the row is `active`, so a half-failed create saga is harmless and
+resumable.
+
+### `catalog.promotion_eligibility` (v1.1.1)
+
+Which customers may use a **targeted** promotion's code (loyalty's `promo_code`
+has no customer field, so the per-customer pairing lives here; BSS is the gate).
+A targeted code auto-applies for customers with a row here and is rejected
+(`not_eligible`) for anyone without one. Public promos have no rows.
+
+| column | type | notes |
+|---|---|---|
+| id | BIGSERIAL PK | |
+| promotion_id | TEXT FK→catalog.promotion.id | |
+| customer_id | TEXT | |
+| created_by | TEXT | operator actor |
+
+Unique on `(promotion_id, customer_id, tenant_id)` (idempotent assign); index on
+`(customer_id, tenant_id)` for the order-time "what's this customer eligible for?"
+lookup.
 
 ### `catalog.bundle_allowance`
 | column | type | notes |

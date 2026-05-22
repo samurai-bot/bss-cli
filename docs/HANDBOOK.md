@@ -1577,9 +1577,9 @@ A third mechanism, distinct from A/B: **loyalty-cli entitlements**, for typed co
 bss promo create --id PROMO_SUMMER25 --type percent --value 20 \
     --duration multi --periods 3 --code SUMMER25 --code-kind multi_use
 
-# Targeted codeless offer (auto-applies at the customer's next order):
-bss promo create --id PROMO_VIP --type percent --value 20 --duration single
-bss promo assign --promo PROMO_VIP --customers CUST-001,CUST-007
+# Targeted code (in loyalty but unadvertised; auto-applies for eligible customers):
+bss promo create --id PROMO_VIP --type percent --value 20 --duration single --audience targeted
+bss promo assign --promo PROMO_VIP --customers CUST-001,CUST-007   # eligibility list
 ```
 
 Consumed at activation (a provisioning failure never burns a code; a payment decline revokes it). Renewal decrements a per-subscription counter; a plan change ends the promo. Operator-only — customers type a code, never issue one. **Full runbook: [`docs/runbooks/promo-codes.md`](runbooks/promo-codes.md)** (env, duration semantics, lifecycle, troubleshooting).
