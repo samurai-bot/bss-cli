@@ -42,20 +42,21 @@ async def lifespan(app: FastAPI):
         base_url=settings.subscription_url,
         auth_provider=TokenAuthProvider(api_token()),
     )
-    # v1.1.1 — loyalty client for customer-registry sync. Fail fast if unset.
-    if not settings.loyalty_api_token:
-        raise RuntimeError(
-            "BSS_LOYALTY_API_TOKEN is unset — CRM mirrors customers into loyalty "
-            "(v1.1.1). Generate with: openssl rand -hex 32"
+    # v1.1.1 — loyalty client for customer-registry sync. OPTIONAL: when unset,
+    # the sync is simply skipped (CustomerService guards on a None client).
+    if settings.loyalty_api_token:
+        app.state.loyalty_client = LoyaltyClient(
+            base_url=settings.loyalty_base_url,
+            auth_provider=BearerAuthProvider(settings.loyalty_api_token),
         )
-    app.state.loyalty_client = LoyaltyClient(
-        base_url=settings.loyalty_base_url,
-        auth_provider=BearerAuthProvider(settings.loyalty_api_token),
-    )
+    else:
+        app.state.loyalty_client = None
+        log.warning("crm.loyalty.disabled", reason="BSS_LOYALTY_API_TOKEN unset")
     log.info("service.starting", service=settings.service_name)
     yield
     await app.state.subscription_client.close()
-    await app.state.loyalty_client.close()
+    if app.state.loyalty_client is not None:
+        await app.state.loyalty_client.close()
     log.info("service.stopping", service=settings.service_name)
     await engine.dispose()
 

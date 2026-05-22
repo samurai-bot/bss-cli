@@ -300,6 +300,34 @@ class TestCreatePromotionGuards:
         assert exc.value.rule == "catalog.admin_only"
 
 
+class TestLoyaltyDisabled:
+    """loyalty is OPTIONAL — when the client is None the promo subsystem is OFF
+    and core flows still work (orders proceed at full price)."""
+
+    async def test_validate_returns_not_configured(self, db_session: AsyncSession):
+        r = await _svc(db_session, None).validate_for_order(code="X", offering_id="PLAN_M")
+        assert r["valid"] is False
+        assert r["reason"] == "loyalty_not_configured"
+
+    async def test_resolve_eligible_not_configured(self, db_session: AsyncSession):
+        r = await _svc(db_session, None).resolve_eligible_promo(
+            customer_id="CUST-1", offering_id="PLAN_M"
+        )
+        assert r["valid"] is False
+        assert r["reason"] == "loyalty_not_configured"
+
+    async def test_customer_offers_empty(self, db_session: AsyncSession):
+        assert await _svc(db_session, None).list_customer_offers(customer_id="CUST-1") == []
+
+    async def test_create_rejected(self, db_session: AsyncSession):
+        with pytest.raises(PolicyViolation) as exc:
+            await _svc(db_session, None).create_promotion(
+                promotion_id=_pid(), discount_type="percent",
+                discount_value=Decimal("10"), duration_kind="single", audience="targeted",
+            )
+        assert exc.value.rule == "catalog.promotion.loyalty_not_configured"
+
+
 class TestValidateForOrder:
     async def test_valid_percent_composes_on_base(self, db_session: AsyncSession):
         pid = _pid("PROMO_VAL_OK")

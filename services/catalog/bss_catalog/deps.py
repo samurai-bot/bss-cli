@@ -25,22 +25,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     # v1.1 — the LoyaltyClient lives here; its token never leaves this process.
-    # Empty token fails fast at BearerAuthProvider construction (clearer than a
-    # 401 on first use) — set BSS_LOYALTY_API_TOKEN. Generate: openssl rand -hex 32.
-    if not settings.loyalty_api_token:
-        raise RuntimeError(
-            "BSS_LOYALTY_API_TOKEN is unset — catalog holds the loyalty-cli "
-            "client for v1.1 promotions. Generate with: openssl rand -hex 32"
+    # loyalty is OPTIONAL: when BSS_LOYALTY_API_TOKEN is unset the promo
+    # subsystem is simply OFF (no client) — catalog still boots and serves the
+    # rest of the catalog. PromotionService degrades gracefully on a None client
+    # (creates rejected; reads return "no promo" so orders proceed full price).
+    if settings.loyalty_api_token:
+        app.state.loyalty_client = LoyaltyClient(
+            base_url=settings.loyalty_base_url,
+            auth_provider=BearerAuthProvider(settings.loyalty_api_token),
         )
-    app.state.loyalty_client = LoyaltyClient(
-        base_url=settings.loyalty_base_url,
-        auth_provider=BearerAuthProvider(settings.loyalty_api_token),
-    )
+    else:
+        app.state.loyalty_client = None
+        log.warning("catalog.loyalty.disabled", reason="BSS_LOYALTY_API_TOKEN unset")
 
     log.info("service.starting", service=settings.service_name)
     yield
     log.info("service.stopping", service=settings.service_name)
-    await app.state.loyalty_client.close()
+    if app.state.loyalty_client is not None:
+        await app.state.loyalty_client.close()
     await engine.dispose()
 
 

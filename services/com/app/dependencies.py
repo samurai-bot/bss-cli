@@ -59,16 +59,17 @@ async def lifespan(app: FastAPI):
         base_url=settings.subscription_url,
         auth_provider=TokenAuthProvider(api_token()),
     )
-    # v1.1 — COM's own loyalty client (consume lifecycle). Fail fast if unset.
-    if not settings.loyalty_api_token:
-        raise RuntimeError(
-            "BSS_LOYALTY_API_TOKEN is unset — COM consumes promo entitlements "
-            "(offer.claim/redeem/revoke) for v1.1. Generate: openssl rand -hex 32"
+    # v1.1 — COM's own loyalty client (consume lifecycle). OPTIONAL: when the
+    # token is unset, loyalty is OFF and the order/activation flow runs normally
+    # without promos (no discount stamped → nothing to claim). Never blocks COM.
+    if settings.loyalty_api_token:
+        loyalty_client = LoyaltyClient(
+            base_url=settings.loyalty_base_url,
+            auth_provider=BearerAuthProvider(settings.loyalty_api_token),
         )
-    loyalty_client = LoyaltyClient(
-        base_url=settings.loyalty_base_url,
-        auth_provider=BearerAuthProvider(settings.loyalty_api_token),
-    )
+    else:
+        loyalty_client = None
+        log.warning("com.loyalty.disabled", reason="BSS_LOYALTY_API_TOKEN unset")
 
     app.state.crm_client = crm_client
     app.state.catalog_client = catalog_client
@@ -99,7 +100,8 @@ async def lifespan(app: FastAPI):
     await payment_client.close()
     await som_client.close()
     await subscription_client.close()
-    await loyalty_client.close()
+    if loyalty_client is not None:
+        await loyalty_client.close()
     await engine.dispose()
 
 

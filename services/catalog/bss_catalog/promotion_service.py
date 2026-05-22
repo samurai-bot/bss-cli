@@ -119,6 +119,11 @@ class PromotionService:
             "name": None,
         }
 
+        # loyalty disabled → no promos exist; order proceeds at full price.
+        if self._loyalty is None:
+            result["reason"] = "loyalty_not_configured"
+            return result
+
         # 1. resolve code → OfferDefinition (loyalty read; no consume)
         try:
             shown = await self._loyalty.show_promo_code(code)
@@ -202,6 +207,8 @@ class PromotionService:
         typed code) + the composed terms, picking the lowest effective price.
         ``{valid: False, reason: "no_eligible_promo"}`` when none apply.
         """
+        if self._loyalty is None:
+            return {"valid": False, "reason": "loyalty_not_configured"}
         best: dict | None = None
         for promo in await self._repo.list_eligible_promotions(customer_id):
             composed = await self._compose(promo, offering_id)
@@ -246,6 +253,8 @@ class PromotionService:
         are eligibility rows, not issued offers). ``state`` is accepted for
         backwards compatibility and ignored.
         """
+        if self._loyalty is None:
+            return []
         out: list[dict] = []
         for promo in await self._repo.list_eligible_promotions(customer_id):
             out.append(
@@ -351,6 +360,12 @@ class PromotionService:
           kind so each eligible customer can use it once.
         """
         _check_admin(self._actor)
+        if self._loyalty is None:
+            raise PolicyViolation(
+                rule="catalog.promotion.loyalty_not_configured",
+                message="Promotions require loyalty-cli (BSS_LOYALTY_API_TOKEN is unset)",
+                context={"promotion_id": promotion_id},
+            )
 
         # Targeted promos still need a loyalty code; derive sensible defaults so
         # the operator doesn't have to invent an internal code/kind.
