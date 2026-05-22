@@ -176,6 +176,32 @@ async def preview_promo(
     }
 
 
+@router.get("/promo/validate")
+async def validate_promo(
+    code: str = Query(...),
+    offering: str = Query(...),
+    svc: PromotionService = Depends(get_promotion_service),
+) -> dict:
+    """Full order-time validation — returns the discount *terms* COM stamps onto
+    the order_item, not just the display subset preview returns. Money as strings.
+    """
+    r = await svc.validate_for_order(code=code, offering_id=offering)
+    return {
+        "valid": r["valid"],
+        "code": r["code"],
+        "offering": r["offering_id"],
+        "reason": r["reason"],
+        "offerDefinitionId": r["offer_definition_id"],
+        "discountType": r["discount_type"],
+        "discountValue": str(r["discount_value"]) if r["discount_value"] is not None else None,
+        "durationKind": r["duration_kind"],
+        "periodsTotal": r["periods_total"],
+        "base": str(r["base"]) if r["base"] is not None else None,
+        "effective": str(r["effective"]) if r["effective"] is not None else None,
+        "label": r["label"],
+    }
+
+
 @router.get("/promo/customer-offers")
 async def customer_offers(
     customer_id: str = Query(..., alias="customerId"),

@@ -169,6 +169,33 @@ class TestPortalReads:
         finally:
             await _cleanup(settings, pid)
 
+    async def test_validate_returns_full_terms(self, client, settings):
+        pid = _pid()
+        code = f"RTV_{uuid.uuid4().hex[:6].upper()}"
+        try:
+            await client.post(
+                f"{_TMF}/promotion",
+                json={
+                    "promotionId": pid,
+                    "discountType": "percent",
+                    "discountValue": "20",
+                    "durationKind": "multi",
+                    "periodsTotal": 3,
+                    "code": code,
+                    "promoCodeKind": "multi_use",
+                },
+            )
+            r = await client.get("/promo/validate", params={"code": code, "offering": "PLAN_M"})
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert body["valid"] is True
+            assert body["offerDefinitionId"] == f"OD_{pid}"
+            assert body["discountType"] == "percent"
+            assert body["periodsTotal"] == 3
+            assert isinstance(body["effective"], str)
+        finally:
+            await _cleanup(settings, pid)
+
     async def test_preview_invalid_code_is_200_invalid(self, client):
         r = await client.get(
             "/promo/preview", params={"code": "NEVER", "offering": "PLAN_M"}
