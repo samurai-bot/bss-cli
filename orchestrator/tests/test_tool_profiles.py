@@ -33,6 +33,22 @@ def test_customer_self_serve_profile_exists() -> None:
     assert "customer_self_serve" in TOOL_PROFILES
 
 
+def test_promo_tools_are_operator_only_never_customer_facing() -> None:
+    """v1.1 doctrine: promo create/assign/show are operator/cockpit only.
+
+    A customer types a code at checkout (order.create discount_code=) but can
+    never enumerate or self-issue promotions — so no promo.* tool may appear
+    in the customer_self_serve profile.
+    """
+    promo_tools = {t for t in TOOL_REGISTRY if t.startswith("promo.")}
+    assert promo_tools, "expected promo.* tools to be registered"
+    customer = TOOL_PROFILES["customer_self_serve"]
+    leaked = promo_tools & customer
+    assert not leaked, f"promo tools must never be customer-facing: {sorted(leaked)}"
+    # and they ARE available to the operator cockpit
+    assert promo_tools <= TOOL_PROFILES["operator_cockpit"]
+
+
 def test_every_profile_tool_is_registered() -> None:
     for profile_name, names in TOOL_PROFILES.items():
         for name in names:
