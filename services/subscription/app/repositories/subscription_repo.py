@@ -54,6 +54,23 @@ class SubscriptionRepository:
         result = await self._s.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_by_commercial_order(self, order_id: str) -> Subscription | None:
+        """v1.2 — idempotency lookup for create(). Returns the subscription
+        already created for this commercial order, if any."""
+        from sqlalchemy import select
+
+        stmt = (
+            select(Subscription)
+            .where(Subscription.commercial_order_id == order_id)
+            .options(
+                selectinload(Subscription.balances),
+                selectinload(Subscription.vas_purchases),
+                selectinload(Subscription.state_history),
+            )
+        )
+        result = await self._s.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def list_for_customer(self, customer_id: str) -> list[Subscription]:
         from sqlalchemy import select
 

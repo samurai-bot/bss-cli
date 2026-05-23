@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     # (single int() site at startup); this declaration documents the
     # surface for IDE autocomplete + any future config-show tool.
     renewal_tick_seconds: int = 60
+    # v1.2 — outbox relay knobs (the single publisher of staged events) +
+    # safe-consumer retry budget for the usage.rated consumer.
+    outbox_relay_interval_ms: int = 250
+    outbox_relay_batch_size: int = 100
+    mq_max_retries: int = 5
+    mq_retry_backoff_ms: int = 5000
 
     model_config = SettingsConfigDict(
         env_file=_REPO_ROOT / ".env",
