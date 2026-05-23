@@ -40,6 +40,9 @@ class SubscriptionCreateRequest(BaseModel):
     # v0.7 — optional during the COM/SOM rollout. When omitted, the service
     # falls back to the catalog's recurring price (legacy path).
     price_snapshot: PriceSnapshot | None = None
+    # v1.2 — idempotency key. A repeat create for the same order returns the
+    # existing subscription without re-charging the card-on-file.
+    commercial_order_id: str | None = None
 
 
 class VasPurchaseRequest(BaseModel):

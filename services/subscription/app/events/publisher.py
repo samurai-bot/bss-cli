@@ -1,14 +1,15 @@
 """Domain event publisher.
 
-Writes to audit.domain_event in the same transaction as the domain write.
-RabbitMQ publish is best-effort after persist (simplified outbox).
+v1.2 — stages the audit.domain_event row in the caller's transaction
+(published_to_mq = false) and returns. The outbox relay (bss_events.relay) is
+the single thing that publishes to RabbitMQ, draining staged rows after commit.
+This removes the publish-before-commit hazard and guarantees a failed publish is
+retried rather than lost. The `exchange` kwarg is accepted-but-ignored for
+call-site compatibility.
 """
 
-import json
-from datetime import datetime, timezone
 from uuid import uuid4
 
-import aio_pika
 import structlog
 from bss_clock import now as clock_now
 from bss_telemetry import current_trace_id
@@ -27,7 +28,7 @@ async def publish(
     aggregate_type: str,
     aggregate_id: str,
     payload: dict | None = None,
-    exchange: aio_pika.abc.AbstractExchange | None = None,
+    exchange=None,  # v1.2 — ignored; the outbox relay is the only publisher.
 ) -> None:
     ctx = auth_context.current()
     event = DomainEvent(
@@ -47,20 +48,8 @@ async def publish(
     )
     session.add(event)
     log.info(
-        "event.published",
+        "event.staged",
         event_type=event_type,
         aggregate_type=aggregate_type,
         aggregate_id=aggregate_id,
     )
-
-    if exchange:
-        try:
-            msg = aio_pika.Message(
-                body=json.dumps(payload or {}).encode(),
-                content_type="application/json",
-                delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
-            )
-            await exchange.publish(msg, routing_key=event_type)
-            event.published_to_mq = True
-        except Exception:
-            log.warning("mq.publish.failed", event_type=event_type)

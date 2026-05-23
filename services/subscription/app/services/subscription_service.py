@@ -98,7 +98,23 @@ class SubscriptionService:
         iccid: str,
         payment_method_id: str,
         price_snapshot: dict | None = None,
+        commercial_order_id: str | None = None,
     ) -> Subscription:
+        # v1.2 — idempotency: if a subscription already exists for this
+        # commercial order, return it WITHOUT charging the card-on-file again.
+        # This is the guard against MQ redelivery double-charging an activation
+        # (the unique index on commercial_order_id is the backstop). Done before
+        # any policy check or charge so a replay is a cheap read.
+        if commercial_order_id is not None:
+            existing = await self._repo.get_by_commercial_order(commercial_order_id)
+            if existing is not None:
+                log.info(
+                    "subscription.create.idempotent_hit",
+                    commercial_order_id=commercial_order_id,
+                    subscription_id=existing.id,
+                )
+                return existing
+
         # Policy: customer exists and is active/pending
         await check_customer_exists(customer_id, self._crm)
 
@@ -193,6 +209,7 @@ class SubscriptionService:
         sub = Subscription(
             id=sub_id,
             customer_id=customer_id,
+            commercial_order_id=commercial_order_id,
             offering_id=offering_id,
             msisdn=msisdn,
             iccid=iccid,

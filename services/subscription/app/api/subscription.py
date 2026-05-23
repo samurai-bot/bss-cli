@@ -32,6 +32,7 @@ async def create_subscription(
         price_snapshot=(
             body.price_snapshot.model_dump(by_alias=True) if body.price_snapshot else None
         ),
+        commercial_order_id=body.commercial_order_id,
     )
     return to_subscription_response(sub)
 
