@@ -32,8 +32,19 @@ keyed on the ``*.demo@bss-cli.local`` email or ``PROMO_DEMO_*`` id, never
 operator data.
 
 Usage:
-    BSS_API_TOKEN=... python -m bss_seed.demo seed
-    BSS_API_TOKEN=... python -m bss_seed.demo reset
+    BSS_API_TOKEN=... python -m bss_seed.demo seed \
+        [--loyalty-base-url URL] [--loyalty-token TOKEN]
+    BSS_API_TOKEN=... python -m bss_seed.demo reset \
+        [--loyalty-base-url URL] [--loyalty-token TOKEN]
+    BSS_API_TOKEN=... python -m bss_seed.demo loyalty-wipe
+
+Loyalty wiring (``--loyalty-base-url`` + ``--loyalty-token``) is optional —
+omit both for BSS-only mode. The Makefile targets (``make seed-demo`` /
+``make seed-demo-reset``) read ``$BSS_LOYALTY_BASE_URL`` and
+``$BSS_LOYALTY_API_TOKEN`` from the shell environment and pass them through
+as CLI flags; this keeps the Python module clear of per-process token
+reads (doctrine: tokens loaded once at startup, see
+``packages/bss-middleware/bss_middleware/api_token.py``).
 """
 
 from __future__ import annotations
@@ -102,7 +113,14 @@ def _env() -> dict[str, str]:
     """Read what we need from the process env. Service URLs default to the
     host-side compose ports so ``make seed-demo`` Just Works without further
     wiring. ``BSS_DB_URL`` + ``BSS_API_TOKEN`` are required (no safe default).
-    Loyalty wiring is optional — BSS-only mode is supported."""
+
+    Note: loyalty wiring is intentionally NOT read here. The loyalty base url
+    + token are CLI-flag inputs (see ``_cli()`` and the ``loyalty_*`` kwargs
+    on ``seed()`` / ``reset()``). This keeps the loyalty token off the Python
+    side of ``os.environ`` — doctrine "tokens loaded once at startup" wants
+    that read at the process boundary (the Makefile shell), not scattered
+    through helper modules.
+    """
     out: dict[str, str] = {}
     for var in ("BSS_DB_URL", "BSS_API_TOKEN"):
         v = os.environ.get(var)
@@ -113,8 +131,10 @@ def _env() -> dict[str, str]:
     # Host-side defaults — match the existing repo-root seed scripts.
     out["BSS_CRM_URL"] = os.environ.get("BSS_CRM_URL", "http://localhost:8002")
     out["BSS_CATALOG_URL"] = os.environ.get("BSS_CATALOG_URL", "http://localhost:8001")
-    out["BSS_LOYALTY_BASE_URL"] = os.environ.get("BSS_LOYALTY_BASE_URL", "")
-    out["BSS_LOYALTY_API_TOKEN"] = os.environ.get("BSS_LOYALTY_API_TOKEN", "")
+    # Loyalty entries default to empty; ``seed()`` / ``reset()`` overlay the
+    # CLI-passed values on top before constructing the loyalty client.
+    out["BSS_LOYALTY_BASE_URL"] = ""
+    out["BSS_LOYALTY_API_TOKEN"] = ""
     return out
 
 
@@ -165,8 +185,15 @@ async def _customer_id_by_email(conn: asyncpg.Connection, email: str) -> str | N
 # ─── seed ────────────────────────────────────────────────────────────────────
 
 
-async def seed(*, verbose: bool = True) -> dict[str, int]:
+async def seed(
+    *,
+    loyalty_base_url: str = "",
+    loyalty_token: str = "",
+    verbose: bool = True,
+) -> dict[str, int]:
     env = _env()
+    env["BSS_LOYALTY_BASE_URL"] = loyalty_base_url
+    env["BSS_LOYALTY_API_TOKEN"] = loyalty_token
     crm = _crm(env)
     catalog = _catalog(env)
     loyalty = _loyalty(env)
@@ -263,7 +290,12 @@ async def seed(*, verbose: bool = True) -> dict[str, int]:
 # ─── reset (demo prefix only — never touches operator data) ─────────────────
 
 
-async def reset(*, verbose: bool = True) -> dict[str, int]:
+async def reset(
+    *,
+    loyalty_base_url: str = "",
+    loyalty_token: str = "",
+    verbose: bool = True,
+) -> dict[str, int]:
     """Mirror of ``seed()``. Removes:
       1. eligibility rows for the demo targeted promo (loyalty.offer.revoke + BSS delete)
       2. demo promotions in BSS
@@ -271,6 +303,8 @@ async def reset(*, verbose: bool = True) -> dict[str, int]:
       4. demo customers in loyalty (best-effort)
     """
     env = _env()
+    env["BSS_LOYALTY_BASE_URL"] = loyalty_base_url
+    env["BSS_LOYALTY_API_TOKEN"] = loyalty_token
     crm = _crm(env)
     catalog = _catalog(env)
     loyalty = _loyalty(env)
@@ -477,14 +511,57 @@ async def wipe_loyalty(*, verbose: bool = True) -> dict[str, int]:
     return summary
 
 
+def _parse_loyalty_flags(args: list[str]) -> tuple[str, str, list[str]]:
+    """Pull ``--loyalty-base-url`` / ``--loyalty-token`` out of ``args``.
+
+    Returns ``(base_url, token, remaining_args)``. The two flags are
+    independent and both default to empty (BSS-only mode). The shell side
+    (Makefile target ``seed-demo`` / ``seed-demo-reset``) reads the env
+    vars and passes them as flags — Python never reads the loyalty token
+    from ``os.environ``.
+    """
+    base_url = ""
+    token = ""
+    remaining: list[str] = []
+    i = 0
+    while i < len(args):
+        if args[i] == "--loyalty-base-url" and i + 1 < len(args):
+            base_url = args[i + 1]
+            i += 2
+        elif args[i] == "--loyalty-token" and i + 1 < len(args):
+            token = args[i + 1]
+            i += 2
+        else:
+            remaining.append(args[i])
+            i += 1
+    return base_url, token, remaining
+
+
 def _cli() -> None:
-    """Entry points: ``python -m bss_seed.demo seed | reset | loyalty-wipe``."""
-    cmd = sys.argv[1] if len(sys.argv) > 1 else "seed"
+    """Entry points: ``python -m bss_seed.demo seed | reset | loyalty-wipe``.
+
+    Optional flags (``seed`` and ``reset`` only):
+      ``--loyalty-base-url URL``  — loyalty-http base URL
+      ``--loyalty-token TOKEN``   — loyalty admin bearer
+
+    Both default to empty → BSS-only mode (customer half runs, promo lane
+    skips). Pass them via ``make seed-demo`` (which threads
+    ``$BSS_LOYALTY_BASE_URL`` and ``$BSS_LOYALTY_API_TOKEN`` through from
+    the shell).
+    """
+    loyalty_base_url, loyalty_token, rest = _parse_loyalty_flags(sys.argv[1:])
+    cmd = rest[0] if rest else "seed"
     if cmd == "seed":
-        asyncio.run(seed())
+        asyncio.run(
+            seed(loyalty_base_url=loyalty_base_url, loyalty_token=loyalty_token)
+        )
     elif cmd == "reset":
-        asyncio.run(reset())
+        asyncio.run(
+            reset(loyalty_base_url=loyalty_base_url, loyalty_token=loyalty_token)
+        )
     elif cmd == "loyalty-wipe":
+        # ``loyalty-wipe`` resolves the DB URL itself (env or docker inspect
+        # of loyalty-http); no token needed since it talks straight to Postgres.
         asyncio.run(wipe_loyalty())
     else:
         print(
