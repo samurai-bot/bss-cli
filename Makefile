@@ -383,14 +383,23 @@ seed:
 # customers, OD/promo_code, upfront-issued offers). Idempotent. Without
 # BSS_LOYALTY_API_TOKEN set, the customer half still runs; the promo lane
 # skips with a log line (BSS-only mode is the supported fallback).
+#
+# v1.3.2 — the loyalty base url + token are read by the SHELL here (from
+# .env via ENV_SOURCE) and passed to Python as CLI flags. Python never
+# reads BSS_LOYALTY_API_TOKEN from os.environ — keeps the doctrine guard
+# "tokens loaded once at startup" honest without an in-source noqa.
 seed-demo:
-	@$(ENV_SOURCE); uv run --package bss-seed python -m bss_seed.demo seed
+	@$(ENV_SOURCE); uv run --package bss-seed python -m bss_seed.demo seed \
+	    --loyalty-base-url "$$BSS_LOYALTY_BASE_URL" \
+	    --loyalty-token "$$BSS_LOYALTY_API_TOKEN"
 
 # Reverse of seed-demo. Demo-prefix surgical: unassigns the targeted promo
 # (loyalty revoke + BSS delete), drops the two demo promotions, and removes
 # the demo customers from BOTH systems. Never touches operator data.
 seed-demo-reset:
-	@$(ENV_SOURCE); uv run --package bss-seed python -m bss_seed.demo reset
+	@$(ENV_SOURCE); uv run --package bss-seed python -m bss_seed.demo reset \
+	    --loyalty-base-url "$$BSS_LOYALTY_BASE_URL" \
+	    --loyalty-token "$$BSS_LOYALTY_API_TOKEN"
 
 # v1.3.1 — full wipe of loyalty's data (TRUNCATE loyalty.* + audit.* schemas,
 # re-stamp alembic head). Reads LOYALTY_DB_URL from env, or peeks into the

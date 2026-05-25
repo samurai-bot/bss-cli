@@ -3421,6 +3421,51 @@ they never had upfront pairing and continue mint-and-claim by code.
   reversed: claim-by-code as the SOLE path is retired; it remains the
   default for public codes only.
 
+## 2026-05-25 — v1.3.2 — Demo seed loyalty token threads through CLI flags, not os.environ
+
+**Context.** v1.3.1's synced demo seed (`packages/bss-seed/bss_seed/demo.py`)
+read `BSS_LOYALTY_API_TOKEN` directly from the process env via
+`os.environ.get(...)` inside `_env()`. That tripped the doctrine grep guard
+"request-time os.environ token reads forbidden" — a v0.9-era rule that says
+tokens load once at startup, never per-request, with a narrow exempt list
+(`api_token.py`, `auth.py`, `clients.py`, `session.py`, test fixtures, plus
+an inline `# noqa: token-runtime-read` carve-out). The CLI module fits the
+spirit of the rule (one read at startup, not per-request), but is outside
+the exempt list. Surfaced while scaffolding v1.4's e2e suite —
+`make doctrine-check` was red on main going back to v1.3.1.
+
+**Decision.** Move the env read **out of Python entirely**. The Makefile
+shell (`make seed-demo` / `make seed-demo-reset`) sources `.env` and passes
+the values as `--loyalty-base-url` / `--loyalty-token` CLI flags. Python's
+`_cli()` parses argv, threads the kwargs into `seed()` / `reset()`, which
+overlay them onto the env dict before constructing the loyalty client.
+Empty flags = BSS-only mode (the same fallback `os.environ.get("...", "")`
+used to deliver). `loyalty-wipe` is unchanged — it talks to Postgres
+directly with `LOYALTY_DB_URL`, no auth token involved.
+
+**Alternatives.**
+- Add `# noqa: token-runtime-read` to the offending line — pragmatic
+  (single-line, the grep blesses this exact escape hatch) but ducks the
+  doctrine. We have a precedent of taking the grep's spirit seriously
+  rather than reaching for the noqa.
+- Move the read into a new exempt module — would have required amending
+  the grep's allow-list, which is the more dangerous move. The exempt
+  list is meant to stay narrow.
+- Read the token from `BSS_API_TOKEN` (the BSS perimeter token) — wrong
+  secret. The loyalty token is a separate adapter credential.
+
+**Consequences.**
+- Python module is structurally clean of `BSS_*_API_TOKEN` env reads — the
+  grep guard now passes by structure, not by exception.
+- The shell does the env read once at `make` invocation. Tokens still
+  travel through argv (visible to a determined `ps` snooper on the same
+  host), but for a dev-tool that's acceptable. Same trade-off the rest of
+  the Makefile makes when threading creds through `uv run`.
+- `_parse_loyalty_flags()` is order-tolerant — flags can appear before or
+  after the subcommand. Empty values are valid (BSS-only mode).
+- `BSS_RELEASE` bumps to `1.3.2`. Doctrine fix only; no functional or
+  schema change.
+
 ## 2026-05-25 — v1.4.0 — Phase 0 amendment: Playwright e2e suite via mock-providers compose override
 
 **Context.** Through v1.1 → v1.3 every regression we shipped was caught by
