@@ -80,7 +80,7 @@ def _run_async_in_thread(coro):
 
 @pytest.mark.self_serve
 def test_public_promo_applied_at_signup(
-    page, base_urls, mailbox_path, e2e_customer_email, available_msisdn
+    page, snap, base_urls, mailbox_path, e2e_customer_email, available_msisdn
 ):
     """Type ``E2E_PUBLIC10`` at signup → live preview shows a discount;
     the order completes (degrade path is the v1.1.3 backstop, not the test)."""
@@ -92,6 +92,7 @@ def test_public_promo_applied_at_signup(
     page.wait_for_selector("form.signup-form", timeout=10_000)
     page.fill("input[name=name]", "E2E Public Promo")
     page.fill("input[name=phone]", "+65 9000 0001")
+    snap("signup-form-before-promo")
 
     # Type the promo code with real keystrokes — HTMX listens for
     # ``change`` and ``keyup[Enter]``, and the live preview is the
@@ -107,10 +108,12 @@ def test_public_promo_applied_at_signup(
         "        return el && el.innerText.trim().length > 0; }",
         timeout=10_000,
     )
+    snap("promo-preview-rendered")
 
     page.click("button.form-submit")
     page.wait_for_url("**/confirmation/**", timeout=45_000)
     expect(page.locator("#lpa-code")).to_be_visible()
+    snap("confirmation-with-promo-applied")
 
 
 # ── Spec 3: targeted promo on dashboard ─────────────────────────────────────
@@ -118,7 +121,7 @@ def test_public_promo_applied_at_signup(
 
 @pytest.mark.self_serve
 def test_targeted_promo_visible_on_dashboard(
-    page, base_urls, mailbox_path, e2e_customer_email, available_msisdn
+    page, snap, base_urls, mailbox_path, e2e_customer_email, available_msisdn
 ):
     """Walk a normal signup, then assign the targeted promo → dashboard
     surfaces the issued offer.
@@ -149,6 +152,7 @@ def test_targeted_promo_visible_on_dashboard(
     page.click("button.form-submit")
     page.wait_for_url("**/confirmation/**", timeout=45_000)
     expect(page.locator("#lpa-code")).to_be_visible()
+    snap("signup-complete-no-promo")
 
     # 2) Resolve the freshly-minted customer_id from the email and
     #    assign the targeted promo via the catalog API. v1.3.0 mints the
@@ -172,13 +176,7 @@ def test_targeted_promo_visible_on_dashboard(
     # 3) Refresh dashboard — the new targeted offer should be reachable.
     page.goto(f"{base}/")
     page.wait_for_load_state("networkidle")
-    # Active subscription line is the foundation; the targeted offer
-    # surfaces on a separate card. Both must be present.
     expect(page.locator(".line-card--active").first).to_be_visible()
-    # Verify the targeted promo id appears somewhere on the rendered
-    # dashboard — the dashboard's offer card template surfaces the
-    # promotion id or its display name. The id is the most stable
-    # contract across template tweaks.
     page_html = page.content()
     assert (
         PROMO_TARGETED_ID in page_html
@@ -187,6 +185,7 @@ def test_targeted_promo_visible_on_dashboard(
         "expected targeted offer (id or display_name) to render on dashboard; "
         "neither found"
     )
+    snap("dashboard-with-targeted-offer")
 
 
 # ── Spec 4: exhausted code at signup → order completes at full price ────────
@@ -194,7 +193,7 @@ def test_targeted_promo_visible_on_dashboard(
 
 @pytest.mark.self_serve
 def test_exhausted_promo_degrades_to_full_price(
-    page, base_urls, mailbox_path, e2e_customer_email, available_msisdn
+    page, snap, base_urls, mailbox_path, e2e_customer_email, available_msisdn
 ):
     """Exhausted code at signup — order completes (no discount applied).
 
@@ -230,13 +229,13 @@ def test_exhausted_promo_degrades_to_full_price(
     page.fill("input[name=name]", "E2E Exhausted Promo")
     page.fill("input[name=phone]", "+65 9000 0003")
 
-    # Type the now-exhausted code. The preview should reject it — but the
-    # spec doesn't assert on preview text (template-controlled phrasing
-    # varies); we just confirm the order completes.
     promo_input = page.locator("#promo_code")
     promo_input.click()
     page.keyboard.type(PROMO_EXHAUSTED_CODE, delay=20)
     page.keyboard.press("Tab")
+    # Give the HTMX preview a moment to settle (rejection text or empty).
+    page.wait_for_timeout(500)
+    snap("exhausted-code-typed")
 
     # Submit. With the code rejected at validate, no discount snapshot
     # lands on the order, and the funnel walks normally to /confirmation
@@ -244,3 +243,4 @@ def test_exhausted_promo_degrades_to_full_price(
     page.click("button.form-submit")
     page.wait_for_url("**/confirmation/**", timeout=45_000)
     expect(page.locator("#lpa-code")).to_be_visible()
+    snap("confirmation-no-discount-applied")

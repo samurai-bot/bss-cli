@@ -501,7 +501,11 @@ scenarios-hero:
 #   3. `docker compose up -d`               (restore normal stack)
 #
 # Reports land in docs/e2e-reports/<UTC-ts>/ — gitignored except
-# README.md. Pass CLEAN=1 to do a destructive `down -v` (drops
+# README.md. v1.4.1 produces VISUAL artefacts (screenshots + video +
+# Playwright trace) per spec, plus a top-level index.html gallery
+# that links everything. Open the index.html in any browser to review
+# what the test saw, in order, end-to-end. JUnit XML stays for CI
+# ingestion later. Pass CLEAN=1 to do a destructive `down -v` (drops
 # volumes) instead of the soft down.
 #
 # Pre-condition: your .env should have mock/no-creds for Stripe / Didit
@@ -512,22 +516,23 @@ e2e:
 	@mkdir -p docs/e2e-reports
 	@ts=$$(date -u +%Y%m%dT%H%M%SZ); \
 	out="docs/e2e-reports/$$ts"; \
-	mkdir -p "$$out/traces"; \
+	mkdir -p "$$out"; \
+	export BSS_E2E_REPORT_DIR="$$PWD/$$out"; \
 	down_cmd="docker compose -f docker-compose.yml -f docker-compose.e2e.yml down --remove-orphans"; \
 	if [ "$$CLEAN" = "1" ]; then down_cmd="$$down_cmd -v"; fi; \
 	trap 'echo; echo "--- tearing down e2e stack ---"; \
 	      eval "$$down_cmd" >/dev/null 2>&1 || true; \
 	      $(MAKE) seed-demo-reset >/dev/null 2>&1 || true; \
 	      docker compose up -d >/dev/null 2>&1 || true; \
-	      echo "--- e2e report: '"$$out"' ---"' EXIT INT TERM; \
+	      echo; echo "--- e2e gallery: file://'"$$PWD"'/'"$$out"'/index.html ---"' EXIT INT TERM; \
 	echo "--- bringing up e2e stack (override: docker-compose.e2e.yml) ---"; \
 	docker compose -f docker-compose.yml -f docker-compose.e2e.yml up -d --wait; \
 	echo "--- seeding demo data ---"; \
 	$(MAKE) demo-restore; \
-	echo "--- running playwright suite ---"; \
-	uv run --package bss-e2e pytest packages/bss-e2e/tests/ \
-	    --html="$$out/report.html" --self-contained-html \
-	    --junitxml="$$out/junit.xml"
+	echo "--- running playwright suite (artefacts → $$out) ---"; \
+	($(ENV_SOURCE); export BSS_E2E_REPORT_DIR="$$BSS_E2E_REPORT_DIR"; \
+	 uv run --package bss-e2e pytest packages/bss-e2e/tests/ \
+	     --junitxml="$$out/junit.xml")
 
 # Manual escape-hatch — if a previous `make e2e` left the override
 # stack up (e.g. SIGKILL), run this to drop it and bring the normal
