@@ -182,12 +182,34 @@ touches operator data.
 
 v1.4 ships a **Playwright-driven** suite covering the self-serve portal
 (`localhost:9001`) and the operator cockpit browser veneer (`localhost:9002`).
-Smoke + promo branches at v1.4.0; ~10 specs, ~4 minutes wall-clock.
+10 specs green at v1.4.1, ~37 seconds wall-clock end-to-end.
+
+Every run produces **visual artefacts** under `docs/e2e-reports/<UTC-ts>/`:
+
+```
+docs/e2e-reports/20260525T173800Z/
+├── index.html                          ← open this in any browser
+├── junit.xml
+├── test-signup-golden-path-smoke/
+│   ├── 01-signed-in.png
+│   ├── 02-signup-form-blank.png
+│   ├── 03-signup-form-filled.png
+│   ├── 04-confirmation-with-esim-qr.png
+│   ├── 05-dashboard-active-line.png
+│   ├── trace.zip      (open with: playwright show-trace)
+│   └── video.webm
+└── … (9 more specs)
+```
+
+`index.html` is a self-contained gallery — one section per spec with
+inline screenshot grid + embedded video + trace download. The end of
+`make e2e` prints the `file://` URL.
 
 ```bash
-make e2e                # bring up stack in mock-providers mode, run suite,
-                        # tear down, restore normal stack. Trap on
-                        # EXIT/INT/TERM so Ctrl-C still cleans up.
+make e2e                # bring up override stack → demo-restore →
+                        # run pytest → generate gallery → tear down →
+                        # restore normal stack. Trap on EXIT/INT/TERM
+                        # so Ctrl-C still cleans up.
 make e2e CLEAN=1        # same, but full `down -v` first (drops volumes).
 make e2e-down           # manual escape-hatch if a previous run left the
                         # override stack up.
@@ -197,20 +219,24 @@ How it works:
 
 1. `docker-compose.e2e.yml` is layered over the normal compose to pin
    `BSS_PAYMENT_PROVIDER=mock`, `BSS_KYC_ALLOW_PREBAKED=true`,
-   `BSS_PORTAL_EMAIL_PROVIDER=logging`, `BSS_ESIM_PROVIDER=sim`. Your `.env`
-   is not touched.
+   `BSS_PORTAL_EMAIL_PROVIDER=logging`, `BSS_ESIM_PROVIDER=sim`, plus
+   `BSS_LLM_FIXTURE_PATH` on `portal-csr` for deterministic cockpit
+   LLM responses. Your `.env` is not touched.
 2. `make demo-restore` runs first for clean seed.
-3. Tests run via `pytest` in `packages/bss-e2e/` — pytest-html + JUnit XML
-   reports land in `docs/e2e-reports/<UTC-ts>/` (git-ignored except for the
-   README pointer).
-4. On exit, the override stack comes down and the normal stack comes back up.
+3. Tests run via `pytest` in `packages/bss-e2e/`. Each test fixture
+   wires per-spec Playwright tracing + video recording + named
+   `snap("label")` screenshots. A `pytest_sessionfinish` hook generates
+   the gallery `index.html`.
+4. On exit, the override stack comes down and the normal stack comes
+   back up.
 
 Pre-condition: your `.env` should not have a real `sk_live_*` Stripe key —
 the v0.16 startup template-scan will refuse to boot with `mock` providers if
 it spots one. Use mock or unset for `BSS_PAYMENT_*`, `BSS_PORTAL_KYC_*`, and
 `BSS_PORTAL_EMAIL_*` creds before invoking `make e2e`.
 
-See `phases/V1_4_0.md` for the suite design.
+See `phases/V1_4_0.md` for the suite design and
+`docs/e2e-reports/README.md` for the artefact-format details.
 
 ## Documentation map
 

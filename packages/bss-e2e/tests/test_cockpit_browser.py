@@ -83,42 +83,42 @@ def _wait_for_turn_done(page, timeout_ms: int = 15_000) -> None:
 
 
 @pytest.mark.cockpit
-def test_cockpit_sessions_index_opens(page, base_urls):
+def test_cockpit_sessions_index_opens(page, snap, base_urls):
     """``/`` renders the sessions index + new-conversation CTA."""
     base = base_urls["cockpit"]
     page.goto(base + "/")
     expect(page.locator("button.cockpit-link-btn")).to_be_visible()
     expect(page.locator("button.cockpit-link-btn")).to_contain_text("New conversation")
+    snap("sessions-index")
 
 
 # ── Spec 7: tool roundtrip (LLM → customer.list → render) ──────────────────
 
 
 @pytest.mark.cockpit
-def test_cockpit_tool_roundtrip(page, base_urls):
+def test_cockpit_tool_roundtrip(page, snap, base_urls):
     """The mocked LLM calls ``customer.list(name_contains="Demo")``; the
     real CRM returns the demo customers; the cockpit renders a tool block
     + an assistant bubble. The spec asserts both surfaces appeared."""
     base = base_urls["cockpit"]
     _open_new_conversation(page, base)
+    snap("new-conversation")
 
     # "list customers" matches the fixture's tool-roundtrip-customer-list
     # entry, which scripts customer.list(name_contains="Demo").
     _send_message(page, "list customers — show me the demo ones")
     _wait_for_turn_done(page)
 
-    # Tool pill emitted via render_tool_pill — `.chat-tool-name` carries
-    # the dotted tool name verbatim. That's our "tool fired" assertion.
     expect(page.locator(".chat-tool-name").first).to_contain_text("customer.list")
-    # Assistant final bubble must appear too (the mock's step 1 content).
     expect(page.locator(".chat-bubble-assistant").last).to_be_visible()
+    snap("tool-roundtrip-rendered")
 
 
 # ── Spec 8: propose-then-confirm (destructive gate) ─────────────────────────
 
 
 @pytest.mark.cockpit
-def test_cockpit_propose_then_confirm(page, base_urls):
+def test_cockpit_propose_then_confirm(page, snap, base_urls):
     """Destructive tool call from the LLM is gated by
     ``safety.DESTRUCTIVE_TOOLS``. The cockpit stages a
     ``pending_destructive`` row in the DB instead of executing; POST
@@ -167,6 +167,7 @@ def test_cockpit_propose_then_confirm(page, base_urls):
         f"expected pending tool to be provisioning.set_fault_injection; "
         f"got {pending['tool_name']!r}"
     )
+    snap("destructive-proposal-pending")
 
     # POST /confirm must accept (303 to /cockpit/<id>). The contract is
     # "the operator has a button to press, parity with REPL /confirm";
@@ -180,13 +181,18 @@ def test_cockpit_propose_then_confirm(page, base_urls):
     assert response.status == 303, (
         f"expected 303 from /cockpit/<id>/confirm; got {response.status}"
     )
+    # Navigate to the redirect target so the visual record shows the
+    # post-confirm state.
+    page.goto(f"{base}/cockpit/{session_id}")
+    page.wait_for_load_state("networkidle")
+    snap("after-confirm-redirect")
 
 
 # ── Spec 9: knowledge citation OR fallback (hallucination guard) ───────────
 
 
 @pytest.mark.cockpit
-def test_cockpit_knowledge_citation_or_fallback(page, base_urls):
+def test_cockpit_knowledge_citation_or_fallback(page, snap, base_urls):
     """The cockpit's hallucination guard replaces uncited handbook claims
     with the canonical fallback string. Mock returns ``"Per the handbook,
     refunds..."`` with NO knowledge.* tool call; the guard fires; the
@@ -194,24 +200,20 @@ def test_cockpit_knowledge_citation_or_fallback(page, base_urls):
     base = base_urls["cockpit"]
     _open_new_conversation(page, base)
 
-    # Match the fixture's knowledge-uncited-fallback entry.
     _send_message(page, "what's our refund policy?")
     _wait_for_turn_done(page)
 
-    # The fallback string is canonical (defined in
-    # portals/csr/bss_csr/routes/cockpit.py:_KNOWLEDGE_HALLUCINATION_FALLBACK).
-    # Asserting on a fragment so a future minor rewording doesn't break
-    # the spec.
     expect(page.locator(".chat-bubble-assistant").last).to_contain_text(
         "I don't have a citation for that"
     )
+    snap("hallucination-fallback-rendered")
 
 
 # ── Spec 10: slash-command parity (/focus) ──────────────────────────────────
 
 
 @pytest.mark.cockpit
-def test_cockpit_slash_command_parity(page, base_urls):
+def test_cockpit_slash_command_parity(page, snap, base_urls):
     """Set the customer focus via the dedicated form, then clear it.
     ``/focus`` is server-side (no LLM hop), deterministic in both
     surfaces."""
@@ -219,6 +221,7 @@ def test_cockpit_slash_command_parity(page, base_urls):
     page.goto(base + "/")
     page.locator("button.cockpit-link-btn").first.click()
     page.wait_for_url("**/cockpit/**", timeout=10_000)
+    snap("new-conversation-no-focus")
 
     focus_form = page.locator("form.thread-focus-form")
     focus_form.locator("input[name=customer_id]").fill("CUST-E2EFOCUS")
@@ -226,9 +229,11 @@ def test_cockpit_slash_command_parity(page, base_urls):
     page.wait_for_load_state("networkidle")
     expect(page.locator(".thread-focus")).to_be_visible(timeout=10_000)
     expect(page.locator(".thread-focus")).to_contain_text("CUST-E2EFOCUS")
+    snap("focus-pinned")
 
     focus_form_after = page.locator("form.thread-focus-form")
     focus_form_after.locator("input[name=customer_id]").fill("")
     focus_form_after.locator("button[type=submit]").click()
     page.wait_for_load_state("networkidle")
     expect(page.locator(".thread-focus")).to_have_count(0)
+    snap("focus-cleared")

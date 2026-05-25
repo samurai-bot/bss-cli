@@ -50,42 +50,37 @@ def _login(page: Page, base_url: str, email: str, mailbox_path) -> None:
 
 @pytest.mark.self_serve
 def test_signup_golden_path_smoke(
-    page, base_urls, mailbox_path, e2e_customer_email, available_msisdn
+    page, snap, base_urls, mailbox_path, e2e_customer_email, available_msisdn
 ):
     """Fresh customer signs up; confirmation + dashboard render the new line."""
     base = base_urls["self_serve"]
 
     # ── Step 1: auth ────────────────────────────────────────────────────
     _login(page, base, e2e_customer_email, mailbox_path)
+    snap("signed-in")
 
     # ── Step 2: signup form ─────────────────────────────────────────────
     page.goto(f"{base}/signup/{SMOKE_PLAN}?msisdn={available_msisdn}")
-    # Wait for the form (not just navigation) — signup is gated on
-    # session verification and may redirect transparently if the cookie
-    # rotated.
     page.wait_for_selector("form.signup-form", timeout=10_000)
+    snap("signup-form-blank")
     page.fill("input[name=name]", "E2E Smoke")
     page.fill("input[name=phone]", "+65 9000 0000")
-    # ``card_pan`` defaults to "4242424242424242" under the mock-tokenizer
-    # override; leave as-is.
+    snap("signup-form-filled")
 
     # ── Step 3: submit + wait for funnel auto-advance ───────────────────
     page.click("button.form-submit")
-    # The progress page polls /signup/step/poll which emits HX-Redirect
-    # to /confirmation/{sub_id}?session=... when COM finishes the order.
-    # 45 s gives plenty of headroom for the mock chain.
+    # Progress page polls /signup/step/poll until COM finishes; HX-Redirect
+    # lands the browser on /confirmation.
     page.wait_for_url("**/confirmation/**", timeout=45_000)
 
     # ── Step 4: confirmation renders eSIM QR + LPA code ────────────────
     expect(page.locator("#lpa-code")).to_be_visible()
     expect(page.locator(".confirmation-qr img, img.confirmation-qr-image").first).to_be_visible()
+    snap("confirmation-with-esim-qr")
 
     # ── Step 5: dashboard shows the active line ─────────────────────────
     page.goto(f"{base}/")
     page.wait_for_load_state("networkidle")
-    # ``.line-card--active`` is the live class — any active subscription
-    # matches, and there's exactly one for this brand-new customer.
     expect(page.locator(".line-card--active").first).to_be_visible()
-    # MSISDN we requested should render somewhere on the card (last 4 digits
-    # is enough; portal may format with spaces / dashes).
     expect(page.locator(".line-card-msisdn").first).to_contain_text(available_msisdn[-4:])
+    snap("dashboard-active-line")

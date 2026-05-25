@@ -64,7 +64,7 @@ def _walk_signup(
 
 @pytest.mark.self_serve
 def test_step_up_required_for_sensitive_action(
-    page, base_urls, mailbox_path, e2e_customer_email, available_msisdn
+    page, snap, base_urls, mailbox_path, e2e_customer_email, available_msisdn
 ):
     """name_update gates on step-up OTP; updates succeed once cleared."""
     base = base_urls["self_serve"]
@@ -74,10 +74,12 @@ def test_step_up_required_for_sensitive_action(
     _walk_signup(
         page, base, PROMO_PLAN, available_msisdn, name="E2E Original"
     )
+    snap("after-signup")
 
     # ── Step-up gate fires on the rename submit ────────────────────────
     page.goto(f"{base}/profile/contact")
     page.wait_for_selector("form[action='/profile/contact/name/update']", timeout=10_000)
+    snap("profile-contact-original-name")
     page.fill(
         "form[action='/profile/contact/name/update'] input[name=given_name]",
         NEW_GIVEN_NAME,
@@ -89,16 +91,14 @@ def test_step_up_required_for_sensitive_action(
     page.locator(
         "form[action='/profile/contact/name/update'] button[type=submit]"
     ).click()
-    # The server gates via `requires_step_up("name_update")` — 303 →
-    # /auth/step-up. Playwright follows the redirect automatically.
     page.wait_for_url("**/auth/step-up*", timeout=10_000)
-    # The action label leaks into the page so the user sees what they're
-    # confirming; it's a stable assertion target.
     expect(page.locator(".auth-action")).to_contain_text("name_update")
+    snap("step-up-challenge")
 
     # ── Trigger step-up OTP issuance ───────────────────────────────────
     page.click("button.auth-cta")  # "Email me a code"
     page.wait_for_selector("input[name=code]", timeout=10_000)
+    snap("step-up-code-input")
 
     # ── Read the step-up OTP from the mailbox (different subject) ──────
     step_up_otp = wait_for_otp(
@@ -113,7 +113,7 @@ def test_step_up_required_for_sensitive_action(
     # ── Auto-replay: the server-rendered replay page auto-submits the
     #     original rename POST. The fresh step-up cookie carries the
     #     grant; the gate passes; we land on /profile/contact with the
-    #     success flash. The replay is the production contract — manual
-    #     re-submit would burn the gate a second time.
+    #     success flash.
     page.wait_for_url("**/profile/contact*flash=name_update**", timeout=15_000)
     expect(page.locator(".form-flash")).to_contain_text("Name updated")
+    snap("name-updated-success")
