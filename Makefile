@@ -2,7 +2,7 @@
 
 help:
 	@echo "  up                  — 10 BSS services (BYOI Postgres/RabbitMQ)"
-	@echo "  up-all              — services + Postgres + RabbitMQ + Metabase"
+	@echo "  up-all              — services + Postgres + RabbitMQ + Jaeger"
 	@echo "  up-minimal          — catalog + crm + payment only"
 	@echo "  up-core             — minimal + com + som + subscription + provisioning-sim"
 	@echo "  down                — stop everything"

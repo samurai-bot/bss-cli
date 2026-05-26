@@ -4,7 +4,7 @@
 
 ## What this project is
 
-**BSS-CLI** is a complete, lightweight, SID-aligned, TMF-compliant Business Support System designed to run entirely from a terminal. It is LLM-native: every operation is exposed as a tool the LLM can call, and the primary UI is the CLI plus ASCII-rendered visualizations. Metabase is the only graphical surface and is reserved for analytical reporting.
+**BSS-CLI** is a complete, lightweight, SID-aligned, TMF-compliant Business Support System designed to run entirely from a terminal. It is LLM-native: every operation is exposed as a tool the LLM can call, and the primary UI is the CLI plus ASCII-rendered visualizations. Analytics is out of scope in v0.x — `audit.domain_event` is the substrate; an external BI consumer plugs in BYOI against the shared Postgres if needed.
 
 It is a **reference implementation** for engineers learning telco BSS/OSS, a **deployable MVP** for a small MVNO, and a **substrate** for agentic experiments against realistic telco operations. It covers CRM (with case/ticket management), Product Catalog, Commercial Order Management (COM), Service Order Management (SOM) with a provisioning simulator, eSIM profile management, Subscription & Bundle Balance, Mediation, Rating, and Payment.
 
@@ -13,7 +13,7 @@ It is a **reference implementation** for engineers learning telco BSS/OSS, a **d
 1. **Bundled-prepaid only.** No proration. No dunning. No collections. No credit risk modeling. The product is a bundle, the customer pays upfront via card-on-file, the bundle either has remaining quota or it doesn't.
 2. **Card-on-file is mandatory.** Every customer has a payment method before activation. Failed charge equals no service. There is no grace period, no retry ladder, no manual collection workflow.
 3. **Block-on-exhaust.** Service stops the instant a bundle hits zero. The only paths back to active are: bundle renewal (automatic, on period boundary, charged to COF) or VAS top-up (explicit customer action, charged to COF).
-4. **CLI-first, LLM-native.** Every capability is a tool the LLM can call. The terminal is the primary interface. ASCII art is the visualization language. Metabase is the only exception, reserved for analytics.
+4. **CLI-first, LLM-native.** Every capability is a tool the LLM can call. The terminal is the primary interface. ASCII art is the visualization language. No graphical analytics dashboard ships in-tree — `audit.domain_event` is the substrate for anyone who wants to plug one in.
 5. **TMF-compliant where it counts.** Real TMF Open API surfaces (TMF620, TMF621, TMF622, TMF629, TMF635, TMF638, TMF640, TMF641, TMF676, TMF678, TMF683). Not naming theater. Payloads match the spec.
 6. **Lightweight is measurable.** The full stack runs in under 4GB RAM. Cold start under 30 seconds. p99 internal API latency under 50ms. If a change pushes us past these limits, it requires explicit justification.
 7. **Write through policy, read freely.** Reads are free. Writes go through a validation layer that enforces domain invariants. There is no such thing as "raw CRUD" in BSS-CLI. The LLM cannot corrupt state even when asked to.
@@ -167,7 +167,7 @@ Two distinct planes:
 - **LLM gateway:** OpenRouter via the openai SDK (no LiteLLM hop) → `google/gemma-4-26b-a4b-it` (v0.10.0+; previously MiMo v2 Flash, swapped due to tool-call latency regression — see DECISIONS 2026-04-27)
 - **Database:** PostgreSQL 16, **single instance**, schema-per-domain (see ARCHITECTURE.md for future split path)
 - **Vector DB (post-v0.1):** pgvector extension on the same Postgres instance (schema `knowledge`)
-- **Reporting:** Metabase
+- **Reporting:** out of scope in-tree (BYOI against `audit.domain_event`)
 - **Logging:** structlog (JSON)
 - **Tracing (v0.2):** OpenTelemetry SDK + auto-instrumentors (FastAPI, HTTPX, AsyncPG, AioPika); OTLP/HTTP export to Jaeger
 - **Auth (v0.3):** Shared `BSS_API_TOKEN` middleware (`packages/bss-middleware`) on every BSS service; `TokenAuthProvider` on every outbound client. Per-principal OAuth2 / JWT is Phase 12.
@@ -179,7 +179,7 @@ Two distinct planes:
 
 ## Deployment model
 
-9 service containers + 2 portal containers (self-serve 9001, cockpit veneer 9002) + four optional infra containers (Postgres, RabbitMQ, Metabase, Jaeger). Billing deferred to v0.2 — port 8009 reserved (DECISIONS 2026-04-13). REPL (`bss`) is canonical cockpit; browser is the same Conversation viewed in HTML. See `ARCHITECTURE.md` for topology, compose profiles, and the AWS path.
+9 service containers + 2 portal containers (self-serve 9001, cockpit veneer 9002) + three optional infra containers (Postgres, RabbitMQ, Jaeger). Billing deferred to v0.2 — port 8009 reserved (DECISIONS 2026-04-13). REPL (`bss`) is canonical cockpit; browser is the same Conversation viewed in HTML. See `ARCHITECTURE.md` for topology, compose profiles, and the AWS path.
 
 ## Naming conventions
 

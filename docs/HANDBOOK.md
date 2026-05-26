@@ -90,7 +90,7 @@ tags: [bss-cli, handbook, runbook, reference]
 
 ## Part 1 — What this is
 
-**BSS-CLI** is a complete, lightweight, SID-aligned, TMF-compliant Business Support System designed to run entirely from a terminal. It is **LLM-native**: every operation is exposed as a tool the LLM can call, and the primary UI is the CLI plus ASCII-rendered visualizations. **Metabase** is the only graphical surface and is reserved for analytical reporting.
+**BSS-CLI** is a complete, lightweight, SID-aligned, TMF-compliant Business Support System designed to run entirely from a terminal. It is **LLM-native**: every operation is exposed as a tool the LLM can call, and the primary UI is the CLI plus ASCII-rendered visualizations. Analytics is out of scope in-tree: `audit.domain_event` is the substrate, plug in any external BI consumer BYOI.
 
 **Three audiences:**
 1. **Engineers learning telco BSS/OSS** — read [`ARCHITECTURE.md`](../ARCHITECTURE.md) and the phase docs in `phases/`.
@@ -102,7 +102,7 @@ tags: [bss-cli, handbook, runbook, reference]
 1. **Bundled-prepaid only.** No proration. No dunning. No collections. No credit-risk modeling.
 2. **Card-on-file is mandatory.** Failed charge equals no service. No grace period. No retry ladder.
 3. **Block-on-exhaust.** Service stops the instant a bundle hits zero. The only paths back: bundle renewal (auto, on period boundary, COF) or VAS top-up (explicit, COF).
-4. **CLI-first, LLM-native.** Every capability is a tool. Terminal is primary. ASCII is the visualization language. Metabase is the only exception (analytics).
+4. **CLI-first, LLM-native.** Every capability is a tool. Terminal is primary. ASCII is the visualization language. No graphical analytics dashboard ships in-tree (`audit.domain_event` is the BYOI substrate).
 5. **TMF-compliant where it counts.** Real TMF Open API surfaces. Not naming theater.
 6. **Lightweight is measurable.** Full stack <4GB RAM, cold start <30s, p99 internal API latency <50ms.
 7. **Write through policy, read freely.** Every write goes through invariant-enforcing policies. There is no raw CRUD.
@@ -146,7 +146,7 @@ sed -i "s/^BSS_PORTAL_TOKEN_PEPPER=changeme$/BSS_PORTAL_TOKEN_PEPPER=$(openssl r
 
 # 3. Set BSS_LLM_API_KEY in .env to your OpenRouter key (sk-or-v1-...).
 
-# 4. Bring everything up (bundled = local Postgres + RabbitMQ + Jaeger + Metabase).
+# 4. Bring everything up (bundled = local Postgres + RabbitMQ + Jaeger).
 make up-all
 
 # 5. Apply migrations + seed reference data (3 plans, 4 VAS, 1000 MSISDNs, 1000 eSIM profiles).
@@ -171,7 +171,6 @@ The portals are at:
 - **`http://localhost:9001`** — self-serve customer portal (sign up, top up, plan change)
 - **`http://localhost:9002`** — operator browser cockpit (same conversations as the REPL)
 - **`http://localhost:16686`** — Jaeger trace UI
-- **`http://localhost:3000`** — Metabase analytics
 - **`http://localhost:15672`** — RabbitMQ UI (`guest/guest`)
 
 To wire up real providers (Resend / Didit / Stripe), run `bss onboard` (interactive) — see [Part 4](#part-4--external-providers).
@@ -192,13 +191,12 @@ docker compose -f docker-compose.yml -f docker-compose.infra.yml up -d
 make up-all
 ```
 
-Brings up **9 BSS service containers + 2 portal containers + 4 infrastructure containers**:
+Brings up **9 BSS service containers + 2 portal containers + 3 infrastructure containers**:
 
 | Container | Image | Ports | Purpose |
 |---|---|---|---|
-| `postgres` | `postgres:16-alpine` | `5432:5432` | DB (`bss/bss/bss`), volume `postgres_data` |
+| `postgres` | `pgvector/pgvector:pg16` | `5432:5432` | DB (`bss/bss/bss`), volume `postgres_data` |
 | `rabbitmq` | `rabbitmq:3.13-management-alpine` | `5672:5672`, `15672:15672` | MQ (`guest/guest`), volume `rabbitmq_data` |
-| `metabase` | `metabase/metabase:latest` | `3000:3000` | Analytics, points at the bundled Postgres |
 | `jaeger` | `jaegertracing/all-in-one:1.65.0` | `4317`, `4318`, `16686` | OTLP collector + UI, in-memory storage (lost on restart) |
 
 #### BYOI (bring-your-own-infra) — for shared infrastructure / production
@@ -216,8 +214,6 @@ BSS_DB_URL=postgresql+asyncpg://bss:secret@db.host:5432/bss
 BSS_MQ_URL=amqp://user:pw@mq.host:5672/
 BSS_OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger.host:4318
 ```
-
-Metabase has no env-var seam. If you don't run the bundled compose, stand it up yourself.
 
 #### Service container map (constant across both shapes)
 

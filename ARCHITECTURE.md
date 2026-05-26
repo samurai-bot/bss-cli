@@ -65,12 +65,14 @@ Three callers — **CLI** (terminal-native), **self-serve portal** (public signu
      │  crm · catalog · inventory · payment · order_mgmt │  │  OTLP/HTTP   │
      │  service_inventory · provisioning · subscription  │  │  → traces UI │
      │  mediation · billing · audit · knowledge          │  └──────────────┘
-     └─────────────────────────┬────────────────────────┘
-                               │ read-only
-                               ▼
-                       ┌────────────────┐
-                       │    Metabase    │
-                       └────────────────┘
+     └──────────────────────────────────────────────────┘
+
+     External sibling adapter (v1.1, OPTIONAL):
+       loyalty-cli  ─ promo entitlements (Bearer-auth HTTP at
+                      loyalty-http:8080; catalog + com + crm hold the
+                      client). Unset BSS_LOYALTY_API_TOKEN → promo
+                      subsystem off, every core flow runs unchanged
+                      (graceful degradation).
 ```
 
 **\* CRM hosts the Inventory sub-domain** (MSISDN pool + eSIM profile pool) on port 8002 under `/inventory-api/v1/...`. Not a separate container in v0.1. See "Services" table below.
@@ -91,6 +93,7 @@ Used when the caller needs an immediate answer.
 | SOM → CRM Inventory (reserve_msisdn + reserve_esim) | Atomic reservation on shared CRM instance |
 | CRM (close policy) → Subscription (list_for_customer) | Policy needs live answer |
 | Mediation → Subscription (get_by_msisdn) | Enrichment |
+| Catalog + COM + CRM → loyalty-cli (v1.1, OPTIONAL) | Promo entitlements via Bearer-auth `LoyaltyClient`. Catalog registers offer definitions in the create saga; CRM pairs customer↔offer at `promo assign` (v1.3); COM claims/validates the discount at order completion. Unset `BSS_LOYALTY_API_TOKEN` → promo subsystem off, every core flow runs unchanged. |
 
 ### Asynchronous events (RabbitMQ)
 
@@ -764,7 +767,7 @@ Each service reads `BSS_DB_URL` and `BSS_MQ_URL` from env. No assumptions about 
 
 ### Optional infra compose: all-in-one
 
-`docker-compose.infra.yml` brings up Postgres, RabbitMQ, and Metabase in containers for operators who prefer a single-command bring-up. This is **not the primary development mode** — it exists as a bring-up convenience for new contributors and for the README quickstart.
+`docker-compose.infra.yml` brings up Postgres, RabbitMQ, and Jaeger in containers for operators who prefer a single-command bring-up. This is **not the primary development mode** — it exists as a bring-up convenience for new contributors and for the README quickstart.
 
 ```yaml
 # docker-compose.infra.yml
@@ -786,10 +789,11 @@ services:
     ports: ["5672:5672", "15672:15672"]
     volumes: [rabbitmq_data:/var/lib/rabbitmq]
 
-  metabase:
-    image: metabase/metabase:latest
-    ports: ["3000:3000"]
-    depends_on: [postgres]
+  jaeger:
+    image: jaegertracing/all-in-one:1.65.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports: ["4317:4317", "4318:4318", "16686:16686"]
 
 volumes:
   postgres_data:
@@ -882,10 +886,9 @@ Last full re-measurement was v0.6 against the post-v0.5 stack (9 services + 2 po
 | 2 × portal (self-serve + csr) | — | ~270 MB | New v0.4 / v0.5; portal-auth + chat-conversation-store add tens of KB of in-memory state per active customer in v0.8/v0.12, immaterial vs the process baseline |
 | Postgres (dev config) | ~400 MB | ~400 MB | Unchanged |
 | RabbitMQ | ~350 MB | ~350 MB | Unchanged |
-| Metabase | ~600 MB | ~600 MB | Unchanged |
 | Jaeger (all-in-one image) | — | ~200 MB | New v0.2 |
 | **Total (BYOI, services + portals only)** | **~1.5 GB** | **~1.1 GB** | Comfortably under 2 GB |
-| **Total (all-in-one, +infra +Jaeger)** | **~2.85 GB** | **~2.65 GB** | Under the 4 GB motto |
+| **Total (all-in-one, +infra +Jaeger)** | **~2.25 GB** | **~2.05 GB** | Well under the 4 GB motto |
 
 BYOI mode fits on a t3.small; all-in-one fits on a t3.medium. The motto-#6 4 GB ceiling holds with headroom. Re-measure pending v1.0 — real Singpass / Stripe / SM-DP+ adapters will add some footprint (predictably small; SDK clients only).
 
@@ -1093,13 +1096,13 @@ Cost estimate: **~$4,000-8,000/month**.
 - **OpenTelemetry SDK** in every service via `bss-telemetry`. Auto-instrumentors hook FastAPI (server spans), HTTPX (outbound), AsyncPG (SQL via SQLAlchemy), and aio-pika (MQ publish/consume). W3C `traceparent` propagates through HTTP, MQ messages, and SQL spans automatically.
 - **Three manual span sites** add business semantics that auto can't infer: `com.order.complete_to_subscription`, `som.decompose`, `subscription.purchase_vas`. Verified via grep guard.
 - **Jaeger all-in-one** as the trace backend. OTLP/HTTP ingress on `:4318`, UI on `:16686`. Memory storage by default; swap to badger for persistence (see `docs/runbooks/jaeger-byoi.md`). Two deploy paths:
-  - **Bundled:** `docker-compose.infra.yml` includes the `jaeger` service alongside postgres + rabbitmq + metabase.
+  - **Bundled:** `docker-compose.infra.yml` includes the `jaeger` service alongside postgres + rabbitmq.
   - **BYOI:** install Jaeger once on the same host that already runs Postgres/RabbitMQ (typically tech-vm). Same image, same ports.
 - **`bss trace <id>`** queries Jaeger's HTTP API and renders an ASCII swimlane (services as columns, parent-child indented, manual spans starred). Supplements `for-order` / `for-subscription` / `for-ask` resolvers that join through `audit.domain_event.trace_id`.
 - **`audit.domain_event.trace_id`** populated on every write by the per-service publishers via `bss_telemetry.current_trace_id()`. Enables post-hoc lookups from a business ID to the full distributed trace.
 - **`/health` excluded** from instrumentation (OTel `excluded_urls`). Without this the Jaeger UI is 99% docker-healthcheck noise.
 - **structlog** continues to JSON-log; `trace_id` correlation in log lines is present from v0.1 forward-compat work.
-- **Metabase** reads from `audit.domain_event` for business dashboards (separate from OTel — different consumer of the same audit substrate).
+- **Business analytics** is out of scope in-tree: `audit.domain_event` is the substrate, and any external BI consumer plugs in BYOI against the shared Postgres — separate from OTel, different consumer of the same audit log.
 
 ## What's NOT in the architecture
 

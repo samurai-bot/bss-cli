@@ -133,7 +133,6 @@ bss                                 # cockpit REPL
 open http://localhost:9001/         # self-serve portal
 open http://localhost:9002/         # operator cockpit (browser veneer)
 open http://localhost:16686/        # Jaeger UI (traces)
-open http://localhost:3000/         # Metabase (analytics)
 ```
 
 ### First commands worth running
