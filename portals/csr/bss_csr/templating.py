@@ -28,6 +28,15 @@ templates.env.loader = ChoiceLoader(
 # v0.14 — every template gets ``bss_release`` for the brand-tag.
 templates.env.globals["bss_release"] = BSS_RELEASE
 
+# v1.6.1 — static-asset cache-buster, stamped at process start. Safari
+# (iPad especially) caches CSS/JS aggressively across deploys; a fresh
+# query param per container boot forces a refetch after every rebuild.
+# Process wall-clock, not bss_clock: this is infrastructure, not
+# business logic.
+import time  # noqa: E402
+
+templates.env.globals["asset_v"] = str(int(time.time()))
+
 # v1.6 — CRM screens share the lenient payload helpers as filters so
 # templates can badge states and format timestamps without per-route
 # plumbing.

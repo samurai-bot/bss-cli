@@ -310,18 +310,29 @@
    ============================================================ */
 
 /* v1.6.1 — fixed-viewport app shell. The PAGE never scrolls; panes
-   scroll internally. This is what keeps the chat compose box on
-   screen on an iPad: 100dvh tracks the *visible* viewport (Safari's
-   toolbars and the soft keyboard shrink it), and the header is a
-   flex row instead of a hardcoded 53px subtraction — so the math
-   holds when the nav wraps to two rows on narrow screens. */
+   scroll internally, so the chat compose box is always on screen.
+
+   Height source, in fallback order:
+   1. --app-height — set from window.visualViewport by the inline
+      script in cockpit_layout.html. The ONLY value that shrinks for
+      the iPadOS soft keyboard / accessory bar (dvh does NOT — iOS
+      pans the visual viewport instead of resizing the layout one,
+      which is exactly the "field cut in half" bug).
+   2. 100dvh — tracks Safari's collapsing toolbars.
+   3. 100vh — everything older.
+   The header is a flex row, never a hardcoded px subtraction. */
 html, body { height: 100%; }
 body {
   margin: 0;
   display: flex; flex-direction: column;
-  height: 100vh;   /* fallback */
-  height: 100dvh;  /* iPadOS/iOS dynamic viewport */
+  height: 100vh;
+  height: 100dvh;
+  height: var(--app-height, 100dvh);
   overflow: hidden;
+  overscroll-behavior: none;
+  /* iPad home-indicator / notch clearance (viewport-fit=cover). */
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  box-sizing: border-box;
 }
 
 /* ── Top nav ──────────────────────────────────────────────── */
@@ -1409,3 +1420,18 @@ body {
 }
 .crm-cm-row .crm-form { flex: 1; margin-top: 0; grid-template-columns: 1fr auto; }
 .crm-cm-row .crm-danger-form { padding-bottom: 12px; }
+
+/* v1.6.1 — touch devices: 16px inputs. iOS Safari auto-zooms the whole
+   page when a focused input's font-size is under 16px, which throws
+   the fixed-viewport shell off; 16px disables that zoom. */
+@media (pointer: coarse) {
+  .thread-compose textarea,
+  .crm-form input,
+  .crm-form select,
+  .crm-form textarea,
+  .crm-filter-form input,
+  .crm-filter-form select,
+  .thread-focus-form input {
+    font-size: 16px;
+  }
+}

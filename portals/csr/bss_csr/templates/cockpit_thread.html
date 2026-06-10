@@ -114,10 +114,16 @@
         form.submit();
       }
     });
-    input.focus();
-    // v1.6 — handoff drafts prefill the box; put the cursor at the end
-    // so the operator can edit or just hit Enter.
-    input.setSelectionRange(input.value.length, input.value.length);
+    // v1.6.1 — only autofocus when a hardware keyboard is the likely
+    // input (desktop, iPad w/ trackpad+keyboard). On touch, focusing
+    // on load summons the soft keyboard/accessory bar and Safari pans
+    // the page — the "compose box cut in half" bug.
+    if (window.matchMedia("(hover: hover) and (pointer: fine)").matches) {
+      input.focus();
+      // Handoff drafts prefill the box; cursor to the end so the
+      // operator can edit or just hit Enter.
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
   }
 })();
 </script>
