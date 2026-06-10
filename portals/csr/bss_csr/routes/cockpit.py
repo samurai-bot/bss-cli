@@ -72,6 +72,63 @@ log = structlog.get_logger(__name__)
 router = APIRouter()
 
 
+# ── v1.6.1 — disconnect-proof turn driving ───────────────────────────
+#
+# Gemma turns run 20–50s with long silent stretches between SSE frames.
+# iPad Safari (and assorted middleboxes) kill quiet streams, and before
+# v1.6.1 the agent ran INSIDE the response generator — a dropped
+# connection cancelled the turn mid-flight with nothing persisted. The
+# observable symptom: the first message "never answers" (or answers
+# only after the next turn re-drives it).
+#
+# Now the turn runs in a DETACHED task that persists its results no
+# matter what the socket does; the SSE response merely forwards frames
+# from a queue, emitting comment heartbeats so the pipe is never idle.
+# An EventSource reconnect while the turn is still running attaches as
+# an observer (no double-driving) and triggers a page reload when the
+# turn lands.
+
+_INFLIGHT: dict[str, asyncio.Task[None]] = {}
+
+_KEEPALIVE = b": keepalive\n\n"
+_HEARTBEAT_SECONDS = 10.0
+_RELOAD_FRAME_HTML = (
+    "<script>window.location.replace(window.location.pathname);</script>"
+)
+
+
+async def _pump(queue: asyncio.Queue[bytes | None]) -> AsyncIterator[bytes]:
+    """Forward frames from the turn task; heartbeat through silences."""
+    while True:
+        try:
+            item = await asyncio.wait_for(queue.get(), timeout=_HEARTBEAT_SECONDS)
+        except asyncio.TimeoutError:
+            yield _KEEPALIVE
+            continue
+        if item is None:
+            return
+        yield item
+
+
+async def _observe(task: asyncio.Task[None]) -> AsyncIterator[bytes]:
+    """A reconnect landed while a turn is in flight: keep the pipe warm,
+    then reload the page so the persisted transcript renders."""
+    yield _sse_frame("status", _status_html("live"))
+    while not task.done():
+        await asyncio.sleep(2.0)
+        yield _KEEPALIVE
+    yield _sse_frame("message", _RELOAD_FRAME_HTML)
+    yield _sse_frame("status", _status_html("done"))
+
+
+def _sse_headers() -> dict[str, str]:
+    return {
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+        "Connection": "keep-alive",
+    }
+
+
 # ── Destructive-tool prefixes (mirrors cli/bss_cli/repl.py) ──────────
 
 
@@ -705,6 +762,17 @@ async def cockpit_events(
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
+    # v1.6.1 — a turn is already running for this session (EventSource
+    # reconnected after a dropped stream, second tab, …): attach as an
+    # observer instead of double-driving the agent.
+    existing = _INFLIGHT.get(session_id)
+    if existing is not None and not existing.done():
+        return StreamingResponse(
+            _observe(existing),
+            media_type="text/event-stream",
+            headers=_sse_headers(),
+        )
+
     cfg = cockpit_config_current()
     actor = OPERATOR_ACTOR
 
@@ -1075,14 +1143,35 @@ async def cockpit_events(
             log.exception("cockpit.stream_crashed")
             yield _sse_frame("status", _status_html("error"))
 
+    # v1.6.1 — drive the turn in a detached task. All persistence
+    # (tool rows, assistant bubble, pending_destructive) lives inside
+    # stream(); consuming it here means a dropped SSE connection can no
+    # longer cancel the turn — the client merely stops watching.
+    queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+
+    async def drive() -> None:
+        try:
+            async for frame in stream():
+                queue.put_nowait(frame)
+        except Exception:  # noqa: BLE001 — never lose a turn silently
+            log.exception("cockpit.turn_task_crashed")
+            queue.put_nowait(_sse_frame("status", _status_html("error")))
+        finally:
+            queue.put_nowait(None)
+
+    task = asyncio.create_task(drive(), name=f"cockpit-turn-{session_id}")
+    _INFLIGHT[session_id] = task
+
+    def _cleanup(t: asyncio.Task[None]) -> None:
+        if _INFLIGHT.get(session_id) is t:
+            _INFLIGHT.pop(session_id, None)
+
+    task.add_done_callback(_cleanup)
+
     return StreamingResponse(
-        stream(),
+        _pump(queue),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-            "Connection": "keep-alive",
-        },
+        headers=_sse_headers(),
     )
 
 
