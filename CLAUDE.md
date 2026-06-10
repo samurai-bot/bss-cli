@@ -132,7 +132,8 @@ Three layers, each with its own contract:
 - **(v0.7+) Subscription price is snapshotted at order time.** Renewal charges the snapshot, not the catalog. Catalog price changes affect new orders only; existing subscriptions migrate via an explicit operator-initiated flow (`subscription.migrate_to_new_price`) with regulatory notice.
 - **(v0.12+) Chat is one modality of access, not a privileged path.** The same tool surface, under the same server-side policies, viewed through a tighter prompt-visible window. Customer chat sees the `customer_self_serve` profile (ownership-bound `*.mine` wrappers + public catalog reads); CSR/CLI/scenario callers keep full surface access. If the chat ever has a tool the customer's direct UI doesn't, that's a doctrine bug.
 - **(v0.12+) The five escalation categories are not negotiable.** Fraud, billing dispute, regulator complaint, identity recovery, bereavement — all are `case.open_for_me` calls with no AI-side resolution attempt. The `EscalationCategory` Literal, the soak corpus, and the customer-chat system prompt encode the same list. Adding a sixth is a doctrine decision, not a scope decision.
-- **(v0.13+) The REPL is the canonical operator cockpit.** The browser at `localhost:9002/cockpit/<id>` is a thin veneer over the same `Conversation` store. Slash-command parity is a doctrine target — if the REPL has `/focus` and the browser has no equivalent button, that's a doctrine bug to fix in the next sprint.
+- **(v0.13+) The REPL is the canonical operator cockpit.** The browser at `localhost:9002/cockpit/<id>` shares the same `Conversation` store. Slash-command parity is a doctrine target — if the REPL has `/focus` and the browser has no equivalent button, that's a doctrine bug to fix in the next sprint. (Amended v1.6: the browser is no longer *only* a veneer — see next rule and DECISIONS 2026-06-10.)
+- **(v1.6+) CRM screens are first-class CRUD; chat is the centerpiece, not a toll gate.** The cockpit browser carries Customers/Cases/Orders/Catalog/Subscription screens: direct `bss-clients` reads (section-degrading) and direct writes — one route → one policy-gated call. Destructive + money-moving verbs (terminate, close, cancel, order submit, VAS, renew-now) are direct too, but require the **two-step UI confirm**: the expanded danger panel posts `confirm=yes`, and the route refuses without it (v1.6.1 operator amendment — DECISIONS 2026-06-10 #2). The human click through the consequence text is the authorisation; the policy layer stays the server gate; the LLM path keeps its own propose-then-`/confirm` unchanged. "Ask the agent" handoffs (`POST /cockpit/handoff` — draft prefilled, never auto-sent) remain on every screen as the chat seam for narrative/compound work. Test-pinned by `portals/csr/tests/test_routes_crm.py` (confirm-gate both directions).
 - **(v0.13+) Operator persona lives in `OPERATOR.md`.** Prepended verbatim to every cockpit system prompt. House rules are operator-editable; the cockpit's safety contract (propose-then-confirm, escalation list, ASCII rules) is code-defined in `bss_cockpit.prompts._COCKPIT_INVARIANTS`. An operator who wants to weaken the contract has to edit code, not a markdown file.
 
 ## Call patterns (HTTP vs events)
@@ -179,7 +180,7 @@ Two distinct planes:
 
 ## Deployment model
 
-9 service containers + 2 portal containers (self-serve 9001, cockpit veneer 9002) + three optional infra containers (Postgres, RabbitMQ, Jaeger). Billing deferred to v0.2 — port 8009 reserved (DECISIONS 2026-04-13). REPL (`bss`) is canonical cockpit; browser is the same Conversation viewed in HTML. See `ARCHITECTURE.md` for topology, compose profiles, and the AWS path.
+9 service containers + 2 portal containers (self-serve 9001, cockpit 9002) + three optional infra containers (Postgres, RabbitMQ, Jaeger). Billing deferred to v0.2 — port 8009 reserved (DECISIONS 2026-04-13). REPL (`bss`) is the canonical conversational cockpit; the browser shares the same Conversation and (v1.6) adds the CRM screens around it. See `ARCHITECTURE.md` for topology, compose profiles, and the AWS path.
 
 ## Naming conventions
 
@@ -255,6 +256,16 @@ Two distinct planes:
 - Don't add the `ITERATIVE FLOW` prompt block to the `customer_self_serve` chat surface (`orchestrator/bss_orchestrator/customer_chat_prompt.py`). Compound actions are an operator capability — the v0.12 chat caps + ownership trip-wire were never stress-tested against agent-driven write chains. Doctrine guard: `orchestrator/tests/test_iterative_flow_scope.py` asserts the absence in customer chat AND the presence in the operator prompt.
 - Don't change `MAX_CONSECUTIVE_TOOL_FAILURES` from 3 without updating the test guard, the soak corpus expectations, and the cockpit's "couldn't recover" panel copy. Three is the lift from loyalty-cli; raising it invites longer thrash, lowering it cuts off healthy investigation loops.
 - Don't extend the cockpit's emit-chrome set without adding the new prefix to `bss_cockpit.chrome_filter._ASSISTANT_CHROME_PREFIXES`. The inventory-lock test pins the set; an omission lets chrome back into LLM history and re-opens the mimicry/state-confusion/citation-thrash failure modes from v1.5's design notes.
+
+**Cockpit CRM screens (v1.6, amended v1.6.1):**
+
+- Don't run a `DESTRUCTIVE_TOOLS` verb or a charge (order submit, VAS, renew) from a bare button. Wrap it in the two-step confirm (`crm-danger-form` panel → `confirm=yes`); the route must refuse a POST without the field. `test_routes_crm.py` pins both directions.
+- Don't auto-send handoff drafts. `POST /cockpit/handoff` prefills the compose box; only the operator sends.
+- One CRM-screen POST → one `bss-clients` write. Compositions belong to the agent (ITERATIVE FLOW). Single carve-out: promo assignment stays chat/CLI — `bss promo assign` composes the loyalty pairing (v1.3) a bare form would skip.
+- Read payload keys through `bss_csr.views.field` — the Case/port-request APIs are snake_case, TMF surfaces are camelCase; hardcoding one family blanks fields silently (the v0.13 case page did exactly that).
+- New screens stay section-degrading: one downstream service down must not 500 the page.
+- The page never scrolls — panes do. `body` is a `100dvh` flex shell; `.cockpit-main` (or the thread stream) is the scroll region, so the compose box stays on screen on any device. Don't reintroduce `calc(100vh - <px>)` header math.
+- No default-blue anchors: links inherit the accent via `.cockpit-main a`; never ship a bare unstyled `<a>` on the dark palette.
 
 **Provider adapters & webhooks (v0.14):**
 

@@ -40,8 +40,10 @@ from bss_cockpit import (
     Conversation,
     ConversationSummary,
     build_cockpit_prompt,
-    current as cockpit_config_current,
     knowledge_called,
+)
+from bss_cockpit import (
+    current as cockpit_config_current,
 )
 from bss_cockpit.chrome_filter import strip_fake_propose
 from bss_cockpit.renderers import render_tool_result
@@ -68,6 +70,76 @@ from ..templating import templates
 
 log = structlog.get_logger(__name__)
 router = APIRouter()
+
+
+# ── v1.6.1 — disconnect-proof turn driving ───────────────────────────
+#
+# Gemma turns run 20–50s with long silent stretches between SSE frames.
+# iPad Safari (and assorted middleboxes) kill quiet streams, and before
+# v1.6.1 the agent ran INSIDE the response generator — a dropped
+# connection cancelled the turn mid-flight with nothing persisted. The
+# observable symptom: the first message "never answers" (or answers
+# only after the next turn re-drives it).
+#
+# Now the turn runs in a DETACHED task that persists its results no
+# matter what the socket does; the SSE response merely forwards frames
+# from a queue, emitting comment heartbeats so the pipe is never idle.
+# An EventSource reconnect while the turn is still running attaches as
+# an observer (no double-driving) and triggers a page reload when the
+# turn lands.
+
+_INFLIGHT: dict[str, asyncio.Task[None]] = {}
+
+_HEARTBEAT_SECONDS = 10.0
+# Reload marker: swapped into the stream like any message frame; the
+# thread page's htmx:afterSwap handler spots it and reloads. A <div>
+# marker (not a <script>) so we don't depend on Safari/htmx script-eval
+# semantics inside SSE swaps.
+_RELOAD_FRAME_HTML = '<div class="bss-reload" hidden></div>'
+
+
+def _heartbeat_frame() -> bytes:
+    # A real SSE *event* (not a comment): comments are invisible to
+    # EventSource, so the client-side watchdog couldn't tell a healthy
+    # quiet stream from a dead socket. A status re-render is cheap and
+    # observable.
+    return _sse_frame("status", _status_html("live"))
+
+
+async def _pump(queue: asyncio.Queue[bytes | None]) -> AsyncIterator[bytes]:
+    """Forward frames from the turn task; heartbeat through silences."""
+    while True:
+        try:
+            item = await asyncio.wait_for(queue.get(), timeout=_HEARTBEAT_SECONDS)
+        except asyncio.TimeoutError:
+            yield _heartbeat_frame()
+            continue
+        if item is None:
+            return
+        yield item
+
+
+async def _observe(task: asyncio.Task[None]) -> AsyncIterator[bytes]:
+    """A reconnect landed while a turn is in flight: keep the pipe warm,
+    then reload the page so the persisted transcript renders."""
+    yield _sse_frame("status", _status_html("live"))
+    while not task.done():
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=_HEARTBEAT_SECONDS)
+        except asyncio.TimeoutError:
+            yield _heartbeat_frame()
+        except Exception:  # noqa: BLE001 — task errors surface in _cleanup
+            break
+    yield _sse_frame("message", _RELOAD_FRAME_HTML)
+    yield _sse_frame("status", _status_html("done"))
+
+
+def _sse_headers() -> dict[str, str]:
+    return {
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+        "Connection": "keep-alive",
+    }
 
 
 # ── Destructive-tool prefixes (mirrors cli/bss_cli/repl.py) ──────────
@@ -125,9 +197,9 @@ def _is_destructive(tool_name: str) -> bool:
 #
 # Source of truth is the renderer dispatch — keep this in sync by
 # importing the dispatch table.
-from bss_cockpit.renderers import RENDERER_DISPATCH as _RENDERED_TOOLS
-
 import re as _re
+
+from bss_cockpit.renderers import RENDERER_DISPATCH as _RENDERED_TOOLS
 
 # Heuristics that flag an assistant bubble as a tool-result mimic.
 # Each pattern is conservative — only fires when the bubble is clearly
@@ -581,7 +653,13 @@ async def cockpit_thread(
             "focus_label": focus_label,
             "transcript_blocks": blocks,
             "stream_session_id": request.query_params.get("turn", ""),
+            # v1.6 — CRM screens hand off with a drafted message; it
+            # lands in the compose box, never auto-sends.
+            "draft": request.query_params.get("draft", "")[:2000],
         },
+        # v1.6.1 — Safari caches GETs; a cached thread page is a stale
+        # transcript (the "have to nudge it" symptom amplifier).
+        headers={"Cache-Control": "no-store"},
     )
 
 
@@ -700,6 +778,17 @@ async def cockpit_events(
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
+    # v1.6.1 — a turn is already running for this session (EventSource
+    # reconnected after a dropped stream, second tab, …): attach as an
+    # observer instead of double-driving the agent.
+    existing = _INFLIGHT.get(session_id)
+    if existing is not None and not existing.done():
+        return StreamingResponse(
+            _observe(existing),
+            media_type="text/event-stream",
+            headers=_sse_headers(),
+        )
+
     cfg = cockpit_config_current()
     actor = OPERATOR_ACTOR
 
@@ -727,11 +816,17 @@ async def cockpit_events(
     )
     if answered_after:
         async def replay():  # noqa: ANN202
+            # v1.6.1 — the page that opened this stream may predate the
+            # answer (Safari dropped the original stream; the detached
+            # task finished anyway). The reload marker lets a stale page
+            # refresh itself; a page that already streamed the turn
+            # ignores it (see thread-page afterSwap handler).
+            yield _sse_frame("message", _RELOAD_FRAME_HTML)
             yield _sse_frame("status", _status_html("done"))
         return StreamingResponse(
             replay(),
             media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            headers=_sse_headers(),
         )
 
     user_message = blocks[last_user_index]["body"]
@@ -1066,18 +1161,39 @@ async def cockpit_events(
                     return
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             log.exception("cockpit.stream_crashed")
             yield _sse_frame("status", _status_html("error"))
 
+    # v1.6.1 — drive the turn in a detached task. All persistence
+    # (tool rows, assistant bubble, pending_destructive) lives inside
+    # stream(); consuming it here means a dropped SSE connection can no
+    # longer cancel the turn — the client merely stops watching.
+    queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+
+    async def drive() -> None:
+        try:
+            async for frame in stream():
+                queue.put_nowait(frame)
+        except Exception:  # noqa: BLE001 — never lose a turn silently
+            log.exception("cockpit.turn_task_crashed")
+            queue.put_nowait(_sse_frame("status", _status_html("error")))
+        finally:
+            queue.put_nowait(None)
+
+    task = asyncio.create_task(drive(), name=f"cockpit-turn-{session_id}")
+    _INFLIGHT[session_id] = task
+
+    def _cleanup(t: asyncio.Task[None]) -> None:
+        if _INFLIGHT.get(session_id) is t:
+            _INFLIGHT.pop(session_id, None)
+
+    task.add_done_callback(_cleanup)
+
     return StreamingResponse(
-        stream(),
+        _pump(queue),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-            "Connection": "keep-alive",
-        },
+        headers=_sse_headers(),
     )
 
 
