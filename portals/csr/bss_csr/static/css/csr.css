@@ -1435,3 +1435,16 @@ body {
     font-size: 16px;
   }
 }
+
+/* v1.6.1 — iPadOS keyboard accessory pill clearance. The floating
+   shortcut bar overlays the page bottom and is invisible to
+   visualViewport.height; while the operator is typing on a touch
+   device, lift the compose row above it. Transition kept short so
+   focus/blur doesn't feel like a layout jump. */
+@media (pointer: coarse) {
+  .thread-compose { transition: padding-bottom 0.15s ease; }
+  body.kb-open .thread-compose { padding-bottom: 64px; }
+}
+@media (pointer: coarse) {
+  .thread-page { padding-bottom: max(20px, env(safe-area-inset-bottom)); }
+}

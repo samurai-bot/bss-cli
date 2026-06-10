@@ -124,6 +124,19 @@
       // operator can edit or just hit Enter.
       input.setSelectionRange(input.value.length, input.value.length);
     }
+
+    // iPadOS floats a keyboard shortcut/accessory pill OVER the page
+    // bottom (it is NOT part of visualViewport.height, so the shell
+    // can't size around it). While the compose box is focused on a
+    // touch device, lift it clear of the pill.
+    if (window.matchMedia("(pointer: coarse)").matches) {
+      input.addEventListener("focus", function () {
+        document.body.classList.add("kb-open");
+      });
+      input.addEventListener("blur", function () {
+        document.body.classList.remove("kb-open");
+      });
+    }
   }
 })();
 </script>
