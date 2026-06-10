@@ -1448,3 +1448,17 @@ body {
 @media (pointer: coarse) {
   .thread-page { padding-bottom: max(20px, env(safe-area-inset-bottom)); }
 }
+
+/* v1.6.1 — "working…" placeholder while the agent runs. Removed by JS
+   on the first streamed frame. */
+.chat-pending { color: var(--fg-muted); }
+.chat-pending .chat-pending-dots {
+  color: var(--accent);
+  letter-spacing: 2px;
+  animation: bss-pending-pulse 1.2s ease-in-out infinite;
+}
+@keyframes bss-pending-pulse {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 1; }
+}
+.bss-reload { display: none; }

@@ -90,11 +90,20 @@ router = APIRouter()
 
 _INFLIGHT: dict[str, asyncio.Task[None]] = {}
 
-_KEEPALIVE = b": keepalive\n\n"
 _HEARTBEAT_SECONDS = 10.0
-_RELOAD_FRAME_HTML = (
-    "<script>window.location.replace(window.location.pathname);</script>"
-)
+# Reload marker: swapped into the stream like any message frame; the
+# thread page's htmx:afterSwap handler spots it and reloads. A <div>
+# marker (not a <script>) so we don't depend on Safari/htmx script-eval
+# semantics inside SSE swaps.
+_RELOAD_FRAME_HTML = '<div class="bss-reload" hidden></div>'
+
+
+def _heartbeat_frame() -> bytes:
+    # A real SSE *event* (not a comment): comments are invisible to
+    # EventSource, so the client-side watchdog couldn't tell a healthy
+    # quiet stream from a dead socket. A status re-render is cheap and
+    # observable.
+    return _sse_frame("status", _status_html("live"))
 
 
 async def _pump(queue: asyncio.Queue[bytes | None]) -> AsyncIterator[bytes]:
@@ -103,7 +112,7 @@ async def _pump(queue: asyncio.Queue[bytes | None]) -> AsyncIterator[bytes]:
         try:
             item = await asyncio.wait_for(queue.get(), timeout=_HEARTBEAT_SECONDS)
         except asyncio.TimeoutError:
-            yield _KEEPALIVE
+            yield _heartbeat_frame()
             continue
         if item is None:
             return
@@ -115,8 +124,12 @@ async def _observe(task: asyncio.Task[None]) -> AsyncIterator[bytes]:
     then reload the page so the persisted transcript renders."""
     yield _sse_frame("status", _status_html("live"))
     while not task.done():
-        await asyncio.sleep(2.0)
-        yield _KEEPALIVE
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=_HEARTBEAT_SECONDS)
+        except asyncio.TimeoutError:
+            yield _heartbeat_frame()
+        except Exception:  # noqa: BLE001 — task errors surface in _cleanup
+            break
     yield _sse_frame("message", _RELOAD_FRAME_HTML)
     yield _sse_frame("status", _status_html("done"))
 
@@ -644,6 +657,9 @@ async def cockpit_thread(
             # lands in the compose box, never auto-sends.
             "draft": request.query_params.get("draft", "")[:2000],
         },
+        # v1.6.1 — Safari caches GETs; a cached thread page is a stale
+        # transcript (the "have to nudge it" symptom amplifier).
+        headers={"Cache-Control": "no-store"},
     )
 
 
@@ -800,11 +816,17 @@ async def cockpit_events(
     )
     if answered_after:
         async def replay():  # noqa: ANN202
+            # v1.6.1 — the page that opened this stream may predate the
+            # answer (Safari dropped the original stream; the detached
+            # task finished anyway). The reload marker lets a stale page
+            # refresh itself; a page that already streamed the turn
+            # ignores it (see thread-page afterSwap handler).
+            yield _sse_frame("message", _RELOAD_FRAME_HTML)
             yield _sse_frame("status", _status_html("done"))
         return StreamingResponse(
             replay(),
             media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            headers=_sse_headers(),
         )
 
     user_message = blocks[last_user_index]["body"]

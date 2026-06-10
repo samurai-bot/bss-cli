@@ -67,6 +67,15 @@
     {% endfor %}
 
     {% if stream_session_id %}
+      {# v1.6.1 — immediate feedback while the agent works. Gemma turns
+         with tool calls run 30–60s; without this the operator stares at
+         a static page and "nudges". Removed by JS on the first real
+         streamed frame. #}
+      <div class="chat-bubble chat-bubble-assistant chat-pending" id="turn-pending">
+        <p><span class="chat-pending-dots">●●●</span> working — tool-heavy
+        questions can take 30–60s. The reply lands even if you leave
+        this page.</p>
+      </div>
       <div class="thread-stream-incoming" sse-swap="message" hx-swap="beforeend"></div>
       <div class="thread-stream-status" sse-swap="status" hx-swap="innerHTML"></div>
     {% endif %}
@@ -95,6 +104,7 @@
   const stream = document.getElementById("thread-stream");
   const form = document.getElementById("thread-compose");
   const input = document.getElementById("thread-compose-input");
+  const streaming = {{ "true" if stream_session_id else "false" }};
 
   // Autoscroll to the bottom on initial load + on every SSE message.
   function scrollToBottom() {
@@ -104,6 +114,57 @@
   scrollToBottom();
   document.body.addEventListener("htmx:sseMessage", scrollToBottom);
   document.body.addEventListener("htmx:afterSwap", scrollToBottom);
+
+  // ── v1.6.1 — turn-delivery resilience (iPad Safari) ──────────────
+  if (streaming) {
+    const incoming = document.querySelector(".thread-stream-incoming");
+    const pending = document.getElementById("turn-pending");
+    let sawBeat = Date.now();
+
+    function streamedContent() {
+      // Real frames, not the reload marker.
+      if (!incoming) return false;
+      for (const el of incoming.children) {
+        if (!el.classList || !el.classList.contains("bss-reload")) return true;
+      }
+      return false;
+    }
+
+    function onStreamActivity() {
+      sawBeat = Date.now();
+      // First real frame → drop the "working…" placeholder.
+      if (pending && streamedContent()) pending.remove();
+      // Reload marker: the turn finished while this page wasn't
+      // watching (dropped stream / stale page). If we already streamed
+      // the content live, just clean the URL; otherwise reload to
+      // render the persisted transcript.
+      if (incoming && incoming.querySelector(".bss-reload")) {
+        if (streamedContent()) {
+          history.replaceState(null, "", window.location.pathname);
+          incoming.querySelector(".bss-reload").remove();
+        } else {
+          window.location.replace(window.location.pathname);
+        }
+      }
+    }
+    // sseMessage fires as the swap begins; afterSwap fires once content
+    // settled — listen to both so the placeholder removal can't race
+    // the DOM insertion.
+    document.body.addEventListener("htmx:sseMessage", onStreamActivity);
+    document.body.addEventListener("htmx:afterSwap", onStreamActivity);
+
+    // Watchdog: server heartbeats every 10s, so >45s of total silence
+    // means the pipe is dead (Safari killed it, network blip). The
+    // turn keeps running server-side; re-attach via ?turn=1 — a live
+    // turn gets the observer stream, a finished one gets the reload
+    // marker. Self-healing, no nudge required.
+    setInterval(function () {
+      if (Date.now() - sawBeat > 45000) {
+        sawBeat = Date.now();  // avoid double-fire while navigating
+        window.location.replace(window.location.pathname + "?turn=1");
+      }
+    }, 5000);
+  }
 
   // Enter to send, Shift+Enter for newline.
   if (input && form) {
